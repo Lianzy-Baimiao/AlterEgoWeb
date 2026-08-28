@@ -37,6 +37,22 @@
       <a id="update-info" class="meta-plain"></a>
     </div>
     <span class="spacer"></span>
+
+    <!-- Auto-refresh reloads the page; the launcher (AlterEgo看板.exe) watches
+         the SavedVariables files and re-runs the scan, so a /reload in game
+         shows up here on the next tick. -->
+    <label class="switch" id="autorefresh-wrap" title="每 30 秒重新载入一次页面。启动器会在游戏写盘后自动重扫。">
+      <input type="checkbox" id="autorefresh">
+      <span>自动</span>
+    </label>
+    <button type="button" id="btn-refresh" title="重新载入数据（F5 也行）">刷新</button>
+
+    <label class="switch" id="theme-wrap" title="深色 / 浅色">
+      <input type="checkbox" id="theme-toggle">
+      <span class="track"><span class="knob"></span></span>
+      <span id="theme-label">深色</span>
+    </label>
+
     <button type="button" id="btn-vault">备份箱</button>
     <button type="button" id="btn-trends">周趋势</button>
     <button type="button" id="btn-xlsx">导出 Excel</button>

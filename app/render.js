@@ -282,7 +282,11 @@
   function renderTopBar() {
     var m = state.model;
     doc.getElementById('scan-time').textContent = m.scannedAtLocal || '?';
-    doc.getElementById('season-info').textContent = '赛季 ' + m.activeSeason;
+    var seasonEl = doc.getElementById('season-info');
+    seasonEl.textContent = (m.season && m.season.label) || ('赛季 ' + m.activeSeason);
+    seasonEl.title = '赛季 ID ' + m.activeSeason +
+      (m.season && m.season.english ? '\n' + m.season.english : '') +
+      '\n中文名是从宝库要求文案里还原的';
 
     var warn = [];
     m.sources.forEach(function (s) {

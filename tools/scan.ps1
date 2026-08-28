@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $SCHEMA_VERSION = 1
-$TOOL_VERSION   = '1.1.0'
+$TOOL_VERSION   = '1.2.0'
 $REPO           = 'Lianzy-Baimiao/AlterEgoWeb'
 $AUTHOR         = '白描'
 
@@ -814,6 +814,21 @@ try {
     Write-JsFile -Path (Join-Path $DataDir 'backups.js') -Content $bb.ToString()
     $bkSize = (Get-Item -LiteralPath (Join-Path $DataDir 'backups.js')).Length
     Write-Step ('backups.js: {0} payloads, {1:N0} KB' -f $backups.Count, ($bkSize / 1KB))
+
+    # ---- emit data/watch.txt ----------------------------------------------
+    # Plain text, one directory per line: the launcher watches these for changes
+    # so a /reload in game triggers a rescan. A text file rather than parsing
+    # data.js from C#.
+    $watchDirs = New-Object System.Collections.Specialized.StringCollection
+    foreach ($s in $scan.sources) {
+        $d = Split-Path -Parent $s.path
+        if (-not $watchDirs.Contains($d)) { [void]$watchDirs.Add($d) }
+    }
+    $watchText = (@($watchDirs) -join "`r`n")
+    # No BOM here: this one is read by the launcher's File.ReadAllLines, not by
+    # the browser, and a stray BOM on the first path is an avoidable trap.
+    $watchAbs = [System.IO.Path]::GetFullPath((Join-Path $DataDir 'watch.txt'))
+    [System.IO.File]::WriteAllText($watchAbs, $watchText + "`r`n", [System.Text.UTF8Encoding]::new($false))
 
     Write-Host ''
     Write-Host 'Writing weekly history snapshot...'

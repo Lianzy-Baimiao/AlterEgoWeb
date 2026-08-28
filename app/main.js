@@ -163,6 +163,71 @@
     });
     doc.getElementById('btn-xlsx').addEventListener('click', AE.exportXlsx);
     doc.getElementById('btn-csv').addEventListener('click', AE.exportCsv);
+
+    wireTheme();
+    wireRefresh();
+  }
+
+  // ------------------------------------------------------------ theme switch
+
+  function wireTheme() {
+    var box = doc.getElementById('theme-toggle');
+    var label = doc.getElementById('theme-label');
+    var s = AE.state.settings;
+
+    function paint() {
+      box.checked = s.theme === 'dark';
+      label.textContent = s.theme === 'dark' ? '深色' : '浅色';
+    }
+    box.addEventListener('change', function () {
+      s.theme = box.checked ? 'dark' : 'light';
+      paint();
+      AE.refresh();
+      // The panel mirrors this control, so keep it in step if it is built.
+      if (doc.getElementById('panel').classList.contains('open')) AE.buildSettingsPanel();
+    });
+    paint();
+    AE.repaintThemeSwitch = paint;
+  }
+
+  // ---------------------------------------------------------------- refresh
+
+  var REFRESH_MS = 30000;
+  var refreshTimer = null;
+
+  function wireRefresh() {
+    doc.getElementById('btn-refresh').addEventListener('click', function () {
+      global.location.reload();
+    });
+
+    var box = doc.getElementById('autorefresh');
+    // Kept in sessionStorage, not settings: it is a per-tab working mode, and
+    // leaving a reload loop switched on permanently would be a surprise.
+    var on = false;
+    try { on = global.sessionStorage.getItem('AEW:autorefresh') === '1'; } catch (e) { on = false; }
+    box.checked = on;
+    if (on) startAutoRefresh();
+
+    box.addEventListener('change', function () {
+      try {
+        global.sessionStorage.setItem('AEW:autorefresh', box.checked ? '1' : '0');
+      } catch (e) { /* ignore */ }
+      if (box.checked) startAutoRefresh();
+      else stopAutoRefresh();
+    });
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    // A plain reload is the only option: file:// blocks fetch, so the page
+    // cannot pull a fresh data.js without navigating. Re-parsing is ~30 ms.
+    refreshTimer = global.setInterval(function () {
+      global.location.reload();
+    }, REFRESH_MS);
+  }
+
+  function stopAutoRefresh() {
+    if (refreshTimer) { global.clearInterval(refreshTimer); refreshTimer = null; }
   }
 
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', boot);

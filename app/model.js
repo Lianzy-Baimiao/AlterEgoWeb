@@ -578,24 +578,23 @@
 
   // -------------------------------------------------- localized name harvest
   /**
-   * Recover localized dungeon names from the data itself.
+   * Recover localized dungeon names from the data itself. Two independent
+   * sources, because neither alone covers every dungeon:
    *
-   * mythicplus.dungeons stores only challengeModeID. But raids.savedInstances
-   * records every dungeon lockout too, with a localized `name` and an
-   * `instanceID` that equals Data.dungeons[].mapId. Joining the two yields the
-   * real client strings -- verified on all 8 season-18 dungeons here.
+   *   1. Dungeon lockouts (raids.savedInstances) carry a localized `name`, and
+   *      Data.dungeons[].mapId equals savedInstances[].instanceID. Covers any
+   *      dungeon you currently hold a heroic/mythic lockout for.
    *
-   * Only lockouts you currently hold are present, so `learned` (persisted by
-   * settings.js) is merged in to remember names past lockout expiry.
+   *   2. The keystone item link:
+   *      "|Hkeystone:180653:399:11:...|h[钥石：红玉新生法池 (11)]|h|r"
+   *      -- the second link field is the challengeModeID and the bracket text
+   *      holds the localized dungeon name. Covers the key you are carrying even
+   *      with no lockout.
+   *
+   * Only current lockouts/keys are present, so `learned` (persisted by
+   * settings.js) is merged in to remember names past expiry.
    */
   function harvestDungeonNames(characters, tables, learned) {
-    var nameByInstance = {};
-    characters.forEach(function (ch) {
-      ch.raids.dungeonLockouts.forEach(function (d) {
-        if (d.name && d.instanceID) nameByInstance[d.instanceID] = d.name;
-      });
-    });
-
     var out = {};
     // Previously learned names first, so a fresh harvest can correct them.
     if (learned) {
@@ -603,13 +602,88 @@
         if (learned[k]) out[k] = String(learned[k]);
       });
     }
+
+    // --- source 1: dungeon lockouts, joined through mapId
+    var nameByInstance = {};
+    characters.forEach(function (ch) {
+      ch.raids.dungeonLockouts.forEach(function (d) {
+        if (d.name && d.instanceID) nameByInstance[d.instanceID] = d.name;
+      });
+    });
     tables.dungeons.forEach(function (d) {
       if (!d || d.challengeModeID == null || d.mapId == null) return;
       var zh = nameByInstance[d.mapId];
       // Ignore a "localized" name that is just the English one echoed back.
       if (zh && zh !== d.name) out[d.challengeModeID] = zh;
     });
+
+    // --- source 2: keystone item links
+    characters.forEach(function (ch) {
+      var ks = ch.mp.keystone;
+      if (!ks || !ks.itemLink) return;
+      var idMatch = ks.itemLink.match(/\|Hkeystone:\d+:(\d+):/);
+      var label = ks.itemLink.match(/\|h\[([^\]]*)\]\|h/);
+      if (!idMatch || !label) return;
+      var cmID = Number(idMatch[1]);
+      // "钥石：红玉新生法池 (11)" -> "红玉新生法池"
+      var name = label[1].replace(/^[^：:]*[：:]\s*/, '').replace(/\s*\(\d+\)\s*$/, '').trim();
+      if (!name || !/[一-鿿]/.test(name)) return;
+      var meta = tables.dungeonById[cmID];
+      if (meta && name === meta.name) return;
+      if (!out[cmID]) out[cmID] = name;
+    });
+
     return out;
+  }
+
+  /**
+   * The localized season name, harvested from the game's own strings.
+   *
+   * vault.slots[].raidString is "击败%d个至暗之夜第2赛季首领" -- strip the
+   * "击败%d个" prefix and the "首领" suffix and what remains is the localized
+   * season name. Nothing else in the saved data carries it, and the addon's own
+   * Seasons.lua is English only ("Midnight - Season 2").
+   */
+  function harvestSeasonName(characters, tables, activeSeason) {
+    var meta = null;
+    tables.seasons.forEach(function (s) { if (s && s.seasonID === activeSeason) meta = s; });
+    var display = meta ? num(meta.seasonDisplayID, null) : null;
+
+    var counts = {};
+    characters.forEach(function (ch) {
+      if (ch.season && ch.season !== activeSeason) return;
+      L.vaultTypeOrder.forEach(function (t) {
+        (ch.vault.byType[t] || []).forEach(function (slot) {
+          if (!slot.raidString) return;
+          var zh = slot.raidString
+            .replace(/^[^%]*%(\d+\$)?d\s*个?/, '')
+            .replace(/首领\s*$/, '')
+            .trim();
+          if (!zh || !/[一-鿿]/.test(zh)) return;
+          counts[zh] = (counts[zh] || 0) + 1;
+        });
+      });
+    });
+
+    // Take the most common: a stale record can contribute a previous season's
+    // wording (this data has both 至暗之夜第2赛季 and 解放安德麦).
+    var best = '', bestN = 0;
+    Object.keys(counts).forEach(function (k) {
+      if (counts[k] > bestN) { bestN = counts[k]; best = k; }
+    });
+
+    var short = 'S' + (display || activeSeason);
+    var label = '赛季 ' + activeSeason;
+    if (best) label = best + '　' + short;
+    else if (meta && meta.name) label = meta.name + ' ' + short;
+
+    return {
+      localized: best,
+      english: meta ? str(meta.name) : '',
+      short: short,
+      display: display,
+      label: label
+    };
   }
 
   /**
@@ -818,6 +892,7 @@
 
     var columns = deriveColumns(characters, tables, activeSeason);
     var dungeonNames = harvestDungeonNames(characters, tables, learnedNames);
+    var season = harvestSeasonName(characters, tables, activeSeason);
     var dungeonShortNames = buildShortNames(columns.dungeonIds, tables, dungeonNames, nameOverrides);
     var raidShortNames = buildRaidShortNames(columns.raidColumns);
 
@@ -845,6 +920,7 @@
       characters: characters,
       realms: realms,
       activeSeason: activeSeason,
+      season: season,
       weeklyReset: weeklyReset,
       gamePrefs: globalPrefs || { showRealms: true, showZeroRatedCharacters: true, hiddenCurrencies: [] },
       columns: columns,

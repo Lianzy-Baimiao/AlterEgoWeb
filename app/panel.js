@@ -294,7 +294,11 @@
 
     look.appendChild(selectField('明暗', s.theme,
       [['dark', '深色'], ['light', '浅色']],
-      function (v) { s.theme = v; AE.refresh(); }));
+      function (v) {
+        s.theme = v;
+        AE.refresh();
+        if (AE.repaintThemeSwitch) AE.repaintThemeSwitch();
+      }));
 
     look.appendChild(selectField('字体', s.fontFamily,
       AE.FONTS.map(function (f) { return [f.id, f.label]; }),
@@ -361,13 +365,20 @@
     });
     var nameSec = section('副本名称' + (needFix.length ? '（' + needFix.length + ' 个缺中文名）' : ''));
     nameSec.appendChild(el('p', 'note',
-      '中文名是从游戏自己的副本锁定记录里读出来的。没有锁定记录的副本会显示英文名，' +
-      '可以在这里手动填写。'));
+      '中文名是从游戏自己的字符串里还原的：副本锁定记录，以及你身上钥石的物品名。' +
+      '两个来源都没覆盖到的副本会显示英文名，可以在这里手动填写。' +
+      '括号里是表头用的缩写。'));
     m.columns.dungeonIds.forEach(function (id) {
       var meta = m.tables.dungeonById[id];
       var wrap = el('label', 'field');
       var auto = L.dungeonLabel(id, meta, null, m.dungeonNames);
-      wrap.appendChild(el('span', null, (meta && meta.abbr) || ('#' + id)));
+      // Show the Chinese name as the label; the English abbreviation alone made
+      // this list unreadable.
+      var short = m.dungeonShortNames[id] || '';
+      var lab = el('span', null, auto + (short && short !== auto ? '（' + short + '）' : ''));
+      lab.title = (meta && meta.abbr ? meta.abbr + '　' : '') +
+                  (meta && meta.name ? meta.name + '　' : '') + 'cmID ' + id;
+      wrap.appendChild(lab);
       var inp = el('input');
       inp.type = 'text';
       inp.placeholder = auto;
