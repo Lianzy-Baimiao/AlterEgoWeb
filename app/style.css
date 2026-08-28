@@ -687,40 +687,51 @@ body[data-theme="light"] .seg button.on { color: #fff; }
 @supports not selector(::-webkit-scrollbar) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--line) transparent;
+    scrollbar-color: var(--accent) transparent;
   }
 }
+
+/* Tinted with --accent so the bar belongs to the current skin instead of looking
+   like the OS default grey slab. Custom properties and color-mix both resolve
+   inside these pseudo-elements (verified by sampling rendered pixels), so no JS
+   is needed to keep them in step with the theme. */
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--line);
+  background: color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 6px;
-  /* Inset the thumb so it reads as a floating bar rather than filling the gutter. */
-  border: 2px solid transparent;
+  /* Inset so the thumb reads as a floating bar rather than filling the gutter. */
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  min-height: 28px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 70%, var(--line));
   background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--fg3); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+  background-clip: padding-box;
+}
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* The table's own scroll container gets a slightly stronger thumb: it is the
-   one control the user actually drags. */
 /* The table's horizontal bar is the one control the user actually drags across a
-   60-column table, so it gets a taller track and a solid thumb. 12px was thin
-   enough to be fiddly to grab. */
+   60-column table, so it gets a taller track, a visible channel and a stronger
+   thumb. 12px was thin enough to be fiddly to grab. */
 #grid-wrap::-webkit-scrollbar { height: 18px; width: 14px; }
 #grid-wrap::-webkit-scrollbar-track {
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg3));
   border-top: 1px solid var(--line);
 }
 #grid-wrap::-webkit-scrollbar-thumb {
-  background: var(--fg3);
+  background: color-mix(in srgb, var(--accent) 52%, var(--bg3));
   background-clip: padding-box;
   border: 4px solid transparent;
   border-radius: 9px;
-  min-width: 40px;
+  min-width: 44px;
 }
 #grid-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 80%, var(--bg3));
   background-clip: padding-box;
   /* Thinner inset on hover = visibly fatter thumb, so the grab target grows
      under the cursor. */

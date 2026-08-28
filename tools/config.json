@@ -23,7 +23,7 @@
   "checkForUpdates": true,
 
   "_onWindowClose": "What the launcher does when you close the dashboard window: \"exit\" quits it too, \"tray\" keeps it resident, \"\" asks once and remembers. Also settable from the tray menu.",
-  "onWindowClose": "",
+  "onWindowClose": "exit",
 
   "_collectBackups": "Read MySlot export strings and the edit-mode cache into data/backups.js for the 备份箱 panel.",
   "collectBackups": true
