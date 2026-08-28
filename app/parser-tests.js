@@ -88,8 +88,8 @@
       function (g) { return g.H === 'eyJDaGFyYWN0ZXJJbmZvIjp7' || J(g); }],
 
     ['no spaces around `=` (AddOnSkins.lua, HandyNotes_*)',
-      'X = {\n["甜甜奶糖 - 萨尔"]="Default",\n}',
-      function (g) { return g.X['甜甜奶糖 - 萨尔'] === 'Default' || J(g.X); }],
+      'X = {\n["某角色 - 某服务器"]="Default",\n}',
+      function (g) { return g.X['某角色 - 某服务器'] === 'Default' || J(g.X); }],
 
     ['tab indentation (Details.lua, Plater.lua)',
       'X = {\n\t["a"] = 1,\n\t\t["b"] = 2,\n}',
@@ -142,11 +142,11 @@
       function (g) { return g.X.a.b.c.d.e.f.g.h.i.j === 1 || J(g.X); }],
 
     ['key names that repeat at different depths stay distinct',
-      'X = {\n["info"] = {\n["name"] = "王天悦",\n["level"] = 80,\n' +
+      'X = {\n["info"] = {\n["name"] = "影歌",\n["level"] = 80,\n' +
       '["race"] = {\n["name"] = "暗夜精灵",\n},\n' +
       '["ilvl"] = {\n["level"] = 288.125,\n},\n},\n}',
       function (g) {
-        return (g.X.info.name === '王天悦' &&
+        return (g.X.info.name === '影歌' &&
                 g.X.info.race.name === '暗夜精灵' &&
                 g.X.info.level === 80 &&
                 g.X.info.ilvl.level === 288.125) || J(g.X);

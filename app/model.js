@@ -754,10 +754,10 @@
   /**
    * Build a Raider.io / Warcraft Logs profile URL for a character.
    *
-   * VERIFIED: raider.io accepts BOTH the URL-encoded localized realm name and
-   * the English slug -- https://raider.io/characters/cn/白银之手/王天悦 returns
-   * 200, and so does .../cn/silver-hand/王天悦. The localized form is used
-   * because the English slug is not present anywhere in the saved data.
+   * VERIFIED against a real character on a Chinese realm: raider.io accepts
+   * BOTH the URL-encoded localized realm name and the English slug (both return
+   * 200). The localized form is used here because the English slug is not
+   * present anywhere in the saved data.
    *
    * NOT VERIFIED: Warcraft Logs returns 403 to any scripted request (Cloudflare),
    * including for a deliberately bogus name, so its URL shape could not be

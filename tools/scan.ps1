@@ -310,7 +310,7 @@ function Get-WowRoots {
 # --------------------------------------------------------------------------
 
 # file:// URLs treat '#' as a fragment delimiter, and one account folder here is
-# literally named "153364599#3". Filenames and DOM ids get the sanitized form;
+# literally named "123456789#3". Filenames and DOM ids get the sanitized form;
 # the original survives as displayName.
 function Get-SafeId {
     param([Parameter(Mandatory)][string]$Text)

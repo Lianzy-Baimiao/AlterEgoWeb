@@ -47,7 +47,7 @@
         keys[ch.key] = true;
       });
       if (dup) return '重复的行 key: ' + dup;
-      // This machine really has three characters named 易安玥.
+      // This machine really has three characters named 霜语.
       var byName = {};
       m.characters.forEach(function (ch) { byName[ch.name] = (byName[ch.name] || 0) + 1; });
       var anyDupName = Object.keys(byName).some(function (n) { return byName[n] > 1; });
@@ -236,7 +236,7 @@
     if (AE.buildXlsxBlob) {
       t('Excel 导出生成合法的 xlsx（zip + 元素顺序）', function () {
         var blob = AE.buildXlsxBlob('T', ['角色', '装等'], [
-          [{ v: '王天悦', num: false }, { v: 311, num: true }]
+          [{ v: '影歌', num: false }, { v: 311, num: true }]
         ]);
         if (!blob || !blob.size) return 'blob 是空的';
         // A real zip starts with the local file header signature "PK\x03\x04".

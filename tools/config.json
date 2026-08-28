@@ -4,10 +4,10 @@
   "_wowPaths": "Force the WoW root folder(s) when auto-detection fails. Use double backslashes. Example: [\"E:\\\\World of Warcraft\"]",
   "wowPaths": [],
 
-  "_excludeAccounts": "Account folder names to skip entirely, e.g. [\"153364599#3\"]",
+  "_excludeAccounts": "Account folder names to skip entirely, e.g. [\"123456789#3\"]",
   "excludeAccounts": [],
 
-  "_accountAliases": "Friendly names for the cryptic account folders. The Battle.net account name is NOT recoverable from disk, so this is the only way to label them. Example: {\"L549349545\": \"main\"}",
+  "_accountAliases": "Friendly names for the cryptic account folders. The Battle.net account name is NOT recoverable from disk, so this is the only way to label them. Example: {\"L123456789\": \"main\"}",
   "accountAliases": {},
 
   "_historyWeeksToKeep": "How many weekly snapshots to retain. Each is roughly the size of your combined AlterEgo.lua files (~0.6 MB here), so 12 weeks is about 7 MB.",
