@@ -129,6 +129,13 @@ $T = @{
     UpdNewer   = '有新版本 {0}（当前 v{1}），点这里打开发布页'
     UpdCurrent = '已经是最新版本 v{0}'
     UpdFailed  = '检查更新失败，可能是网络不通。稍后再试。'
+    CloseAsk   = "看板窗口已经关闭。`n`n要让程序继续留在托盘里（监视存档、自动重扫）吗？`n`n是 = 留在托盘　　否 = 一起退出"
+    CloseTitle = '关闭看板之后'
+    CloseRemem = '这个选择会记住，以后可以在托盘菜单的「关闭时行为」里改。'
+    BehaveMenu = '关闭看板时'
+    BehaveTray = '留在托盘'
+    BehaveExit = '一起退出'
+    BehaveAsk  = '每次询问'
 }
 
 # PowerShell string -> C# string literal, ASCII-only.
@@ -197,6 +204,13 @@ public static class Launcher
     const string T_UPDNEWER   = @@UPDNEWER@@;
     const string T_UPDCURRENT = @@UPDCURRENT@@;
     const string T_UPDFAILED  = @@UPDFAILED@@;
+    const string T_CLOSEASK   = @@CLOSEASK@@;
+    const string T_CLOSETITLE = @@CLOSETITLE@@;
+    const string T_CLOSEREMEM = @@CLOSEREMEM@@;
+    const string T_BEHAVEMENU = @@BEHAVEMENU@@;
+    const string T_BEHAVETRAY = @@BEHAVETRAY@@;
+    const string T_BEHAVEEXIT = @@BEHAVEEXIT@@;
+    const string T_BEHAVEASK  = @@BEHAVEASK@@;
 
     static string BaseDir;
     static string ScanScript;
@@ -205,6 +219,11 @@ public static class Launcher
     static System.Windows.Forms.Timer Debounce;
     static bool Rescanning;
     static string UpdateUrl;
+    static System.Windows.Forms.Timer WindowWatch;
+    static bool SawWindow;
+    // "" = ask on first close, "tray" = stay resident, "exit" = quit with it.
+    static string CloseBehaviour = "";
+    static ToolStripMenuItem[] BehaveItems;
     // MUST be held in a field. A FileSystemWatcher that only exists as a local
     // is eligible for collection as soon as the method returns, and then it
     // silently stops raising events.
@@ -313,6 +332,131 @@ public static class Launcher
         }
     }
 
+    // ----------------------------------------------------- window geometry
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct WINDOWPLACEMENT
+    {
+        public int length, flags, showCmd;
+        public System.Drawing.Point ptMinPosition, ptMaxPosition;
+        public RECT rcNormalPosition;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    static string GeometryFile { get { return Path.Combine(BaseDir, "data\\window.txt"); } }
+
+    // Remembered as the RESTORED rect plus a maximized flag, not the current
+    // rect: saving a maximized window's outer bounds would reopen it as a
+    // non-maximized window the size of the screen, which is not the same thing.
+    static void SaveGeometry(IntPtr hWnd)
+    {
+        try
+        {
+            WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+            wp.length = System.Runtime.InteropServices.Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+            if (!GetWindowPlacement(hWnd, ref wp)) return;
+
+            RECT r = wp.rcNormalPosition;
+            int w = r.Right - r.Left, h = r.Bottom - r.Top;
+            if (w < 300 || h < 200) return;   // minimised or nonsense
+
+            bool max = (wp.showCmd == 3);     // SW_SHOWMAXIMIZED
+            string line = string.Format("{0} {1} {2} {3} {4}", r.Left, r.Top, w, h, max ? 1 : 0);
+            Directory.CreateDirectory(Path.GetDirectoryName(GeometryFile));
+            File.WriteAllText(GeometryFile, line, new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    static string GeometryArgs()
+    {
+        try
+        {
+            if (!File.Exists(GeometryFile)) return "--window-size=1600,900";
+            string[] p = File.ReadAllText(GeometryFile).Trim().Split(' ');
+            if (p.Length < 4) return "--window-size=1600,900";
+            int x, y, w, h;
+            if (!int.TryParse(p[0], out x) || !int.TryParse(p[1], out y) ||
+                !int.TryParse(p[2], out w) || !int.TryParse(p[3], out h))
+                return "--window-size=1600,900";
+
+            // A monitor that is gone would put the window off-screen.
+            System.Drawing.Rectangle vs = SystemInformation.VirtualScreen;
+            if (x + w < vs.Left + 80 || x > vs.Right - 80 ||
+                y + h < vs.Top + 80 || y > vs.Bottom - 80)
+                return "--window-size=1600,900";
+
+            string args = "--window-position=" + x + "," + y + " --window-size=" + w + "," + h;
+            if (p.Length > 4 && p[4] == "1") args += " --start-maximized";
+            return args;
+        }
+        catch { return "--window-size=1600,900"; }
+    }
+
+    // ------------------------------------------------------- close behaviour
+
+    static void StartWindowWatch()
+    {
+        WindowWatch = new System.Windows.Forms.Timer();
+        WindowWatch.Interval = 2000;
+        WindowWatch.Tick += OnWindowWatchTick;
+        WindowWatch.Start();
+    }
+
+    static void OnWindowWatchTick(object sender, EventArgs e)
+    {
+        IntPtr h = FindDashboardWindow();
+        if (h != IntPtr.Zero)
+        {
+            SawWindow = true;
+            SaveGeometry(h);           // cheap, and survives a hard kill
+            return;
+        }
+        if (!SawWindow) return;        // still starting up
+        SawWindow = false;
+
+        if (CloseBehaviour == "tray") return;
+        if (CloseBehaviour == "exit") { QuitApp(); return; }
+
+        // Unset: ask once and remember. Default (Enter / Esc) is to quit, which
+        // is the least surprising for someone who just closed the window.
+        DialogResult r = MessageBox.Show(T_CLOSEASK + "\n\n" + T_CLOSEREMEM, T_CLOSETITLE,
+                                         MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                                         MessageBoxDefaultButton.Button2);
+        CloseBehaviour = (r == DialogResult.Yes) ? "tray" : "exit";
+        WriteConfigString("onWindowClose", CloseBehaviour);
+        SyncBehaviourMenu();
+        if (CloseBehaviour == "exit") QuitApp();
+    }
+
+    static void QuitApp()
+    {
+        IntPtr h = FindDashboardWindow();
+        if (h != IntPtr.Zero) SaveGeometry(h);
+        if (Tray != null) Tray.Visible = false;
+        Application.Exit();
+    }
+
+    static void SetCloseBehaviour(string v)
+    {
+        CloseBehaviour = v;
+        WriteConfigString("onWindowClose", v);
+        SyncBehaviourMenu();
+    }
+
+    static void SyncBehaviourMenu()
+    {
+        if (BehaveItems == null) return;
+        string[] vals = new string[] { "exit", "tray", "" };
+        for (int i = 0; i < BehaveItems.Length; i++)
+            BehaveItems[i].Checked = (vals[i] == CloseBehaviour);
+    }
+
     // -------------------------------------------------------------- update
 
     // The page cannot do this itself: file:// blocks fetch and XHR outright. The
@@ -407,8 +551,8 @@ public static class Launcher
     // would let a second instance through.
     static Mutex Single;
 
-    /// Focus an already-open dashboard window. Returns false if there is none.
-    static bool FocusDashboard()
+    /// The dashboard window handle, or IntPtr.Zero.
+    static IntPtr FindDashboardWindow()
     {
         IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr hWnd, IntPtr param)
@@ -426,6 +570,13 @@ public static class Launcher
             return true;
         }, IntPtr.Zero);
 
+        return found;
+    }
+
+    /// Focus an already-open dashboard window. Returns false if there is none.
+    static bool FocusDashboard()
+    {
+        IntPtr found = FindDashboardWindow();
         if (found == IntPtr.Zero) return false;
         if (IsIconic(found)) ShowWindow(found, SW_RESTORE);
         SetForegroundWindow(found);
@@ -486,7 +637,7 @@ public static class Launcher
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo(browser);
-                psi.Arguments = "--app=\"" + url + "\" --window-size=1600,900";
+                psi.Arguments = "--app=\"" + url + "\" " + GeometryArgs();
                 psi.UseShellExecute = false;
                 Process.Start(psi);
                 return;
@@ -543,22 +694,24 @@ public static class Launcher
         Rescan(true);
     }
 
-    // Rewrites just the wowPaths line in tools/config.json. A regex rather than
-    // a JSON parser because .NET Framework has no built-in JSON writer and the
-    // file is a hand-maintained template full of "_comment" keys worth keeping.
-    static bool WriteWowPath(string dir)
+    // Rewrites one key in tools/config.json. A regex rather than a JSON parser
+    // because .NET Framework has no built-in JSON writer and the file is a
+    // hand-maintained template full of "_comment" keys worth keeping.
+    static bool WriteConfigRaw(string key, string rawJsonValue)
     {
         string cfg = Path.Combine(BaseDir, "tools\\config.json");
         try
         {
             string text = File.Exists(cfg) ? File.ReadAllText(cfg, Encoding.UTF8) : "{\n}\n";
-            string escaped = dir.Replace("\\", "\\\\");
-            string line = "\"wowPaths\": [\"" + escaped + "\"]";
+            string line = "\"" + key + "\": " + rawJsonValue;
+            // Value is an array [..], an object {..} or a scalar up to the comma
+            // or closing brace.
+            string pattern = "\"" + key + "\"\\s*:\\s*(\\[[^\\]]*\\]|\\{[^}]*\\}|[^,\\r\\n}]*)";
 
-            if (System.Text.RegularExpressions.Regex.IsMatch(text, "\"wowPaths\"\\s*:\\s*\\[[^\\]]*\\]"))
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, pattern))
             {
                 text = System.Text.RegularExpressions.Regex.Replace(
-                    text, "\"wowPaths\"\\s*:\\s*\\[[^\\]]*\\]", line.Replace("$", "$$"));
+                    text, pattern, line.Replace("$", "$$"));
             }
             else
             {
@@ -575,6 +728,30 @@ public static class Launcher
             MessageBox.Show(ex.Message, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+    }
+
+    static bool WriteWowPath(string dir)
+    {
+        return WriteConfigRaw("wowPaths", "[\"" + dir.Replace("\\", "\\\\") + "\"]");
+    }
+
+    static void WriteConfigString(string key, string value)
+    {
+        WriteConfigRaw(key, "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
+    }
+
+    static string ReadConfigString(string key)
+    {
+        try
+        {
+            string cfg = Path.Combine(BaseDir, "tools\\config.json");
+            if (!File.Exists(cfg)) return "";
+            string text = File.ReadAllText(cfg, Encoding.UTF8);
+            var m = System.Text.RegularExpressions.Regex.Match(
+                text, "\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            return m.Success ? m.Groups[1].Value : "";
+        }
+        catch { return ""; }
     }
 
     // WScript.Shell via late binding: no COM reference to add, and it is present
@@ -783,15 +960,24 @@ public static class Launcher
         menu.Items.Add(T_TRAYRESCAN, null, delegate(object s, EventArgs e) { Rescan(true); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T_TRAYUPDATE, null, delegate(object s, EventArgs e) { CheckUpdate(); });
+
+        ToolStripMenuItem behave = new ToolStripMenuItem(T_BEHAVEMENU);
+        ToolStripMenuItem bExit = new ToolStripMenuItem(T_BEHAVEEXIT, null,
+            delegate(object s, EventArgs e) { SetCloseBehaviour("exit"); });
+        ToolStripMenuItem bTray = new ToolStripMenuItem(T_BEHAVETRAY, null,
+            delegate(object s, EventArgs e) { SetCloseBehaviour("tray"); });
+        ToolStripMenuItem bAsk = new ToolStripMenuItem(T_BEHAVEASK, null,
+            delegate(object s, EventArgs e) { SetCloseBehaviour(""); });
+        behave.DropDownItems.Add(bExit);
+        behave.DropDownItems.Add(bTray);
+        behave.DropDownItems.Add(bAsk);
+        BehaveItems = new ToolStripMenuItem[] { bExit, bTray, bAsk };
+        menu.Items.Add(behave);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T_TRAYSETDIR, null, delegate(object s, EventArgs e) { PickGameDir(); });
         menu.Items.Add(T_TRAYSHORTCUT, null, delegate(object s, EventArgs e) { CreateDesktopShortcut(); });
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(T_TRAYEXIT, null, delegate(object s, EventArgs e)
-        {
-            Tray.Visible = false;
-            Application.Exit();
-        });
+        menu.Items.Add(T_TRAYEXIT, null, delegate(object s, EventArgs e) { QuitApp(); });
         Tray.ContextMenuStrip = menu;
         Tray.DoubleClick += delegate(object s, EventArgs e) { OpenDashboard(); };
         Tray.BalloonTipClicked += delegate(object s, EventArgs e)
@@ -811,6 +997,11 @@ public static class Launcher
         Debounce.Tick += OnDebounceTick;
 
         SetupWatchers();
+
+        CloseBehaviour = ReadConfigString("onWindowClose");
+        if (CloseBehaviour != "tray" && CloseBehaviour != "exit") CloseBehaviour = "";
+        SyncBehaviourMenu();
+        StartWindowWatch();
 
         Application.Run();
 

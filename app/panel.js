@@ -257,18 +257,57 @@
 
     // ---- columns ---------------------------------------------------------
     var colSec = section('显示的列');
+
+    // The group checkbox hides the whole band in one go; 全选 / 全不选 operate on
+    // the individual columns inside it. They are different things: unchecking the
+    // group keeps your per-column choices for when you switch it back on.
+    var colTop = el('div', 'row-buttons');
+    colTop.appendChild(button('全部显示', 'mini', function () {
+      s.hiddenGroups = {};
+      s.hiddenColumns = {};
+      AE.buildSettingsPanel();
+      AE.refresh();
+    }));
+    colTop.appendChild(button('只留基础', 'mini', function () {
+      s.hiddenGroups = {};
+      s.hiddenColumns = {};
+      AE.GROUPS.forEach(function (g) {
+        if (g.id !== 'base') s.hiddenGroups[g.id] = true;
+      });
+      AE.buildSettingsPanel();
+      AE.refresh();
+    }));
+    colSec.appendChild(colTop);
+
     AE.GROUPS.forEach(function (g) {
       var groupCols = st.columns.filter(function (c) { return c.group === g.id; });
       if (!groupCols.length) return;
 
       var box = el('div', 'col-group');
-      box.appendChild(check(g.label + '（' + groupCols.length + '）',
+
+      var head = el('div', 'col-group-head');
+      head.appendChild(check(g.label + '（' + groupCols.length + '）',
         function () { return !s.hiddenGroups[g.id]; },
         function (v) {
           if (v) delete s.hiddenGroups[g.id];
           else s.hiddenGroups[g.id] = true;
           AE.refresh();
         }));
+
+      var groupBtns = el('span', 'col-group-btns');
+      groupBtns.appendChild(button('全选', 'mini', function () {
+        groupCols.forEach(function (c) { delete s.hiddenColumns[c.id]; });
+        delete s.hiddenGroups[g.id];
+        AE.buildSettingsPanel();
+        AE.refresh();
+      }));
+      groupBtns.appendChild(button('全不选', 'mini', function () {
+        groupCols.forEach(function (c) { s.hiddenColumns[c.id] = true; });
+        AE.buildSettingsPanel();
+        AE.refresh();
+      }));
+      head.appendChild(groupBtns);
+      box.appendChild(head);
 
       var sub = el('div', 'col-list');
       groupCols.forEach(function (c) {

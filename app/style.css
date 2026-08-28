@@ -479,7 +479,13 @@ p.note {
 }
 
 .col-group { margin-bottom: 6px; }
-.col-group > label.chk { font-weight: 600; }
+.col-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.col-group-head > label.chk { font-weight: 600; flex: 1; }
+.col-group-btns { display: flex; gap: 4px; }
 .col-list {
   padding-left: 20px;
   display: grid;
@@ -672,11 +678,19 @@ body[data-theme="light"] .seg button.on { color: #fff; }
 /* Themed to match the rest of the chrome. The default Windows scrollbar is a
    light grey slab that looks pasted on in dark mode, and the table's horizontal
    bar is the most visible one on the page. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+/* The standard properties are for browsers WITHOUT ::-webkit-scrollbar (Firefox).
+   In Chromium, setting scrollbar-width or scrollbar-color switches the element to
+   the standard rendering path and makes every ::-webkit-scrollbar rule below it
+   inert -- measured: webkit alone gives the 18px asked for, webkit plus
+   `scrollbar-width: thin` gives 10px. A global `*` rule was silently capping
+   every scrollbar in the app. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
 }
-::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--line);

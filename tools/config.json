@@ -22,6 +22,9 @@
   "_checkForUpdates": "Ask api.github.com for the latest release. Only the release metadata is fetched; nothing about you is sent. Set to false for no network access at all.",
   "checkForUpdates": true,
 
+  "_onWindowClose": "What the launcher does when you close the dashboard window: \"exit\" quits it too, \"tray\" keeps it resident, \"\" asks once and remembers. Also settable from the tray menu.",
+  "onWindowClose": "",
+
   "_collectBackups": "Read MySlot export strings and the edit-mode cache into data/backups.js for the 备份箱 panel.",
   "collectBackups": true
 }
