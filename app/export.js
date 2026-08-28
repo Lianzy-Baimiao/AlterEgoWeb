@@ -398,23 +398,59 @@
     return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
   }
 
+  /**
+   * Tell the user where the file went.
+   *
+   * A download from a file:// page lands in the browser's download folder and
+   * nothing on the page can open it -- file:// navigation from a file:// page is
+   * blocked and there is no "reveal in folder" API. So the toast shows the full
+   * path (scan.ps1 resolves it from the shell folder registry) and offers to copy
+   * it, which is the most that can honestly be done from here.
+   */
+  function exportedToast(filename, rows, cols) {
+    var dir = (AE.state && AE.state.model && AE.state.model.downloadsDir) || '';
+    var full = dir ? (dir.replace(/[\\/]+$/, '') + '\\' + filename) : filename;
+    AE.toast({
+      title: '已导出 ' + filename,
+      body: (dir ? full : '在浏览器的下载文件夹里') + '　·　' + rows + ' 行 × ' + cols + ' 列',
+      kind: 'good',
+      ms: 3000,
+      actions: [{
+        label: '复制路径',
+        onClick: function () { AE.copyWithToast(full, filename); },
+        keepOpen: true
+      }]
+    });
+  }
+
+  function nothingToExport() {
+    AE.toast({
+      title: '没有可导出的内容',
+      body: '当前筛选下一行都没有显示。',
+      kind: 'bad',
+      ms: 3000
+    });
+  }
+
   AE.exportXlsx = function () {
     var snap = snapshot();
-    if (!snap.rows.length) { global.alert('当前没有可导出的行。'); return; }
+    if (!snap.rows.length) { nothingToExport(); return; }
     var blob = buildXlsx('AlterEgo', snap.headers, snap.rows);
     var url = URL.createObjectURL(blob);
+    var name = 'AlterEgo-' + stamp() + '.xlsx';
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'AlterEgo-' + stamp() + '.xlsx';
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    exportedToast(name, snap.rows.length, snap.headers.length);
   };
 
   AE.exportCsv = function () {
     var snap = snapshot();
-    if (!snap.rows.length) { global.alert('当前没有可导出的行。'); return; }
+    if (!snap.rows.length) { nothingToExport(); return; }
     function q(v) {
       var s = (v == null) ? '' : String(v);
       return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -423,9 +459,11 @@
     snap.rows.forEach(function (row) {
       lines.push(row.map(function (c) { return q(c ? c.v : ''); }).join(','));
     });
+    var name = 'AlterEgo-' + stamp() + '.csv';
     // The BOM is what makes Excel open a UTF-8 CSV without mojibaking the
     // Chinese; without it Excel assumes the system codepage.
-    AE.downloadText('AlterEgo-' + stamp() + '.csv', '﻿' + lines.join('\r\n'), 'text/csv');
+    AE.downloadText(name, '﻿' + lines.join('\r\n'), 'text/csv');
+    exportedToast(name, snap.rows.length, snap.headers.length);
   };
 
   AE.exportSnapshot = snapshot;

@@ -909,6 +909,7 @@
       scannedAtLocal: raw.scannedAtLocal || '',
       toolVersion: raw.toolVersion || '',
       author: raw.author || '',
+      downloadsDir: raw.downloadsDir || '',
       repo: raw.repo || '',
       update: raw.update || null,
       backupIndex: AE.asArray(raw.backupIndex),

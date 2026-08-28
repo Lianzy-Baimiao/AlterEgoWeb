@@ -1,7 +1,10 @@
 {
   "_comment": "AlterEgoWeb configuration. All fields are optional.",
 
-  "_wowPaths": "Force the WoW root folder(s) when auto-detection fails. Use double backslashes. Example: [\"E:\\\\World of Warcraft\"]",
+  "_includeFlavors": "Which game folders to read. Retail only by default. Use [] for all of them, or e.g. [\"_retail_\", \"_classic_\"].",
+  "includeFlavors": ["_retail_"],
+
+  "_wowPaths": "Force the WoW root folder(s) when auto-detection fails. Use double backslashes. Example: [\"E:\\\\World of Warcraft\"]. The launcher's tray menu can also set this with a folder picker.",
   "wowPaths": [],
 
   "_excludeAccounts": "Account folder names to skip entirely, e.g. [\"123456789#3\"]",

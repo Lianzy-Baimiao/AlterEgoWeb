@@ -117,6 +117,13 @@ $T = @{
     TrayBusy   = 'AlterEgo 本地看板 - 正在重新扫描...'
     TrayDone   = '数据已更新，页面会在下次刷新时显示'
     TrayNoWatch= 'AlterEgo 本地看板'
+    TraySetDir = '设置游戏目录...'
+    TrayShortcut='创建桌面快捷方式'
+    PickDir    = '选择魔兽世界的安装目录（包含 _retail_ 的那一层）'
+    DirBad     = "这个目录里没有找到 _retail_。`n请选择包含 _retail_ 文件夹的那一层，例如 D:\\World of Warcraft。"
+    DirSaved   = '游戏目录已保存，正在重新扫描...'
+    ShortcutOk = '桌面快捷方式已创建。'
+    ShortcutBad= '创建快捷方式失败：'
 }
 
 # PowerShell string -> C# string literal, ASCII-only.
@@ -170,6 +177,13 @@ public static class Launcher
     const string T_TRAYBUSY   = @@TRAYBUSY@@;
     const string T_TRAYDONE   = @@TRAYDONE@@;
     const string T_TRAYNOWATCH= @@TRAYNOWATCH@@;
+    const string T_TRAYSETDIR = @@TRAYSETDIR@@;
+    const string T_TRAYSHORTCUT=@@TRAYSHORTCUT@@;
+    const string T_PICKDIR    = @@PICKDIR@@;
+    const string T_DIRBAD     = @@DIRBAD@@;
+    const string T_DIRSAVED   = @@DIRSAVED@@;
+    const string T_SHORTCUTOK = @@SHORTCUTOK@@;
+    const string T_SHORTCUTBAD= @@SHORTCUTBAD@@;
 
     static string BaseDir;
     static string ScanScript;
@@ -356,6 +370,112 @@ public static class Launcher
         }
     }
 
+    // ------------------------------------------------------- game directory
+
+    // A folder picker beats telling the user to hand-edit JSON, and it is the
+    // only part of the config that ever needs changing on a machine where
+    // auto-detection fails.
+    static void PickGameDir()
+    {
+        FolderBrowserDialog dlg = new FolderBrowserDialog();
+        dlg.Description = T_PICKDIR;
+        dlg.ShowNewFolderButton = false;
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+
+        string chosen = dlg.SelectedPath;
+        // Accept either the root or the _retail_ folder itself.
+        if (Directory.Exists(Path.Combine(chosen, "_retail_")))
+        {
+            // already the root
+        }
+        else if (string.Equals(Path.GetFileName(chosen.TrimEnd('\\')), "_retail_",
+                               StringComparison.OrdinalIgnoreCase))
+        {
+            chosen = Path.GetDirectoryName(chosen.TrimEnd('\\'));
+        }
+        else
+        {
+            MessageBox.Show(T_DIRBAD, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!WriteWowPath(chosen)) return;
+        Tray.BalloonTipTitle = T_TITLE;
+        Tray.BalloonTipText = T_DIRSAVED;
+        Tray.ShowBalloonTip(2500);
+        Rescan(true);
+    }
+
+    // Rewrites just the wowPaths line in tools/config.json. A regex rather than
+    // a JSON parser because .NET Framework has no built-in JSON writer and the
+    // file is a hand-maintained template full of "_comment" keys worth keeping.
+    static bool WriteWowPath(string dir)
+    {
+        string cfg = Path.Combine(BaseDir, "tools\\config.json");
+        try
+        {
+            string text = File.Exists(cfg) ? File.ReadAllText(cfg, Encoding.UTF8) : "{\n}\n";
+            string escaped = dir.Replace("\\", "\\\\");
+            string line = "\"wowPaths\": [\"" + escaped + "\"]";
+
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, "\"wowPaths\"\\s*:\\s*\\[[^\\]]*\\]"))
+            {
+                text = System.Text.RegularExpressions.Regex.Replace(
+                    text, "\"wowPaths\"\\s*:\\s*\\[[^\\]]*\\]", line.Replace("$", "$$"));
+            }
+            else
+            {
+                int brace = text.IndexOf('{');
+                if (brace < 0) return false;
+                text = text.Substring(0, brace + 1) + "\n  " + line + "," + text.Substring(brace + 1);
+            }
+            // No BOM: PowerShell reads this with an explicit UTF8Encoding(false).
+            File.WriteAllText(cfg, text, new UTF8Encoding(false));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+    }
+
+    // WScript.Shell via late binding: no COM reference to add, and it is present
+    // on every Windows install.
+    static void CreateDesktopShortcut()
+    {
+        try
+        {
+            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string exe = Assembly.GetExecutingAssembly().Location;
+            string lnk = Path.Combine(desktop, Path.GetFileNameWithoutExtension(exe) + ".lnk");
+
+            Type t = Type.GetTypeFromProgID("WScript.Shell");
+            object shell = Activator.CreateInstance(t);
+            object sc = t.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod,
+                                       null, shell, new object[] { lnk });
+            Type st = sc.GetType();
+            st.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, sc,
+                            new object[] { exe });
+            st.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, sc,
+                            new object[] { BaseDir });
+            st.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc,
+                            new object[] { exe + ",0" });
+            st.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, sc,
+                            new object[] { T_TITLE });
+            st.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, null);
+
+            Tray.BalloonTipTitle = T_TITLE;
+            Tray.BalloonTipText = T_SHORTCUTOK;
+            Tray.ShowBalloonTip(2500);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(T_SHORTCUTBAD + ex.Message, T_TITLE,
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     // --------------------------------------------------------------- watch
 
     static void SetupWatchers()
@@ -511,6 +631,9 @@ public static class Launcher
         menu.Items.Add(T_TRAYOPEN, null, delegate(object s, EventArgs e) { OpenDashboard(); });
         menu.Items.Add(T_TRAYRESCAN, null, delegate(object s, EventArgs e) { Rescan(true); });
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(T_TRAYSETDIR, null, delegate(object s, EventArgs e) { PickGameDir(); });
+        menu.Items.Add(T_TRAYSHORTCUT, null, delegate(object s, EventArgs e) { CreateDesktopShortcut(); });
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T_TRAYEXIT, null, delegate(object s, EventArgs e)
         {
             Tray.Visible = false;
@@ -538,7 +661,19 @@ if ($source -match '@@[A-Z]+@@') {
     throw "a UI string placeholder was left unsubstituted: $($Matches[0])"
 }
 
-if (Test-Path -LiteralPath $ExePath) { Remove-Item -LiteralPath $ExePath -Force }
+# A running instance holds the file open, and "access denied" here is confusing.
+# Say what to do instead.
+if (Test-Path -LiteralPath $ExePath) {
+    $running = @(Get-Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Path -eq $ExePath })
+    if ($running.Count -gt 0) {
+        throw ("The launcher is currently running (PID " +
+               (($running | ForEach-Object { $_.Id }) -join ', ') +
+               ").`r`n  Exit it from the tray icon first, then run this again.")
+    }
+    try { Remove-Item -LiteralPath $ExePath -Force }
+    catch { throw ("Cannot replace $ExePath : " + $_.Exception.Message) }
+}
 
 # -CompilerParameters is mutually exclusive with -ReferencedAssemblies /
 # -OutputAssembly / -OutputType, and ReferencedAssemblies is a read-only

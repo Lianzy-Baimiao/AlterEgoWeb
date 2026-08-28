@@ -34,7 +34,7 @@
     <div class="meta">
       <span>扫描于 <b id="scan-time">-</b></span>
       <span id="season-info"></span>
-      <a id="update-info" class="meta-plain"></a>
+      <span id="version-info" class="meta-plain"></span>
     </div>
     <span class="spacer"></span>
 
@@ -47,11 +47,10 @@
     </label>
     <button type="button" id="btn-refresh" title="重新载入数据（F5 也行）">刷新</button>
 
-    <label class="switch" id="theme-wrap" title="深色 / 浅色">
-      <input type="checkbox" id="theme-toggle">
-      <span class="track"><span class="knob"></span></span>
-      <span id="theme-label">深色</span>
-    </label>
+    <div class="seg" id="theme-seg" role="group" aria-label="明暗">
+      <button type="button" data-theme-value="dark">深色</button>
+      <button type="button" data-theme-value="light">浅色</button>
+    </div>
 
     <button type="button" id="btn-vault">备份箱</button>
     <button type="button" id="btn-trends">周趋势</button>
@@ -64,6 +63,12 @@
   <div id="warnings" style="display:none">
     <b>注意　</b><span id="warning-text"></span>
     <button type="button" id="warning-close" title="关闭提示">×</button>
+  </div>
+
+  <div id="update-banner" style="display:none">
+    <b>更新　</b><span id="update-text"></span>
+    <a id="update-link" target="_blank" rel="noopener noreferrer">打开发布页</a>
+    <button type="button" id="update-close" title="关闭提示">×</button>
   </div>
 
   <div id="grid-wrap">
@@ -81,6 +86,7 @@
 <!-- One backdrop for every slide-over panel: it is what makes "click outside to
      close" work without hit-testing. -->
 <div id="backdrop"></div>
+<div id="toasts"></div>
 
 <aside id="panel">
   <div class="panel-head">
@@ -147,6 +153,7 @@ window.__AE_PROBE.storage = (function () {
 
 <!-- Application, in dependency order. Classic scripts only. -->
 <script src="app/lua-parser.js" charset="utf-8"></script>
+<script src="app/toast.js" charset="utf-8"></script>
 <script src="app/labels.js" charset="utf-8"></script>
 <script src="app/model.js" charset="utf-8"></script>
 <script src="app/settings.js" charset="utf-8"></script>

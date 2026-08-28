@@ -94,34 +94,17 @@
   // ------------------------------------------------------------ clipboard UI
 
   function copyToClipboard(text, feedbackNode) {
-    function ok() {
-      if (!feedbackNode) return;
-      var was = feedbackNode.textContent;
-      feedbackNode.textContent = '已复制';
-      feedbackNode.classList.add('ok');
-      setTimeout(function () {
-        feedbackNode.textContent = was;
-        feedbackNode.classList.remove('ok');
-      }, 1400);
-    }
-    if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
-      global.navigator.clipboard.writeText(text).then(ok, function () { fallback(); });
-      return;
-    }
-    fallback();
-
-    // execCommand is deprecated but is the only thing that works when the
-    // async clipboard API is unavailable, which does happen on file://.
-    function fallback() {
-      var ta = doc.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      doc.body.appendChild(ta);
-      ta.select();
-      try { doc.execCommand('copy'); ok(); } catch (e) { /* ignore */ }
-      doc.body.removeChild(ta);
-    }
+    // The shared helper raises the toast; the inline status label stays as a
+    // quieter second confirmation right next to the button that was clicked.
+    AE.copyWithToast(text, null);
+    if (!feedbackNode) return;
+    var was = feedbackNode.textContent;
+    feedbackNode.textContent = '已复制';
+    feedbackNode.classList.add('ok');
+    setTimeout(function () {
+      feedbackNode.textContent = was;
+      feedbackNode.classList.remove('ok');
+    }, 1400);
   }
 
   function entryRow(opts) {

@@ -315,7 +315,7 @@
       box.style.display = 'none';
     };
 
-    renderUpdateBadge();
+    renderUpdateBanner();
   }
 
   function signature(s) {
@@ -324,34 +324,49 @@
     return (h >>> 0).toString(36);
   }
 
-  function renderUpdateBadge() {
-    var u = (state.model.update) || {};
-    var el2 = doc.getElementById('update-info');
-    if (!el2) return;
-    if (!u.checked || !u.latestVersion) {
-      el2.textContent = 'v' + (state.model.toolVersion || '?');
-      el2.removeAttribute('href');
-      el2.className = 'meta-plain';
-      el2.title = u.error ? ('更新检查未完成：' + u.error) : '';
-      return;
+  /**
+   * Update notice as a dismissible banner, matching the 注意 banner.
+   *
+   * Deliberately silent when the check did not succeed: on a Chinese network
+   * api.github.com is frequently unreachable, and "couldn't check for updates"
+   * every single launch is noise, not information. The version number in the
+   * header is always shown, so nothing is hidden.
+   */
+  function renderUpdateBanner() {
+    var m = state.model;
+    var u = m.update || {};
+    var ver = doc.getElementById('version-info');
+    if (ver) {
+      ver.textContent = 'v' + (m.toolVersion || '?');
+      ver.title = u.checked
+        ? ('最新发布版本 ' + u.latestVersion)
+        : (u.error ? ('更新检查未完成：' + u.error) : '');
     }
+
+    var box = doc.getElementById('update-banner');
+    if (!box) return;
+
+    if (!u.checked || !u.latestVersion) { box.style.display = 'none'; return; }
+
     var latest = String(u.latestVersion).replace(/^v/, '');
-    var cur = String(u.currentVersion || state.model.toolVersion).replace(/^v/, '');
-    if (compareVersions(latest, cur) > 0) {
-      el2.textContent = '有新版本 ' + u.latestVersion;
-      el2.href = u.url;
-      el2.target = '_blank';
-      el2.rel = 'noopener noreferrer';
-      el2.className = 'update-available';
-      el2.title = '当前 v' + cur + '，最新 ' + u.latestVersion + '\n点击打开发布页';
-    } else {
-      el2.textContent = 'v' + cur + '（最新）';
-      el2.href = u.url;
-      el2.target = '_blank';
-      el2.rel = 'noopener noreferrer';
-      el2.className = 'meta-plain';
-      el2.title = '已是最新版本';
-    }
+    var cur = String(u.currentVersion || m.toolVersion || '').replace(/^v/, '');
+    if (compareVersions(latest, cur) <= 0) { box.style.display = 'none'; return; }
+
+    var sig = 'update:' + latest;
+    if (state.settings.dismissedUpdate === sig) { box.style.display = 'none'; return; }
+
+    box.style.display = '';
+    doc.getElementById('update-text').textContent =
+      '有新版本 ' + u.latestVersion + '（当前 v' + cur + '）' +
+      (u.publishedAt ? '　发布于 ' + u.publishedAt.slice(0, 10) : '');
+    var link = doc.getElementById('update-link');
+    link.href = u.url;
+    doc.getElementById('update-close').onclick = function () {
+      // Keyed by version, so the next release still announces itself.
+      state.settings.dismissedUpdate = sig;
+      save();
+      box.style.display = 'none';
+    };
   }
 
   /** Numeric-segment version compare; non-numeric suffixes are ignored. */

@@ -1,0 +1,93 @@
+﻿<#
+  AlterEgoWeb - tools/build-release.ps1
+
+  Packs a distributable zip for a GitHub Release.
+
+  There is deliberately no .msi / setup.exe. Nothing needs installing: the exe is
+  a plain .NET Framework 4 WinExe, and PowerShell 5.1 plus .NET Framework 4.8 are
+  already part of Windows 10/11 (verified on the dev machine: PS 5.1.26100,
+  .NET 4.8.09221). An installer would only add Start Menu / Add-Remove entries
+  while making antivirus more suspicious and breaking the "copy the folder
+  anywhere" property that is the whole point of the tool. The launcher's tray
+  menu has 创建桌面快捷方式 for anyone who wants an icon.
+
+  Excluded from the zip: data/ (personal -- character names, realms, gold,
+  account folder names, absolute paths, MySlot strings) and the .git directory.
+#>
+
+[CmdletBinding()]
+param(
+    [switch]$SkipBuild
+)
+
+$ErrorActionPreference = 'Stop'
+
+$ToolsDir = $PSScriptRoot
+if (-not $ToolsDir) { $ToolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$BaseDir = Split-Path -Parent $ToolsDir
+
+# Version comes from scan.ps1, so there is one place to bump.
+$scanText = [System.IO.File]::ReadAllText((Join-Path $ToolsDir 'scan.ps1'))
+$m = [regex]::Match($scanText, "\`$TOOL_VERSION\s*=\s*'([^']+)'")
+if (-not $m.Success) { throw 'could not read $TOOL_VERSION from tools\scan.ps1' }
+$version = $m.Groups[1].Value
+
+Write-Host ''
+Write-Host "Packing AlterEgoWeb v$version"
+Write-Host ('-' * 62)
+
+if (-not $SkipBuild) {
+    # Dot-source rather than checking $LASTEXITCODE: a .ps1 that simply returns
+    # leaves $LASTEXITCODE at whatever it was, so it is not a build signal. The
+    # build script throws on real failures, which propagates here.
+    & (Join-Path $ToolsDir 'build-launcher.ps1')
+}
+
+$exe = Get-ChildItem -LiteralPath $BaseDir -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+       Select-Object -First 1
+if (-not $exe) { throw 'no launcher exe found; run tools\build-launcher.ps1 first' }
+
+$stage = Join-Path $env:TEMP ("AlterEgoWeb-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$pkgDir = Join-Path $stage 'AlterEgoWeb'
+New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
+
+$include = @(
+    'index.html', 'tests.html', 'README.md', 'LICENSE',
+    '启动.bat', $exe.Name
+)
+foreach ($f in $include) {
+    $src = Join-Path $BaseDir $f
+    if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $pkgDir }
+    else { Write-Host "  ! missing, skipped: $f" -ForegroundColor Yellow }
+}
+
+foreach ($d in @('app', 'tools')) {
+    Copy-Item -LiteralPath (Join-Path $BaseDir $d) -Destination $pkgDir -Recurse
+}
+# The generated icon is a build artifact, not source.
+Remove-Item -LiteralPath (Join-Path $pkgDir 'tools\launcher.ico') -Force -ErrorAction SilentlyContinue
+
+# An empty data/ so the first run has somewhere to write, and a note explaining
+# that the folder is regenerated.
+$dataDir = Join-Path $pkgDir 'data'
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+[System.IO.File]::WriteAllText(
+    (Join-Path $dataDir '说明.txt'),
+    "这个文件夹由启动器自动生成，可以随时整个删掉重扫。`r`n里面是你的角色数据，不要上传到公开仓库。`r`n",
+    [System.Text.UTF8Encoding]::new($true))
+
+$zip = Join-Path $BaseDir ("AlterEgoWeb-v$version.zip")
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $stage, $zip,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false)
+
+Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+
+$kb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1KB, 1)
+Write-Host "  $zip  ($kb KB)"
+Write-Host ''
+Write-Host 'Done. Attach this zip to the GitHub Release.' -ForegroundColor Green

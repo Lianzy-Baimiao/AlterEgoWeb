@@ -73,8 +73,9 @@
         realmForm: 'localized'       // 'localized' | 'slug'
       },
 
-      // Dismissed banner, keyed by content so a NEW warning still shows.
+      // Dismissed banners, keyed by content/version so a NEW one still shows.
       dismissedWarning: '',
+      dismissedUpdate: '',
 
       // 备份箱: user-added {name, content} entries for any addon's export string.
       vaultEntries: [],

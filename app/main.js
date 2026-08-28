@@ -170,22 +170,31 @@
 
   // ------------------------------------------------------------ theme switch
 
+  // A two-button segmented control rather than a sliding toggle: it names both
+  // states, so there is nothing to infer from which way a knob points, and it
+  // matches the surrounding buttons instead of introducing a new shape.
   function wireTheme() {
-    var box = doc.getElementById('theme-toggle');
-    var label = doc.getElementById('theme-label');
+    var seg = doc.getElementById('theme-seg');
+    var buttons = seg.querySelectorAll('button[data-theme-value]');
     var s = AE.state.settings;
 
     function paint() {
-      box.checked = s.theme === 'dark';
-      label.textContent = s.theme === 'dark' ? '深色' : '浅色';
+      for (var i = 0; i < buttons.length; i++) {
+        var on = buttons[i].getAttribute('data-theme-value') === s.theme;
+        buttons[i].classList.toggle('on', on);
+        buttons[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
     }
-    box.addEventListener('change', function () {
-      s.theme = box.checked ? 'dark' : 'light';
-      paint();
-      AE.refresh();
-      // The panel mirrors this control, so keep it in step if it is built.
-      if (doc.getElementById('panel').classList.contains('open')) AE.buildSettingsPanel();
-    });
+
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function () {
+        s.theme = this.getAttribute('data-theme-value');
+        paint();
+        AE.refresh();
+        // The panel mirrors this control, so keep it in step if it is open.
+        if (doc.getElementById('panel').classList.contains('open')) AE.buildSettingsPanel();
+      });
+    }
     paint();
     AE.repaintThemeSwitch = paint;
   }

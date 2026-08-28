@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $SCHEMA_VERSION = 1
-$TOOL_VERSION   = '1.2.0'
+$TOOL_VERSION   = '1.3.0'
 $REPO           = 'Lianzy-Baimiao/AlterEgoWeb'
 $AUTHOR         = '白描'
 
@@ -72,6 +72,7 @@ $Config = [pscustomobject]@{
     absorbDownloadedSettings = $true
     checkForUpdates          = $true
     collectBackups           = $true
+    includeFlavors           = @('_retail_')
 }
 if (Test-Path -LiteralPath $ConfigPath) {
     try {
@@ -213,6 +214,18 @@ function Test-FlavorDir {
     } catch { return $false }
 }
 
+# Which game flavours to read. Retail only by default: that is what the addon
+# targets, and pulling in a _classic_ / _ptr_ install would add characters the
+# user is not asking about. An empty list means "all of them".
+function Get-FlavorDirs {
+    param([Parameter(Mandatory)][string]$RootPath)
+    $all = @(Get-ChildItem -LiteralPath $RootPath -Directory -ErrorAction SilentlyContinue |
+             Where-Object { $_.Name -like '_*_' })
+    $want = @($Config.includeFlavors)
+    if ($want.Count -eq 0) { return $all }
+    return @($all | Where-Object { $want -contains $_.Name })
+}
+
 function Get-WowRoots {
     $found = New-Object System.Collections.ArrayList
 
@@ -333,8 +346,7 @@ function Get-AlterEgoSources {
     $exclude = @($Config.excludeAccounts)
 
     foreach ($root in $Roots) {
-        $flavorDirs = @(Get-ChildItem -LiteralPath $root.path -Directory -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -like '_*_' })
+        $flavorDirs = @(Get-FlavorDirs -RootPath $root.path)
         foreach ($flavor in $flavorDirs) {
             $acctRoot = Join-Path $flavor.FullName 'WTF\Account'
             # A stub flavor dir can have no WTF at all.
@@ -401,8 +413,7 @@ function Get-AddonTables {
     $tables  = @{}
     $version = ''
     foreach ($root in $Roots) {
-        $flavorDirs = @(Get-ChildItem -LiteralPath $root.path -Directory -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -like '_*_' })
+        $flavorDirs = @(Get-FlavorDirs -RootPath $root.path)
         foreach ($flavor in $flavorDirs) {
             $addonDir = Join-Path $flavor.FullName 'Interface\AddOns\AlterEgo'
             if (-not (Test-Path -LiteralPath $addonDir)) { continue }
@@ -585,8 +596,7 @@ function Get-BackupSources {
 
     $out = New-Object System.Collections.ArrayList
     foreach ($root in $Roots) {
-        $flavorDirs = @(Get-ChildItem -LiteralPath $root.path -Directory -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -like '_*_' })
+        $flavorDirs = @(Get-FlavorDirs -RootPath $root.path)
         foreach ($flavor in $flavorDirs) {
             $acctRoot = Join-Path $flavor.FullName 'WTF\Account'
             if (-not (Test-Path -LiteralPath $acctRoot)) { continue }
@@ -716,6 +726,8 @@ try {
     [void]$sb.AppendLine("  scannedAtLocal: $(ConvertTo-JsString (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),")
     [void]$sb.AppendLine("  addonVersion: $(ConvertTo-JsString $addon.addonVersion),")
     [void]$sb.AppendLine("  author: $(ConvertTo-JsString $AUTHOR),")
+    # The page cannot discover where the browser saves downloads, so tell it.
+    [void]$sb.AppendLine("  downloadsDir: $(ConvertTo-JsString (Get-DownloadsFolder)),")
     [void]$sb.AppendLine("  repo: $(ConvertTo-JsString $REPO),")
     [void]$sb.AppendLine('  update: {')
     [void]$sb.AppendLine("    checked: $(if ($update.checked) { 'true' } else { 'false' }),")

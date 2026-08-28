@@ -403,9 +403,15 @@
     var btns = el('div', 'row-buttons');
     btns.appendChild(button('保存设置到文件', null, function () {
       AE.downloadText('settings.js', AE.settingsFileText(s), 'text/javascript');
+      AE.toast({
+        title: '已导出 settings.js',
+        body: '下次运行启动器时会自动从下载文件夹收进 data/settings.js。',
+        kind: 'good', ms: 3000
+      });
     }));
     btns.appendChild(button('导出 JSON', null, function () {
       AE.downloadText('alteregoweb-settings.json', JSON.stringify(s, null, 2), 'application/json');
+      AE.toast({ title: '已导出 alteregoweb-settings.json', kind: 'good', ms: 3000 });
     }));
 
     var importBtn = button('导入 JSON', null, function () { fileInput.click(); });

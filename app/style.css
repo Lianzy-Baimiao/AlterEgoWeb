@@ -138,15 +138,40 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 }
 #warning-close:hover { color: var(--fg); }
 
-#update-info { text-decoration: none; }
-#update-info.meta-plain { color: var(--fg3); }
-#update-info.update-available {
-  color: #1a1200;
-  background: var(--warn);
-  border-radius: 3px;
-  padding: 1px 7px;
-  font-weight: 600;
+#version-info { color: var(--fg3); }
+
+/* Same shape as the 注意 banner, tinted with the accent so an update reads as
+   news rather than a problem. */
+#update-banner {
+  padding: 6px 14px;
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg2));
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
 }
+#update-banner #update-text { flex: 1; }
+#update-banner a {
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 8px;
+}
+#update-banner a:hover { background: var(--accent); color: #fff; }
+#update-close {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 17px;
+  line-height: 1;
+  padding: 0 6px;
+  cursor: pointer;
+}
+#update-close:hover { color: var(--fg); }
 
 #fatal {
   margin: 60px auto;
@@ -616,31 +641,97 @@ label.switch {
   user-select: none;
 }
 label.switch:hover { color: var(--fg); }
-
-/* The theme control is a real switch rather than a checkbox: it reads as a
-   two-state mode, not an option to enable. */
-#theme-wrap input { position: absolute; opacity: 0; pointer-events: none; }
-#theme-wrap .track {
-  width: 30px;
-  height: 16px;
-  border-radius: 8px;
-  background: var(--bg3);
-  border: 1px solid var(--line);
-  position: relative;
-  transition: background .14s, border-color .14s;
-}
-#theme-wrap .knob {
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--fg2);
-  transition: transform .14s, background .14s;
-}
-#theme-wrap input:checked + .track { background: var(--accent); border-color: var(--accent); }
-#theme-wrap input:checked + .track .knob { transform: translateX(14px); background: #fff; }
-#theme-label { min-width: 26px; }
-
 #autorefresh-wrap input { margin: 0; }
+
+/* Segmented control: two named states in one pill. Same visual language as the
+   buttons next to it, so it does not read as a third kind of widget. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.seg button {
+  border: 0;
+  border-radius: 0;
+  background: var(--bg2);
+  color: var(--fg2);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:hover { color: var(--fg); background: var(--bg3); }
+.seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+body[data-theme="light"] .seg button.on { color: #fff; }
+
+/* ------------------------------------------------------------- scrollbars */
+
+/* Themed to match the rest of the chrome. The default Windows scrollbar is a
+   light grey slab that looks pasted on in dark mode, and the table's horizontal
+   bar is the most visible one on the page. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 6px;
+  /* Inset the thumb so it reads as a floating bar rather than filling the gutter. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg3); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* The table's own scroll container gets a slightly stronger thumb: it is the
+   one control the user actually drags. */
+#grid-wrap::-webkit-scrollbar { height: 12px; }
+#grid-wrap::-webkit-scrollbar-thumb {
+  background: var(--fg3);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+#grid-wrap::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+
+/* ------------------------------------------------------------------ toasts */
+
+#toasts {
+  position: fixed;
+  right: 16px;
+  /* Clear of the footer so a toast never sits on top of the row count. */
+  bottom: 44px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  min-width: 260px;
+  max-width: 460px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+  padding: 9px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+  font-size: 12px;
+  color: var(--fg);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .16s ease-out, transform .16s ease-out;
+}
+.toast.in { opacity: 1; transform: none; }
+.toast.good { border-left-color: var(--good); }
+.toast.bad { border-left-color: var(--bad); }
+.toast .t-title { font-weight: 600; }
+.toast .t-body { color: var(--fg2); margin-top: 2px; word-break: break-all; }
+.toast .t-actions { display: flex; gap: 6px; margin-top: 7px; }
+.toast button { padding: 2px 8px; font-size: 11px; }
