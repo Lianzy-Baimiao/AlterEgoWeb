@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $SCHEMA_VERSION = 1
-$TOOL_VERSION   = '1.3.0'
+$TOOL_VERSION   = '1.3.1'
 $REPO           = 'Lianzy-Baimiao/AlterEgoWeb'
 $AUTHOR         = '白描'
 

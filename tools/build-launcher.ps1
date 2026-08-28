@@ -124,6 +124,7 @@ $T = @{
     DirSaved   = '游戏目录已保存，正在重新扫描...'
     ShortcutOk = '桌面快捷方式已创建。'
     ShortcutBad= '创建快捷方式失败：'
+    PageTitle  = 'AlterEgo 本地看板'
 }
 
 # PowerShell string -> C# string literal, ASCII-only.
@@ -154,6 +155,7 @@ using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -184,6 +186,9 @@ public static class Launcher
     const string T_DIRSAVED   = @@DIRSAVED@@;
     const string T_SHORTCUTOK = @@SHORTCUTOK@@;
     const string T_SHORTCUTBAD= @@SHORTCUTBAD@@;
+    // Must match the <title> in index.html: it is how an already-open dashboard
+    // window is found.
+    const string T_PAGETITLE  = @@PAGETITLE@@;
 
     static string BaseDir;
     static string ScanScript;
@@ -299,6 +304,54 @@ public static class Launcher
         }
     }
 
+    // ------------------------------------------------- single instance / focus
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool EnumWindows(EnumWindowsProc callback, IntPtr param);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool IsWindowVisible(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool IsIconic(IntPtr hWnd);
+
+    delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr param);
+
+    const int SW_RESTORE = 9;
+
+    // Held for the process lifetime so it is not collected; a released mutex
+    // would let a second instance through.
+    static Mutex Single;
+
+    /// Focus an already-open dashboard window. Returns false if there is none.
+    static bool FocusDashboard()
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr param)
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+            if (GetWindowText(hWnd, sb, sb.Capacity) == 0) return true;
+            string title = sb.ToString();
+            // Chrome/Edge app-mode windows are titled with the page's <title>.
+            if (title.IndexOf(T_PAGETITLE, StringComparison.Ordinal) >= 0)
+            {
+                found = hWnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (found == IntPtr.Zero) return false;
+        if (IsIconic(found)) ShowWindow(found, SW_RESTORE);
+        SetForegroundWindow(found);
+        return true;
+    }
+
     // ------------------------------------------------------------- browser
 
     // Chrome/Edge --app= gives a chromeless window with its own taskbar entry,
@@ -342,6 +395,10 @@ public static class Launcher
 
     static void OpenDashboard()
     {
+        // Reuse the window if one is already up. Chrome's --app= does not dedupe,
+        // so without this every "open" piles on another window.
+        if (FocusDashboard()) return;
+
         string url = new Uri(PageFile).AbsoluteUri;
         string browser = FindBrowser();
         if (browser != null)
@@ -603,6 +660,20 @@ public static class Launcher
 
         if (!File.Exists(ScanScript)) { Fail(T_NOSCRIPT, null); return 1; }
 
+        // One instance only. Double-clicking the exe again used to add another
+        // tray icon and another file watcher; now it just brings the dashboard
+        // forward (or opens it) and exits.
+        //
+        // Local\ rather than Global\: this is a per-user desktop tool, and a
+        // Global name would collide between users on a shared machine.
+        bool isFirst;
+        Single = new Mutex(true, "Local\\AlterEgoWeb.SingleInstance", out isFirst);
+        if (!isFirst)
+        {
+            if (!FocusDashboard() && File.Exists(PageFile)) OpenDashboard();
+            return 0;
+        }
+
         Splash splash = new Splash();
         splash.Show();
         Application.DoEvents();
@@ -649,6 +720,8 @@ public static class Launcher
         SetupWatchers();
 
         Application.Run();
+
+        try { Single.ReleaseMutex(); } catch { /* already gone */ }
         return 0;
     }
 }
