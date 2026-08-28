@@ -690,13 +690,33 @@ body[data-theme="light"] .seg button.on { color: #fff; }
 
 /* The table's own scroll container gets a slightly stronger thumb: it is the
    one control the user actually drags. */
-#grid-wrap::-webkit-scrollbar { height: 12px; }
+/* The table's horizontal bar is the one control the user actually drags across a
+   60-column table, so it gets a taller track and a solid thumb. 12px was thin
+   enough to be fiddly to grab. */
+#grid-wrap::-webkit-scrollbar { height: 18px; width: 14px; }
+#grid-wrap::-webkit-scrollbar-track {
+  background: var(--bg2);
+  border-top: 1px solid var(--line);
+}
 #grid-wrap::-webkit-scrollbar-thumb {
   background: var(--fg3);
   background-clip: padding-box;
-  border: 3px solid transparent;
+  border: 4px solid transparent;
+  border-radius: 9px;
+  min-width: 40px;
 }
-#grid-wrap::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+#grid-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+  background-clip: padding-box;
+  /* Thinner inset on hover = visibly fatter thumb, so the grab target grows
+     under the cursor. */
+  border-width: 3px;
+}
+#grid-wrap::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+  background-clip: padding-box;
+  border-width: 2px;
+}
 
 /* ------------------------------------------------------------------ toasts */
 
@@ -735,3 +755,18 @@ body[data-theme="light"] .seg button.on { color: #fff; }
 .toast .t-body { color: var(--fg2); margin-top: 2px; word-break: break-all; }
 .toast .t-actions { display: flex; gap: 6px; margin-top: 7px; }
 .toast button { padding: 2px 8px; font-size: 11px; }
+
+.update-box {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin: 6px 0;
+  background: var(--bg);
+  font-size: 12px;
+}
+.update-box .hint2 {
+  color: var(--fg3);
+  font-size: 11px;
+  margin-top: 3px;
+  word-break: break-all;
+}

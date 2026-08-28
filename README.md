@@ -251,3 +251,13 @@ maxQuantity=300`。写成「665/300」看着就像 bug；回答「还能拿多�
 作为 Release 附件分发。
 
 改完代码先跑 `tests.html`，全绿再提交。
+
+**PowerShell 5.1 的编码陷阱，踩过三次，记在这里。** PS 5.1 读**没有 BOM** 的 `.ps1`
+会按 ANSI（本机是 936）解码，里面的中文全毁。所以：
+
+* `tools/*.ps1` 一律存成 **UTF-8 带 BOM**
+* 需要传给 C# 编译器的中文，用 `\uXXXX` 注入，让生成的 `.cs` 保持纯 ASCII
+  （`Add-Type` 写临时 `.cs` 用的是系统默认编码）
+* **发布说明这类长中文文本，放到单独的 `.md` 文件里**，脚本用
+  `[IO.File]::ReadAllText($p, [Text.UTF8Encoding]::new($false))` 读 ——
+  v1.3.0 和 v1.3.1 的 Release 说明就是因为把中文写在无 BOM 的 `.ps1` 里而发成了乱码

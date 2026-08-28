@@ -447,6 +447,49 @@
       '设置来源：' + (AE.settingsOrigin || '默认') +
       (AE.storageOk ? '' : '　（浏览器本地存储不可用，改动不会被记住）')));
 
+    // ---- update ----------------------------------------------------------
+    // A real re-check needs the network, and file:// has none -- fetch and XHR
+    // are both blocked. So the page can only report what the last scan found and
+    // send the user somewhere useful; the actual re-check lives in the tray menu,
+    // which can run scan.ps1 again.
+    var up = (m.update || {});
+    var upBox = el('div', 'update-box');
+    var line = '当前 v' + (m.toolVersion || '?');
+    if (up.checked && up.latestVersion) {
+      var newer = AE.compareVersions(
+        String(up.latestVersion).replace(/^v/, ''),
+        String(up.currentVersion || m.toolVersion || '').replace(/^v/, '')) > 0;
+      line += '　·　最新 ' + up.latestVersion + (newer ? '（有更新）' : '（已是最新）');
+    } else if (up.error) {
+      line += '　·　上次检查没成功';
+    } else {
+      line += '　·　未检查';
+    }
+    upBox.appendChild(el('div', null, line));
+    if (up.error) {
+      upBox.appendChild(el('div', 'hint2', String(up.error).slice(0, 120)));
+    }
+
+    var upBtns = el('div', 'row-buttons');
+    upBtns.appendChild(button('检查更新', null, function () {
+      // Opening an https URL from a file:// page is allowed; fetching is not.
+      var url = (up.url && up.url.indexOf('http') === 0)
+        ? up.url
+        : ('https://github.com/' + (m.repo || 'Lianzy-Baimiao/AlterEgoWeb') + '/releases');
+      global.open(url, '_blank', 'noopener');
+      AE.toast({
+        title: '已打开发布页',
+        body: '网页本身不能联网（file:// 下 fetch 被禁）。要让程序重新查一次，' +
+              '用托盘图标右键的「检查更新」。',
+        ms: 5000
+      });
+    }));
+    upBtns.appendChild(button('复制仓库地址', 'mini', function () {
+      AE.copyWithToast('https://github.com/' + (m.repo || 'Lianzy-Baimiao/AlterEgoWeb'), null);
+    }));
+    upBox.appendChild(upBtns);
+    cfg.appendChild(upBox);
+
     var about = el('p', 'note');
     about.appendChild(doc.createTextNode(
       'AlterEgoWeb v' + (m.toolVersion || '?') + '　作者 ' + (m.author || '白描') + '　'));

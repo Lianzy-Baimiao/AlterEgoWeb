@@ -125,6 +125,10 @@ $T = @{
     ShortcutOk = '桌面快捷方式已创建。'
     ShortcutBad= '创建快捷方式失败：'
     PageTitle  = 'AlterEgo 本地看板'
+    TrayUpdate = '检查更新'
+    UpdNewer   = '有新版本 {0}（当前 v{1}），点这里打开发布页'
+    UpdCurrent = '已经是最新版本 v{0}'
+    UpdFailed  = '检查更新失败，可能是网络不通。稍后再试。'
 }
 
 # PowerShell string -> C# string literal, ASCII-only.
@@ -189,6 +193,10 @@ public static class Launcher
     // Must match the <title> in index.html: it is how an already-open dashboard
     // window is found.
     const string T_PAGETITLE  = @@PAGETITLE@@;
+    const string T_TRAYUPDATE = @@TRAYUPDATE@@;
+    const string T_UPDNEWER   = @@UPDNEWER@@;
+    const string T_UPDCURRENT = @@UPDCURRENT@@;
+    const string T_UPDFAILED  = @@UPDFAILED@@;
 
     static string BaseDir;
     static string ScanScript;
@@ -196,6 +204,7 @@ public static class Launcher
     static NotifyIcon Tray;
     static System.Windows.Forms.Timer Debounce;
     static bool Rescanning;
+    static string UpdateUrl;
     // MUST be held in a field. A FileSystemWatcher that only exists as a local
     // is eligible for collection as soon as the method returns, and then it
     // silently stops raising events.
@@ -302,6 +311,77 @@ public static class Launcher
             output = T_NOPWSH + ex.Message;
             return false;
         }
+    }
+
+    // -------------------------------------------------------------- update
+
+    // The page cannot do this itself: file:// blocks fetch and XHR outright. The
+    // scan already asks the GitHub API, so a manual check is just a rescan plus
+    // reading back what it wrote.
+    static void CheckUpdate()
+    {
+        string output;
+        if (!RunScan(out output))
+        {
+            Tray.BalloonTipTitle = T_TITLE;
+            Tray.BalloonTipText = T_UPDFAILED;
+            Tray.ShowBalloonTip(3000);
+            return;
+        }
+
+        string dataFile = Path.Combine(BaseDir, "data\\data.js");
+        string latest = "", current = "", url = "", err = "";
+        try
+        {
+            string js = File.ReadAllText(dataFile, Encoding.UTF8);
+            latest  = Grab(js, "latestVersion");
+            current = Grab(js, "currentVersion");
+            url     = Grab(js, "url");
+            err     = Grab(js, "error");
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(url)) UpdateUrl = url;
+
+        Tray.BalloonTipTitle = T_TITLE;
+        if (string.IsNullOrEmpty(latest))
+        {
+            Tray.BalloonTipText = T_UPDFAILED + (string.IsNullOrEmpty(err) ? "" : ("\n" + err));
+        }
+        else if (IsNewer(latest, current))
+        {
+            Tray.BalloonTipText = string.Format(T_UPDNEWER, latest, current);
+        }
+        else
+        {
+            Tray.BalloonTipText = string.Format(T_UPDCURRENT, current);
+        }
+        Tray.ShowBalloonTip(5000);
+    }
+
+    // Narrow read of one string field out of the generated data.js. Not a JSON
+    // parser: .NET Framework has none built in, and the shape here is fixed.
+    static string Grab(string js, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            js, "\"?" + key + "\"?\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        if (!m.Success) return "";
+        return m.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\");
+    }
+
+    static bool IsNewer(string a, string b)
+    {
+        string[] pa = a.TrimStart('v', 'V').Split('.', '-', '+');
+        string[] pb = b.TrimStart('v', 'V').Split('.', '-', '+');
+        int n = Math.Max(pa.Length, pb.Length);
+        for (int i = 0; i < n; i++)
+        {
+            int x = 0, y = 0;
+            if (i < pa.Length) int.TryParse(pa[i], out x);
+            if (i < pb.Length) int.TryParse(pb[i], out y);
+            if (x != y) return x > y;
+        }
+        return false;
     }
 
     // ------------------------------------------------- single instance / focus
@@ -702,6 +782,8 @@ public static class Launcher
         menu.Items.Add(T_TRAYOPEN, null, delegate(object s, EventArgs e) { OpenDashboard(); });
         menu.Items.Add(T_TRAYRESCAN, null, delegate(object s, EventArgs e) { Rescan(true); });
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(T_TRAYUPDATE, null, delegate(object s, EventArgs e) { CheckUpdate(); });
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T_TRAYSETDIR, null, delegate(object s, EventArgs e) { PickGameDir(); });
         menu.Items.Add(T_TRAYSHORTCUT, null, delegate(object s, EventArgs e) { CreateDesktopShortcut(); });
         menu.Items.Add(new ToolStripSeparator());
@@ -712,6 +794,17 @@ public static class Launcher
         });
         Tray.ContextMenuStrip = menu;
         Tray.DoubleClick += delegate(object s, EventArgs e) { OpenDashboard(); };
+        Tray.BalloonTipClicked += delegate(object s, EventArgs e)
+        {
+            if (string.IsNullOrEmpty(UpdateUrl)) return;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(UpdateUrl);
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+            }
+            catch { }
+        };
 
         Debounce = new System.Windows.Forms.Timer();
         Debounce.Interval = 4000;
