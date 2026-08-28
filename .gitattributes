@@ -1,0 +1,19 @@
+# Normalize text in the repo, but check these out with CRLF on Windows.
+* text=auto
+
+# cmd.exe is unreliable with LF-only batch files.
+*.bat text eol=crlf
+# PowerShell here is 5.1 and these files carry a UTF-8 BOM on purpose (without
+# it PS 5.1 decodes them as ANSI and the Chinese strings mangle). Keep CRLF too.
+*.ps1 text eol=crlf
+
+*.js   text
+*.css  text
+*.html text
+*.json text
+*.md   text
+*.lua  text
+
+*.exe binary
+*.ico binary
+*.png binary

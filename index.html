@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!--
+  ============================================================================
+  DO NOT convert these scripts to ES modules.
+
+  This page runs from file://, where module scripts are fetched with CORS
+  semantics against an opaque origin and are hard-blocked. `fetch`, XHR, Web
+  Workers and Service Workers are blocked for the same reason. Classic
+  <script src> is a no-CORS subresource load and is the only thing that works.
+
+  Also: <meta charset="utf-8"> must stay the FIRST element in <head>. file://
+  serves no Content-Type header, so a script with no charset is decoded using
+  this document's encoding -- and on a zh-CN machine the fallback is GBK, which
+  mojibakes every Chinese character in the data.
+  ============================================================================
+-->
+<title>AlterEgo 本地看板</title>
+<link rel="stylesheet" href="app/style.css">
+</head>
+<body data-theme="dark">
+
+<div id="fatal" style="display:none">
+  <h2 id="fatal-title"></h2>
+  <p id="fatal-detail"></p>
+</div>
+
+<div id="app">
+
+  <header>
+    <h1>AlterEgo 本地看板</h1>
+    <div class="meta">
+      <span>扫描于 <b id="scan-time">-</b></span>
+      <span id="season-info"></span>
+      <a id="update-info" class="meta-plain"></a>
+    </div>
+    <span class="spacer"></span>
+    <button type="button" id="btn-vault">备份箱</button>
+    <button type="button" id="btn-trends">周趋势</button>
+    <button type="button" id="btn-xlsx">导出 Excel</button>
+    <button type="button" id="btn-csv">导出 CSV</button>
+    <button type="button" id="btn-print">打印 / PDF</button>
+    <button type="button" id="btn-settings">设置</button>
+  </header>
+
+  <div id="warnings" style="display:none">
+    <b>注意　</b><span id="warning-text"></span>
+    <button type="button" id="warning-close" title="关闭提示">×</button>
+  </div>
+
+  <div id="grid-wrap">
+    <table id="grid"></table>
+  </div>
+
+  <footer>
+    <span id="footer-info"></span>
+    <span class="spacer"></span>
+    <span>点击任意角色查看详情　·　点击表头排序</span>
+  </footer>
+
+</div>
+
+<!-- One backdrop for every slide-over panel: it is what makes "click outside to
+     close" work without hit-testing. -->
+<div id="backdrop"></div>
+
+<aside id="panel">
+  <div class="panel-head">
+    <h2>设置</h2>
+    <span class="sub2"></span>
+    <button type="button" id="panel-close">关闭</button>
+  </div>
+  <div id="panel-body"></div>
+</aside>
+
+<aside id="drawer">
+  <div class="panel-head">
+    <h2 id="drawer-title"></h2>
+    <span class="sub2" id="drawer-sub"></span>
+    <button type="button" id="drawer-close">关闭</button>
+  </div>
+  <div id="drawer-body"></div>
+</aside>
+
+<aside id="trend">
+  <div class="panel-head">
+    <h2>周趋势</h2>
+    <span class="sub2">
+      <select id="trend-metric">
+        <option value="rating">大秘境评分</option>
+        <option value="ilvl">装等</option>
+        <option value="runs">本周完成本数</option>
+        <option value="vault">宝库解锁</option>
+        <option value="map">藏宝图</option>
+        <option value="gold">金币</option>
+      </select>
+    </span>
+    <button type="button" id="trend-close">关闭</button>
+  </div>
+  <div id="trend-body"></div>
+</aside>
+
+<aside id="vault">
+  <div class="panel-head">
+    <h2>备份箱</h2>
+    <span class="sub2">插件导入 / 导出串</span>
+    <button type="button" id="vault-close">关闭</button>
+  </div>
+  <div id="vault-body"></div>
+</aside>
+
+<!-- Capability probe: turns every browser assumption into a runtime fact. -->
+<script>
+window.__AE_PROBE = {};
+window.__AE_PROBE.encoding = document.characterSet;
+window.__AE_PROBE.storage = (function () {
+  try {
+    localStorage.setItem('__ae_probe', '1');
+    localStorage.removeItem('__ae_probe');
+    return true;
+  } catch (e) { return false; }
+})();
+</script>
+
+<!-- Generated data. Loaded before the app so a missing file is detectable. -->
+<script src="data/data.js" charset="utf-8"></script>
+<script src="data/settings.js" charset="utf-8"></script>
+<script src="data/manifest.js" charset="utf-8"></script>
+
+<!-- Application, in dependency order. Classic scripts only. -->
+<script src="app/lua-parser.js" charset="utf-8"></script>
+<script src="app/labels.js" charset="utf-8"></script>
+<script src="app/model.js" charset="utf-8"></script>
+<script src="app/settings.js" charset="utf-8"></script>
+<script src="app/columns.js" charset="utf-8"></script>
+<script src="app/render.js" charset="utf-8"></script>
+<script src="app/panel.js" charset="utf-8"></script>
+<script src="app/history.js" charset="utf-8"></script>
+<script src="app/vault.js" charset="utf-8"></script>
+<script src="app/export.js" charset="utf-8"></script>
+<script src="app/main.js" charset="utf-8"></script>
+
+</body>
+</html>

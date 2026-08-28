@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AlterEgoWeb 自测</title>
+<link rel="stylesheet" href="app/style.css">
+<style>
+  body { padding: 20px 26px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .summary { font-size: 14px; margin: 12px 0 18px; padding: 10px 14px;
+             border-radius: 5px; background: var(--bg2); border: 1px solid var(--line); }
+  .summary.ok { border-left: 3px solid var(--good); }
+  .summary.bad { border-left: 3px solid var(--bad); }
+  ul.results { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+  ul.results li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  .tag { display: inline-block; width: 44px; font-weight: 700; }
+  .tag.ok { color: var(--good); }
+  .tag.bad { color: var(--bad); }
+  .detail { color: var(--fg3); font-size: 11.5px; padding-left: 44px; }
+  h2 { font-size: 14px; margin: 22px 0 6px; color: var(--accent); }
+</style>
+</head>
+<body data-theme="dark">
+
+<h1>AlterEgoWeb 自测</h1>
+<p class="note">这个页面离线运行，不需要游戏数据。它验证 Lua 解析器能正确处理本机存档里
+真实出现过的各种边界情况。</p>
+
+<div id="summary" class="summary">运行中…</div>
+<ul class="results" id="results"></ul>
+
+<h2>真实数据回归测试</h2>
+<div id="model-summary" class="summary">运行中…</div>
+<ul class="results" id="model-results"></ul>
+
+<h2>真实存档解析</h2>
+<div id="live"></div>
+
+<script src="app/lua-parser.js" charset="utf-8"></script>
+<script src="app/parser-tests.js" charset="utf-8"></script>
+<script src="app/labels.js" charset="utf-8"></script>
+<script src="app/model.js" charset="utf-8"></script>
+<script src="app/model-tests.js" charset="utf-8"></script>
+<script src="app/export.js" charset="utf-8"></script>
+<script src="data/data.js" charset="utf-8"></script>
+<script>
+(function () {
+  function list(target, results) {
+    results.forEach(function (x) {
+      var li = document.createElement('li');
+      var tag = document.createElement('span');
+      tag.className = 'tag ' + (x.ok ? 'ok' : 'bad');
+      tag.textContent = x.ok ? 'PASS' : 'FAIL';
+      li.appendChild(tag);
+      li.appendChild(document.createTextNode(x.name));
+      if (!x.ok) {
+        var d = document.createElement('div');
+        d.className = 'detail';
+        d.textContent = x.detail;
+        li.appendChild(d);
+      }
+      target.appendChild(li);
+    });
+  }
+
+  var r = window.AE.runParserTests();
+  var sum = document.getElementById('summary');
+  sum.className = 'summary ' + (r.fail === 0 ? 'ok' : 'bad');
+  sum.textContent = r.fail === 0
+    ? '全部 ' + r.pass + ' 项解析器测试通过'
+    : r.pass + ' 项通过，' + r.fail + ' 项失败';
+  list(document.getElementById('results'), r.results);
+
+  var mr = window.AE.runModelTests();
+  var msum = document.getElementById('model-summary');
+  if (mr.skipped) {
+    msum.className = 'summary';
+    msum.textContent = '没有 data/data.js，跳过。先运行启动脚本。';
+  } else {
+    msum.className = 'summary ' + (mr.fail === 0 ? 'ok' : 'bad');
+    msum.textContent = mr.fail === 0
+      ? '全部 ' + mr.pass + ' 项数据回归测试通过'
+      : mr.pass + ' 项通过，' + mr.fail + ' 项失败';
+  }
+  list(document.getElementById('model-results'), mr.results);
+
+  // Live check against the real scanned data, when present.
+  var live = document.getElementById('live');
+  if (!window.AE_DATA) {
+    live.innerHTML = '<p class="note">没有 data/data.js，跳过。先运行 start.bat。</p>';
+    return;
+  }
+  try {
+    var t0 = performance.now();
+    var m = window.AE.buildModel(window.AE_DATA);
+    var ms = (performance.now() - t0).toFixed(1);
+    var rows = [
+      ['解析 + 建模耗时', ms + ' ms'],
+      ['数据源', m.sources.length + ' 个'],
+      ['角色', m.characters.length + ' 个'],
+      ['当前赛季', String(m.activeSeason)],
+      ['大秘境列', m.columns.dungeonIds.join(', ')],
+      ['团本列', m.columns.raidColumns.length + ' 个'],
+      ['货币列', m.columns.currencyIds.length + ' 个'],
+      ['已识别副本中文名', Object.keys(m.dungeonNames).length + ' 个']
+    ];
+    var t = document.createElement('table');
+    t.className = 'mini-table';
+    rows.forEach(function (kv) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('th');
+      th.textContent = kv[0];
+      var td = document.createElement('td');
+      td.textContent = kv[1];
+      tr.appendChild(th);
+      tr.appendChild(td);
+      t.appendChild(tr);
+    });
+    live.appendChild(t);
+
+    m.sources.forEach(function (s) {
+      var p = document.createElement('p');
+      p.className = 'note';
+      p.textContent = s.displayName + '：' + s.charCount + ' 个角色，dbVer ' + s.dbVersion +
+        (s.parseError ? '，解析错误 ' + s.parseError : '') +
+        (s.skippedLines ? '，跳过 ' + s.skippedLines + ' 行' : '');
+      live.appendChild(p);
+    });
+  } catch (e) {
+    live.innerHTML = '<p class="note" style="color:var(--bad)">建模失败：' + e.message + '</p>';
+  }
+})();
+</script>
+
+</body>
+</html>
