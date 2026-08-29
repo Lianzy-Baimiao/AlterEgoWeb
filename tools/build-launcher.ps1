@@ -940,11 +940,18 @@ public static class Launcher
     static extern bool BringWindowToTop(IntPtr hWnd);
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     static extern uint GetCurrentThreadId();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+
+    const uint SWP_NOZORDER = 0x0004;
+    const uint SWP_NOACTIVATE = 0x0010;
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr param);
 
     const int SW_RESTORE = 9;
     const int SW_SHOW = 5;
+    const int SW_SHOWMAXIMIZED = 3;
     const uint WM_CLOSE = 0x0010;
 
     /// <summary>
@@ -988,8 +995,7 @@ public static class Launcher
 
     /// The dashboard window handle, or IntPtr.Zero.
     static IntPtr FindDashboardWindow()
-    {
-        IntPtr found = IntPtr.Zero;
+    {        IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr hWnd, IntPtr param)
         {
             if (!IsWindowVisible(hWnd)) return true;
@@ -1017,6 +1023,40 @@ public static class Launcher
         return true;
     }
 
+
+    /// <summary>
+    /// Put the window back where it was last time.
+    ///
+    /// --window-position/--window-size only apply when the browser process we
+    /// start is the one that creates the window. If that browser is ALREADY
+    /// running, our command line is handed to the existing instance and the flags
+    /// are ignored -- which is exactly what started happening once the launcher
+    /// began preferring the user's default browser, since that one is usually
+    /// already open. So place it ourselves instead of asking the browser to.
+    /// </summary>
+    static void RestoreGeometry(IntPtr hWnd)
+    {
+        try
+        {
+            if (!File.Exists(GeometryFile)) return;
+            string[] p = File.ReadAllText(GeometryFile).Trim().Split(' ');
+            if (p.Length < 4) return;
+            int x, y, w, h;
+            if (!int.TryParse(p[0], out x) || !int.TryParse(p[1], out y) ||
+                !int.TryParse(p[2], out w) || !int.TryParse(p[3], out h)) return;
+            if (w < 300 || h < 200) return;
+
+            // A monitor that is gone would put the window out of reach.
+            System.Drawing.Rectangle vs = SystemInformation.VirtualScreen;
+            if (x + w < vs.Left + 80 || x > vs.Right - 80 ||
+                y + h < vs.Top + 80 || y > vs.Bottom - 80) return;
+
+            if (p.Length > 4 && p[4] == "1") { ShowWindow(hWnd, SW_SHOWMAXIMIZED); return; }
+            SetWindowPos(hWnd, IntPtr.Zero, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        catch { }
+    }
+
     /// <summary>
     /// Raise the dashboard window as soon as the browser has created it.
     ///
@@ -1035,7 +1075,13 @@ public static class Launcher
             {
                 Thread.Sleep(150);
                 IntPtr h = FindDashboardWindow();
-                if (h != IntPtr.Zero) { ForceForeground(h); return; }
+                if (h != IntPtr.Zero)
+                {
+                    // Place it before raising it, so it does not visibly jump.
+                    RestoreGeometry(h);
+                    ForceForeground(h);
+                    return;
+                }
             }
         });
         t.IsBackground = true;

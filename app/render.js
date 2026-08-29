@@ -476,21 +476,27 @@
   /**
    * Hand the current header colour to the browser as <meta name="theme-color">.
    *
-   * The launcher opens the page with --app=, and a Chromium app window paints
-   * its title bar from theme-color. Without this the title bar follows the OS
-   * setting, so a dark page could sit under a white title bar (and vice versa).
-   * --bg2 is the <header> background, so the title bar and the button strip
-   * directly beneath it read as one surface. Reading it back from the cascade
-   * rather than duplicating the value here keeps it right for every skin/theme
-   * combination without a second colour table.
+   * --bg2 is the <header> background, so anything the browser does tint with this
+   * matches the button strip at the top of the page. Reading it back from the
+   * cascade rather than duplicating the value keeps it right for every
+   * skin/theme combination without a second colour table.
+   *
+   * Do NOT expect this to reach the window's own title bar -- the outer strip
+   * with the minimise/maximise/close buttons. That was tried and measured:
+   * Chromium custom-draws the frame of an --app= window (it takes over the
+   * non-client area), so neither theme-color nor DwmSetWindowAttribute touches
+   * it. Forcing DWMWA_CAPTION_COLOR to magenta on a live dashboard window
+   * changed nothing on screen. That strip follows the BROWSER's own appearance
+   * setting (Edge/Chrome → 外观 → 深色), and there is no supported way for a
+   * page to override it.
    */
   function applyThemeColor() {
+    var c = String(global.getComputedStyle(doc.body).getPropertyValue('--bg2') || '').trim();
+    if (!c) return;
     var meta = doc.querySelector('meta[name="theme-color"]');
-    if (!meta) return;
-    var c = global.getComputedStyle(doc.body).getPropertyValue('--bg2');
-    c = String(c || '').trim();
-    if (c) meta.setAttribute('content', c);
+    if (meta) meta.setAttribute('content', c);
   }
+
 
   AE.applyAppearance = applyAppearance;
 
