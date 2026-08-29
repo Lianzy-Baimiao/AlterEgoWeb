@@ -115,6 +115,53 @@
 
   // ------------------------------------------------------------------- panel
 
+  /** 方案 1, 方案 2, ... skipping any name already taken. */
+  function nextLayoutName(taken) {
+    for (var i = 1; i < 200; i++) {
+      var n = '方案 ' + i;
+      if (taken.indexOf(n) < 0) return n;
+    }
+    return '方案';
+  }
+
+  /** One saved layout: its name, plus 应用 / 覆盖 / 重命名 / 删除. */
+  function layoutRow(name, isActive) {
+    var row = el('div', 'layout-row' + (isActive ? ' on' : ''));
+    var lab = el('span', 'layout-name', (isActive ? '● ' : '') + name);
+    lab.title = isActive ? '当前表格就是这个方案' : '点「应用」切到这个方案';
+    row.appendChild(lab);
+
+    var btns = el('span', 'layout-btns');
+    if (!isActive) {
+      btns.appendChild(button('应用', 'mini', function () { AE.applyLayout(name); }));
+    }
+    btns.appendChild(button('覆盖', 'mini', function () {
+      if (!global.confirm('用当前的列顺序和显隐覆盖方案「' + name + '」？')) return;
+      AE.saveLayout(name);
+      AE.renderLayoutPicker();
+      AE.buildSettingsPanel();
+      AE.toast({ title: '已覆盖方案：' + name, kind: 'good', ms: 2500 });
+    }));
+    btns.appendChild(button('重命名', 'mini', function () {
+      var n = global.prompt('新名字', name);
+      if (n === null) return;
+      if (!AE.renameLayout(name, n)) {
+        AE.toast({ title: '改名没成功', body: '名字空着，或者已经有同名方案了。', kind: 'bad', ms: 3000 });
+        return;
+      }
+      AE.renderLayoutPicker();
+      AE.buildSettingsPanel();
+    }));
+    btns.appendChild(button('删除', 'mini danger', function () {
+      if (!global.confirm('删除方案「' + name + '」？')) return;
+      AE.deleteLayout(name);
+      AE.renderLayoutPicker();
+      AE.buildSettingsPanel();
+    }));
+    row.appendChild(btns);
+    return row;
+  }
+
   // A full rebuild is still needed when the panel's own contents change shape
   // (the 角色显示依据 dropdown rewrites the filter fields; a reparse changes the
   // column list). Carry the scroll offset and the open sections across it so the
@@ -148,6 +195,51 @@
     var prev = panel.childNodes.length ? capturePanelState(panel) : null;
     panel.innerHTML = '';
     checkBoxes = [];
+
+    // ---- layouts ---------------------------------------------------------
+    // Rows rather than a dropdown-plus-contextual-buttons: with a dropdown there
+    // is no way to rename or delete a layout once you have nudged a column and
+    // nothing is "current" any more.
+    var lay = section('layouts', '布局方案', { open: true });
+    lay.appendChild(el('p', 'note',
+      '直接拖表头就能换列的位置（分组表头整组搬，点一下仍然是排序）。' +
+      '方案只记表的形状：分组顺序、组内列顺序、哪些列隐藏；' +
+      '筛选和排序不算在内。'));
+
+    var savedNames = AE.layouts()
+      .filter(function (l) { return l && l.name; })
+      .map(function (l) { return l.name; });
+    var activeName = AE.activeLayoutName();
+
+    var layTop = el('div', 'row-buttons');
+    layTop.appendChild(button('保存为新方案', null, function () {
+      var n = global.prompt('给这个布局起个名字', nextLayoutName(savedNames));
+      if (n === null) return;
+      n = String(n).trim();
+      if (!n) return;
+      if (savedNames.indexOf(n) >= 0 &&
+          !global.confirm('已经有一个叫「' + n + '」的方案，覆盖它？')) return;
+      AE.saveLayout(n);
+      AE.renderLayoutPicker();
+      AE.buildSettingsPanel();
+      AE.toast({ title: '已保存方案：' + n, kind: 'good', ms: 2500 });
+    }));
+    layTop.appendChild(button('恢复默认列顺序', 'mini', function () {
+      AE.resetColumnOrder();
+      AE.renderLayoutPicker();
+      AE.buildSettingsPanel();
+      AE.toast({ title: '列顺序已恢复默认', body: '列的显隐没有动。', ms: 2500 });
+    }));
+    lay.appendChild(layTop);
+
+    if (!savedNames.length) {
+      lay.appendChild(el('p', 'hint2',
+        '还没有保存过方案。把列拖成你要的样子、勾好显隐，再点「保存为新方案」。'));
+    }
+    savedNames.forEach(function (name) {
+      lay.appendChild(layoutRow(name, name === activeName));
+    });
+    panel.appendChild(lay);
 
     // ---- filters ---------------------------------------------------------
     var filt = section('filters', '筛选', { open: true });

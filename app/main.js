@@ -75,6 +75,8 @@
 
     try {
       AE.render(model, loaded.settings);
+      AE.wireHeaderDrag();
+      AE.renderLayoutPicker();
     } catch (e) {
       fatal('渲染失败', e.message);
       if (global.console) global.console.error(e);

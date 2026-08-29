@@ -146,7 +146,7 @@
     // VISIBLE count. display:none removes a cell from the row entirely, so a
     // stale colSpan shifts every band to the right of a hidden column -- which
     // is exactly the "宝库 sitting under 大秘境" misalignment.
-    var bands = doc.querySelectorAll('#thead th[data-group]');
+    var bands = doc.querySelectorAll('#thead tr.group-band th[data-group]');
     for (var i = 0; i < bands.length; i++) {
       var g = bands[i].getAttribute('data-group');
       var n = visiblePerGroup[g] || 0;
@@ -156,6 +156,16 @@
         bands[i].style.display = '';
         bands[i].colSpan = n;
       }
+    }
+
+    // Freezing follows the leftmost VISIBLE column instead of a fixed one: any
+    // group can be dragged to the front now, and a frozen column sitting in the
+    // middle of the table just looks broken.
+    var sid = stickyColumnId();
+    if (sid !== state.stickyId) {
+      setSticky(state.stickyId, false);
+      setSticky(sid, true);
+      state.stickyId = sid;
     }
 
     var shown = 0;
@@ -171,6 +181,22 @@
   // Column ids contain ':' and '/', which are not valid unquoted in a selector.
   // We always quote the attribute value, so only " and \ need escaping.
   function cssEscape(v) { return String(v).replace(/(["\\])/g, '\\$1'); }
+
+  /** The leftmost column that is not hidden -- the one that gets frozen. */
+  function stickyColumnId() {
+    var s = state.settings;
+    for (var i = 0; i < state.columns.length; i++) {
+      var c = state.columns[i];
+      if (!s.hiddenGroups[c.group] && !s.hiddenColumns[c.id]) return c.id;
+    }
+    return null;
+  }
+
+  function setSticky(id, on) {
+    if (!id) return;
+    var nodes = doc.querySelectorAll('#grid [data-col="' + cssEscape(id) + '"]');
+    for (var i = 0; i < nodes.length; i++) nodes[i].classList.toggle('sticky-col', on);
+  }
 
   function renderFooter(shown) {
     var total = state.model.characters.length;
@@ -203,27 +229,43 @@
     var thead = el('thead');
     thead.id = 'thead';
 
+    // Bands come from contiguous RUNS of the ordered columns, not from AE.GROUPS:
+    // whole groups can be dragged around now, and a group with no columns at all
+    // (no BagSync -> no 专业) must not leave an empty band behind. Ordering
+    // guarantees one run per group -- see AE.orderColumns.
     var bandRow = el('tr', 'group-band');
-    AE.GROUPS.forEach(function (g) {
-      var span = state.columns.filter(function (c) { return c.group === g.id; }).length;
-      if (!span) return;
-      var th = el('th', 'band band-' + g.id);
-      th.colSpan = span;
-      th.setAttribute('data-group', g.id);
+    var run = null;
+    state.columns.forEach(function (c) {
+      var g = AE.groupById(c.group);
+      if (run && run.group === c.group) {
+        run.n++;
+        run.th.colSpan = run.n;
+        return;
+      }
+      var th = el('th', 'band band-' + c.group);
+      th.setAttribute('data-group', c.group);
+      th.colSpan = 1;
+      th.title = (g ? g.label : c.group) +
+                 '\n（按住左右拖动可以整组换位置）';
+      run = { group: c.group, n: 1, th: th };
       // A wide group (36 currency columns) would centre its label far off to the
       // right, out of the viewport. Sticky keeps it visible while scrolling.
-      th.appendChild(el('span', 'band-label', g.label));
+      th.appendChild(el('span', 'band-label', g ? g.label : c.group));
       bandRow.appendChild(th);
     });
     thead.appendChild(bandRow);
 
+    state.stickyId = stickyColumnId();
+
     var headRow = el('tr');
     state.columns.forEach(function (c) {
-      var th = el('th', 'col-' + c.group + (c.sticky ? ' sticky-col' : ''));
+      var th = el('th', 'col-' + c.group + (c.id === state.stickyId ? ' sticky-col' : ''));
       th.setAttribute('data-col', c.id);
+      th.setAttribute('data-group', c.group);
       th.style.textAlign = c.align;
       th.appendChild(el('span', null, AE.colLabel(c, ctx)));
-      th.title = AE.colHeadTitle(c, ctx) + '\n（点击排序）';
+      th.title = AE.colHeadTitle(c, ctx) +
+                 '\n（点击排序；按住左右拖动可以在本组内换位置）';
       th.addEventListener('click', function () {
         if (state.settings.sortColumn === c.id) {
           state.settings.sortDir = state.settings.sortDir === 'asc' ? 'desc' : 'asc';
@@ -253,7 +295,7 @@
       if (ch.vault.hasAvailableRewards) tr.className = 'has-reward';
 
       state.columns.forEach(function (c) {
-        var td = el('td', 'col-' + c.group + (c.sticky ? ' sticky-col' : ''));
+        var td = el('td', 'col-' + c.group + (c.id === state.stickyId ? ' sticky-col' : ''));
         td.setAttribute('data-col', c.id);
         td.style.textAlign = c.align;
         try {
@@ -422,7 +464,7 @@
   AE.render = function (model, settings) {
     state.model = model;
     state.settings = settings;
-    state.columns = AE.buildColumns(model);
+    state.columns = AE.orderColumns(AE.buildColumns(model), settings);
     state.ctx = { model: model, settings: settings };
 
     // Seed column defaults on first run: honour the addon's own hidden-currency
@@ -460,14 +502,21 @@
     updateVisibility();
     applySort();
     save();
+    // Hiding a column changes the layout's shape, so the picker's
+    // 当前（未保存） state has to follow. Guarded: layouts.js loads after this.
+    if (AE.renderLayoutPicker) AE.renderLayoutPicker();
   };
 
   /** Header text depends on settings (abbr vs full), so this needs a rebuild. */
   AE.rebuild = function () {
+    // Re-derive the column list every time, so a drag-reorder, a layout switch
+    // and a header-mode change all go down one code path.
+    state.columns = AE.orderColumns(AE.buildColumns(state.model), state.settings);
     save();
     buildTable();
     updateVisibility();
     applySort();
+    if (AE.renderLayoutPicker) AE.renderLayoutPicker();
   };
 
   AE.isWeeklyActive = isWeeklyActive;

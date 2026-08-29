@@ -56,6 +56,21 @@
       hiddenColumns: {},
       hiddenGroups: {},
 
+      // Column layout. Both orders are PARTIAL on purpose: anything they do not
+      // mention keeps its registry position, appended after the ids they do. That
+      // is what stops a newly shipped column -- a new season's dungeon, a
+      // profession that only just appeared in BagSync -- from silently vanishing
+      // because an old saved layout never heard of it.
+      groupOrder: [],                // [groupId, ...]
+      columnOrder: {},               // {groupId: [columnId, ...]}
+
+      // Named layouts. Each one stores ONLY the shape of the table:
+      // {name, groupOrder, columnOrder, hiddenColumns, hiddenGroups}. Filters,
+      // sorting and appearance deliberately stay outside, so switching layout
+      // never quietly changes which characters you are looking at.
+      layouts: [],
+      activeLayout: '',
+
       // Appearance.
       theme: 'dark',
       skin: 'slate',                 // see AE.SKINS in labels.js

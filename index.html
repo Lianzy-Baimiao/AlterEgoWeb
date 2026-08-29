@@ -57,6 +57,11 @@
     <button type="button" id="btn-xlsx">导出 Excel</button>
     <button type="button" id="btn-csv">导出 CSV</button>
     <button type="button" id="btn-print">打印 / PDF</button>
+    <!-- Populated by AE.renderLayoutPicker(); stays hidden until at least one
+         layout has been saved, so it costs nothing for people who never use it. -->
+    <span class="pick" id="layout-pick-wrap" style="display:none">
+      <select id="layout-pick" title="布局方案"></select>
+    </span>
     <button type="button" id="btn-settings">设置</button>
   </header>
 
@@ -164,6 +169,8 @@ window.__AE_PROBE.storage = (function () {
 <script src="app/columns.js" charset="utf-8"></script>
 <script src="app/render.js" charset="utf-8"></script>
 <script src="app/panel.js" charset="utf-8"></script>
+<script src="app/drag.js" charset="utf-8"></script>
+<script src="app/layouts.js" charset="utf-8"></script>
 <script src="app/history.js" charset="utf-8"></script>
 <script src="app/vault.js" charset="utf-8"></script>
 <script src="app/export.js" charset="utf-8"></script>

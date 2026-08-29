@@ -376,6 +376,70 @@
              ('列 ' + JSON.stringify(listed) + ' 与实际 ' + JSON.stringify(Object.keys(seen).map(Number)) + ' 不一致');
     });
 
+    // ---- column order (drag-to-reorder / layouts) -----------------------
+    // The rules that matter: a saved order is PARTIAL, unknown ids are dropped,
+    // and groups stay contiguous. Get any of those wrong and a layout saved last
+    // season silently blanks columns or scatters a group across the table.
+
+    t('列顺序：没有保存过顺序时就是注册表顺序', function () {
+      var cols = AE.buildColumns(m);
+      var out = AE.orderColumns(cols, {});
+      return out.map(function (c) { return c.id; }).join() ===
+             cols.map(function (c) { return c.id; }).join() || '顺序被改了';
+    });
+
+    t('列顺序：组内重排只影响那一组，且不丢列', function () {
+      var cols = AE.buildColumns(m);
+      var base = cols.filter(function (c) { return c.group === 'base'; }).map(function (c) { return c.id; });
+      if (base.length < 3) return 'base 组太短，没法验证';
+      var want = [base[2], base[0]];
+      var out = AE.orderColumns(cols, { columnOrder: { base: want } });
+      if (out.length !== cols.length) return '列数变了：' + out.length + ' vs ' + cols.length;
+      var got = out.filter(function (c) { return c.group === 'base'; }).map(function (c) { return c.id; });
+      if (got[0] !== want[0] || got[1] !== want[1]) return '组内顺序不对：' + got.slice(0, 3).join();
+      // Everything the saved order never mentioned must still be there, in order.
+      var rest = base.filter(function (id) { return want.indexOf(id) < 0; });
+      return got.slice(2).join() === rest.join() || '剩下的列顺序乱了：' + got.slice(2).join();
+    });
+
+    t('列顺序：整组搬家后每个分组仍然各占连续一段', function () {
+      var cols = AE.buildColumns(m);
+      var out = AE.orderColumns(cols, { groupOrder: ['gold', 'prof', 'base'] });
+      var seq = AE.groupOrderOf(out);
+      var seen = {};
+      for (var i = 0; i < seq.length; i++) {
+        if (seen[seq[i]]) return '分组 ' + seq[i] + ' 被拆成了不连续的几段';
+        seen[seq[i]] = true;
+      }
+      if (out.length !== cols.length) return '列数变了';
+      return seq[0] === 'gold' || '第一组是 ' + seq[0];
+    });
+
+    t('列顺序：认不出的 id 被忽略，不会吞掉任何列', function () {
+      var cols = AE.buildColumns(m);
+      var out = AE.orderColumns(cols, {
+        groupOrder: ['nope', 'gold', 'alsoGone'],
+        columnOrder: { base: ['zzz', 'name'], nope: ['x'] }
+      });
+      if (out.length !== cols.length) return '列数变了：' + out.length + ' vs ' + cols.length;
+      var ids = {};
+      out.forEach(function (c) { ids[c.id] = true; });
+      var missing = cols.filter(function (c) { return !ids[c.id]; });
+      return missing.length === 0 || ('丢了 ' + missing.length + ' 列');
+    });
+
+    t('列顺序：新加的列不会因为旧布局而消失', function () {
+      var cols = AE.buildColumns(m);
+      var base = cols.filter(function (c) { return c.group === 'base'; }).map(function (c) { return c.id; });
+      if (base.length < 2) return 'base 组太短，没法验证';
+      // A layout saved before the last column existed.
+      var stale = base.slice(0, base.length - 1);
+      var out = AE.orderColumns(cols, { columnOrder: { base: stale } });
+      var got = out.filter(function (c) { return c.group === 'base'; }).map(function (c) { return c.id; });
+      return got.length === base.length && got[got.length - 1] === base[base.length - 1] ||
+             ('末尾是 ' + got[got.length - 1] + '，共 ' + got.length + ' 列');
+    });
+
     return { pass: pass, fail: fail, skipped: skipped, results: results };
   };
 

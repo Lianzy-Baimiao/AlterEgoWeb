@@ -1,4 +1,4 @@
-/* AlterEgoWeb - app/style.css */
+/* WowAltBoard - app/style.css */
 
 /* --font, --table-size, --ui-size, --accent and --bg are set at runtime from the
    settings (see applyAppearance in render.js), so a skin/font/size change is one
@@ -10,6 +10,10 @@
 }
 
 :root {
+  /* The <option> popup is drawn by the OS, not by this stylesheet. Without this
+     it comes up white on a dark page, which is exactly what made the layout
+     picker look pasted in from another program. */
+  color-scheme: dark;
   --bg: #14161a;
   --bg2: #1b1e24;
   --bg3: #22262e;
@@ -35,6 +39,7 @@ body[data-skin="amber"]  { --bg2: #1f1a13; --bg3: #2a2318; --line: #423526; --ro
 body[data-skin="violet"] { --bg2: #1c1829; --bg3: #262038; --line: #3b3357; --row-hover: #2a2440; --reward: #262f22; }
 
 body[data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f7f9;
   --bg2: #ffffff;
   --bg3: #eef0f4;
@@ -232,6 +237,66 @@ table#grid {
   letter-spacing: 1px;
   overflow: visible;
 }
+/* ---- saved layout rows (settings panel) ---------------------------------- */
+.layout-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.layout-row.on .layout-name { color: var(--accent); font-weight: 600; }
+.layout-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layout-btns { display: flex; gap: 4px; flex: none; }
+
+/* The layout picker sits in among the header buttons, so it has to read as one
+   of them. A stock <select> here looked like it came from a different program:
+   OS chrome, OS arrow, OS colours. appearance:none strips all that, and the
+   chevron is drawn with a border triangle on the wrapper -- no image, no data
+   URI, and it inherits currentColor so it follows the hover state and both
+   themes for free. */
+.pick { position: relative; display: inline-flex; align-items: center; }
+.pick > select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg3);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 24px 5px 11px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 170px;
+  text-overflow: ellipsis;
+}
+.pick > select:hover { border-color: var(--accent); color: var(--accent); }
+.pick > select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.pick::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 4px solid currentColor;
+  color: var(--fg2);
+  pointer-events: none;
+}
+.pick:hover::after { color: var(--accent); }
+
+/* ---- header drag-to-reorder (app/drag.js) --------------------------------
+   grab rather than pointer on the band row: it has nothing to sort, so the only
+   thing a press does there is move the group. The column row keeps pointer,
+   because clicking it still sorts and that is the commoner action. */
+#grid thead tr.group-band th[data-group] { cursor: grab; }
+body.dragging-header, body.dragging-header #grid thead th { cursor: grabbing; }
+body.dragging-header { user-select: none; }
+#grid thead th.drag-src { opacity: .4; }
+#grid thead th.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+#grid thead th.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+
 /* Sticky label so a very wide group (36 currency columns) still shows its name
    when scrolled horizontally. */
 #grid thead tr.group-band th .band-label {

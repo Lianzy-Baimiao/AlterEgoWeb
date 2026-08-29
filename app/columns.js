@@ -82,7 +82,7 @@
   function baseColumns() {
     return [
       {
-        id: 'name', group: 'base', label: '角色', width: 130, sticky: true,
+        id: 'name', group: 'base', label: '角色', width: 130,
         sort: function (ch) { return ch.name; },
         render: function (td, ch, ctx) {
           var wrap = el('span', 'char-name', ch.name);
@@ -809,9 +809,79 @@
     return cols;
   };
 
+  // ------------------------------------------------------------ column order
+  //
+  // The order in this file is the DEFAULT, not the truth. The user can drag a
+  // column inside its group and drag whole groups left or right; both orders live
+  // in settings and are applied here, once, on top of a freshly built list.
+  //
+  // Deliberate constraint: a column only moves WITHIN its group, and groups move
+  // as a block. That keeps every group's columns contiguous, which is the whole
+  // reason the band header row can exist -- a group split into three runs needs
+  // three band cells and brings back exactly the "宝库 的数据跑到大秘境下面"
+  // misreading that the colSpan logic was written to prevent.
+  //
+  // Both saved orders are PARTIAL. Ids they never mention keep their registry
+  // order and land after the ones they do; ids they mention that no longer exist
+  // are dropped. So a layout saved last season survives into this one instead of
+  // blanking the columns it has never heard of.
+  AE.orderColumns = function (cols, s) {
+    var byGroup = {};
+    var groups = [];
+    cols.forEach(function (c) {
+      if (!byGroup[c.group]) { byGroup[c.group] = []; groups.push(c.group); }
+      byGroup[c.group].push(c);
+    });
+
+    var out = [];
+    mergeOrder(groups, s && s.groupOrder).forEach(function (gid) {
+      var list = byGroup[gid];
+      var byId = {};
+      var ids = list.map(function (c) { byId[c.id] = c; return c.id; });
+      var want = (s && s.columnOrder) ? s.columnOrder[gid] : null;
+      mergeOrder(ids, want).forEach(function (id) { out.push(byId[id]); });
+    });
+    return out;
+  };
+
+  /**
+   * `have`, reshuffled to follow `want` where the two overlap. Entries of `want`
+   * missing from `have` are ignored; entries of `have` that `want` never mentions
+   * keep their relative order and go last.
+   */
+  function mergeOrder(have, want) {
+    var present = {};
+    have.forEach(function (x) { present[x] = true; });
+    var taken = {};
+    var out = [];
+    (want || []).forEach(function (x) {
+      if (present[x] && !taken[x]) { taken[x] = true; out.push(x); }
+    });
+    have.forEach(function (x) { if (!taken[x]) out.push(x); });
+    return out;
+  }
+
+  AE.mergeOrder = mergeOrder;
+
+  /** The group ids present in `cols`, in the order they appear. */
+  AE.groupOrderOf = function (cols) {
+    var seen = {};
+    var out = [];
+    cols.forEach(function (c) {
+      if (!seen[c.group]) { seen[c.group] = true; out.push(c.group); }
+    });
+    return out;
+  };
+
+  AE.groupById = function (id) {
+    for (var i = 0; i < AE.GROUPS.length; i++) {
+      if (AE.GROUPS[i].id === id) return AE.GROUPS[i];
+    }
+    return null;
+  };
+
   /** Resolve a column's header text, which may be a function of context. */
-  AE.colLabel = function (col, ctx) {
-    return typeof col.label === 'function' ? col.label(ctx) : txt(col.label);
+  AE.colLabel = function (col, ctx) {    return typeof col.label === 'function' ? col.label(ctx) : txt(col.label);
   };
 
   AE.colHeadTitle = function (col, ctx) {
