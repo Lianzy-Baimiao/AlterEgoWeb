@@ -77,6 +77,17 @@
       AE.render(model, loaded.settings);
       AE.wireHeaderDrag();
       AE.renderLayoutPicker();
+      // Say so once, rather than letting a moved folder look like a data loss
+      // that silently fixed itself.
+      if (loaded.adoptedFrom) {
+        AE.toast({
+          title: '设置已从旧路径迁移过来',
+          body: '这个文件夹被移动或改名过。浏览器按路径分开存设置，' +
+                '所以刚才是从旧位置找回来的。想让设置以后跟着文件夹走，' +
+                '去 设置 → 其他 → 保存设置到文件。',
+          ms: 9000
+        });
+      }
     } catch (e) {
       fatal('渲染失败', e.message);
       if (global.console) global.console.error(e);

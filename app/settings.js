@@ -156,12 +156,77 @@
   }
 
   /**
+   * The entry worth adopting out of a bucket that belongs to other paths.
+   *
+   * Pure, and exported, so the adoption rule can be tested without a browser or
+   * a real localStorage.
+   *
+   * @param {Array<{key: string, raw: string}>} entries  every key in the bucket
+   * @param {string} myKey  our own key; never adopted from, since a caller only
+   *                        asks when its own entry is missing or unusable
+   * @returns {{data: object, from: string}|null}
+   */
+  AE.pickAdoptable = function (entries, myKey) {
+    var best = null, bestKey = '', bestAt = -1;
+    for (var i = 0; i < (entries || []).length; i++) {
+      var k = entries[i] && entries[i].key;
+      if (!k || k === myKey || k.indexOf('AEW:v1:') !== 0) continue;
+      if (k.indexOf(':probe') >= 0) continue;
+      var o = null;
+      try { o = JSON.parse(entries[i].raw); } catch (e) { continue; }
+      // migrate() inside the loop, not after: an entry written by a NEWER build
+      // is unusable, and skipping it here lets an older usable one still win.
+      o = migrate((o && typeof o === 'object') ? o : null);
+      if (!o) continue;
+      var at = Number(o.savedAt) || 0;
+      if (at > bestAt) { bestAt = at; best = o; bestKey = k; }
+    }
+    return best ? { data: best, from: bestKey } : null;
+  };
+
+  /**
+   * This folder's own entry, or the newest adoptable one from another path.
+   *
+   * The key is namespaced by folder path because on file:// every local page
+   * shares ONE localStorage bucket -- two copies of this tool on one machine
+   * would otherwise clobber each other's settings.
+   *
+   * The price is that MOVING or RENAMING the folder changes the key, and every
+   * setting looks wiped. It is not: the old entry is still sitting in the same
+   * bucket under the old path's hash. So when our own key is empty, adopt the
+   * newest AEW:v1:* entry there is and write it under our key. That happens once;
+   * afterwards both copies are back to writing their own key, so the isolation is
+   * not given up -- it just stops treating a moved folder as a fresh install.
+   *
+   * @returns {{data: object|null, from: string}}
+   */
+  function readLocalOrAdopt() {
+    var mine = migrate(readLocal());
+    if (mine) return { data: mine, from: '' };
+
+    var entries = [];
+    try {
+      for (var i = 0; i < global.localStorage.length; i++) {
+        var k = global.localStorage.key(i);
+        if (!k) continue;
+        entries.push({ key: k, raw: global.localStorage.getItem(k) });
+      }
+    } catch (e) { return { data: null, from: '' }; }
+
+    var hit = AE.pickAdoptable(entries, LS_KEY);
+    if (!hit) return { data: null, from: '' };
+    try { global.localStorage.setItem(LS_KEY, JSON.stringify(hit.data)); } catch (e) { /* read-only */ }
+    return hit;
+  }
+
+  /**
    * Load settings, preferring whichever store has the newer savedAt.
-   * @returns {{settings: object, origin: string, storageOk: boolean}}
+   * @returns {{settings: object, origin: string, storageOk: boolean, adoptedFrom: string}}
    */
   AE.loadSettings = function () {
     var fromFile = migrate(global.AE_SETTINGS || null);
-    var fromLocal = migrate(readLocal());
+    var adopted = readLocalOrAdopt();
+    var fromLocal = adopted.data;
 
     var storageOk = false;
     try {
@@ -175,11 +240,22 @@
     var localAt = fromLocal ? Number(fromLocal.savedAt) || 0 : -1;
 
     if (fileAt >= 0 || localAt >= 0) {
-      if (localAt > fileAt) { pick = fromLocal; origin = 'localStorage'; }
-      else { pick = fromFile; origin = 'data/settings.js'; }
+      if (localAt > fileAt) {
+        pick = fromLocal;
+        origin = adopted.from ? ('localStorage（从旧路径迁移）') : 'localStorage';
+      } else {
+        pick = fromFile;
+        origin = 'data/settings.js';
+      }
     }
 
-    return { settings: hydrate(pick), origin: origin, storageOk: storageOk };
+    return {
+      settings: hydrate(pick),
+      origin: origin,
+      storageOk: storageOk,
+      // Non-empty only when the adopted entry is the one actually in use.
+      adoptedFrom: (pick === fromLocal) ? adopted.from : ''
+    };
   };
 
   /** Persist to localStorage. Silently no-ops when storage is unavailable. */
@@ -221,5 +297,66 @@
   };
 
   AE.settingsStorageKey = LS_KEY;
+
+  /**
+   * Other paths' settings still sitting in the shared bucket.
+   *
+   * Automatic adoption only fires when our own key is EMPTY, which is the right
+   * default -- silently overwriting settings you are actively using would be
+   * worse than the problem. But that leaves the case where the folder moved and
+   * you then made a few changes at the new path: the old, carefully tuned entry
+   * is still there and now unreachable. This is what the 其他 tab lists so you
+   * can take one over on purpose.
+   *
+   * `store` and `myKey` are injection points for the tests only -- tests.html runs
+   * in a real browser, and a test that swept the actual localStorage would be
+   * inspecting (and could adopt from) the user's live settings.
+   *
+   * @returns {Array<{key: string, savedAt: number, hiddenColumns: number, layouts: number}>}
+   *          newest first; never includes our own key
+   */
+  AE.listForeignSettings = function (store, myKey) {
+    store = store || global.localStorage;
+    myKey = myKey || LS_KEY;
+    var out = [];
+    try {
+      for (var i = 0; i < store.length; i++) {
+        var k = store.key(i);
+        if (!k || k === myKey || k.indexOf('AEW:v1:') !== 0) continue;
+        if (k.indexOf(':probe') >= 0) continue;
+        var o = null;
+        try { o = JSON.parse(store.getItem(k)); } catch (e) { continue; }
+        if (!o || typeof o !== 'object') continue;
+        out.push({
+          key: k,
+          savedAt: Number(o.savedAt) || 0,
+          // Enough to tell two candidates apart without dumping the whole blob.
+          hiddenColumns: o.hiddenColumns ? Object.keys(o.hiddenColumns).length : 0,
+          layouts: (o.layouts && o.layouts.length) || 0,
+          usable: !!migrate(JSON.parse(JSON.stringify(o)))
+        });
+      }
+    } catch (e) { return []; }
+    out.sort(function (a, b) { return b.savedAt - a.savedAt; });
+    return out;
+  };
+
+  /**
+   * Copy another path's entry over ours. Caller reloads.
+   * @returns {object|null} the adopted settings, or null if it is unusable
+   */
+  AE.adoptSettingsFrom = function (key, store, myKey) {
+    store = store || global.localStorage;
+    myKey = myKey || LS_KEY;
+    var o = null;
+    try { o = JSON.parse(store.getItem(key)); } catch (e) { return null; }
+    o = migrate((o && typeof o === 'object') ? o : null);
+    if (!o) return null;
+    // Stamped as ours, and NEWER than any data/settings.js, so the deliberate
+    // choice is not immediately undone by an old settings file on next load.
+    o.savedAt = Math.floor(Date.now() / 1000);
+    try { store.setItem(myKey, JSON.stringify(o)); } catch (e) { return null; }
+    return hydrate(o);
+  };
 
 })(typeof window !== 'undefined' ? window : globalThis);

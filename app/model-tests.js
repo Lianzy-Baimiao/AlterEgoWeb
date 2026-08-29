@@ -503,6 +503,183 @@
       return AE.pickActiveLayout(s) === '' || '改了最低等级还认';
     });
 
+    // ---- cross-path settings adoption ------------------------------------
+    // The key embeds a hash of the folder path, so moving or renaming the folder
+    // makes every setting look wiped. AE.pickAdoptable is the pure half of the
+    // recovery: given the whole shared bucket, which entry do we take over?
+
+    function entry(key, o) { return { key: key, raw: JSON.stringify(o) }; }
+    var MY = 'AEW:v1:mine';
+
+    t('设置迁移：本文件夹没有记录时，采用旧路径那一份', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      var hit = AE.pickAdoptable([entry('AEW:v1:old', { schemaVersion: 1, savedAt: 100, minLevel: 70 })], MY);
+      if (!hit) return '什么都没采用';
+      return (hit.from === 'AEW:v1:old' && hit.data.minLevel === 70) ||
+             ('采用了 ' + hit.from + '，minLevel=' + hit.data.minLevel);
+    });
+
+    t('设置迁移：多份旧记录里最新的那份胜出', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      var hit = AE.pickAdoptable([
+        entry('AEW:v1:a', { schemaVersion: 1, savedAt: 100, minLevel: 10 }),
+        entry('AEW:v1:c', { schemaVersion: 1, savedAt: 300, minLevel: 30 }),
+        entry('AEW:v1:b', { schemaVersion: 1, savedAt: 200, minLevel: 20 })
+      ], MY);
+      if (!hit) return '什么都没采用';
+      return hit.from === 'AEW:v1:c' || ('采用了 ' + hit.from + '（应该是 AEW:v1:c）');
+    });
+
+    t('设置迁移：不碰自己的键、别人的键和探针键', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      var hit = AE.pickAdoptable([
+        entry(MY, { schemaVersion: 1, savedAt: 999 }),
+        entry(MY + ':probe', { schemaVersion: 1, savedAt: 999 }),
+        entry('SomeOtherApp:v1:x', { schemaVersion: 1, savedAt: 999 })
+      ], MY);
+      return hit === null || ('居然采用了 ' + hit.from);
+    });
+
+    t('设置迁移：新版本写的记录跳过，让还能用的旧记录胜出', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      var hit = AE.pickAdoptable([
+        entry('AEW:v1:future', { schemaVersion: 99, savedAt: 900, minLevel: 5 }),
+        entry('AEW:v1:usable', { schemaVersion: 1, savedAt: 100, minLevel: 60 })
+      ], MY);
+      if (!hit) return '什么都没采用';
+      return hit.from === 'AEW:v1:usable' || ('采用了 ' + hit.from);
+    });
+
+    t('设置迁移：坏 JSON 被跳过，不会让整个迁移失败', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      var hit = AE.pickAdoptable([
+        { key: 'AEW:v1:broken', raw: '{not json' },
+        entry('AEW:v1:good', { schemaVersion: 1, savedAt: 50, minLevel: 40 })
+      ], MY);
+      if (!hit) return '什么都没采用';
+      return hit.from === 'AEW:v1:good' || ('采用了 ' + hit.from);
+    });
+
+    t('设置迁移：空桶里没什么可采用', function () {
+      if (!AE.pickAdoptable) return 'settings.js 没加载，跳过';
+      return AE.pickAdoptable([], MY) === null || '空桶也采用了东西';
+    });
+
+    // ---- the manual door: 其他 → 旧路径的设置 ------------------------------
+    // Automatic adoption only fires when this folder has NO settings of its own.
+    // Once the moved folder has been used even once, the old entry is stranded and
+    // only 取回 can reach it. These pass a fake store rather than the real one --
+    // tests.html runs in the browser, and sweeping the live localStorage would mean
+    // inspecting the user's actual settings.
+    function fakeStore(seed) {
+      var keys = Object.keys(seed || {});
+      var map = {};
+      keys.forEach(function (k) { map[k] = seed[k]; });
+      return {
+        get length() { return Object.keys(map).length; },
+        key: function (i) { return Object.keys(map)[i]; },
+        getItem: function (k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : null; },
+        setItem: function (k, v) { map[k] = String(v); },
+        removeItem: function (k) { delete map[k]; }
+      };
+    }
+
+    function bucket() {
+      var o = {};
+      o[MY] = JSON.stringify({ schemaVersion: 1, savedAt: 10, minLevel: 20 });
+      o['AEW:v1:oldA'] = JSON.stringify({ schemaVersion: 1, savedAt: 100, minLevel: 11,
+                                          hiddenColumns: { a: true, b: true }, layouts: [{ name: 'x' }] });
+      o['AEW:v1:oldB'] = JSON.stringify({ schemaVersion: 1, savedAt: 900, minLevel: 99,
+                                          hiddenColumns: { c: true }, layouts: [] });
+      return o;
+    }
+
+    t('旧路径设置：只列别的路径，最新的排最前，带上列数和方案数', function () {
+      if (!AE.listForeignSettings) return 'settings.js 没加载，跳过';
+      var got = AE.listForeignSettings(fakeStore(bucket()), MY);
+      if (got.length !== 2) return '列了 ' + got.length + ' 条';
+      if (got[0].key !== 'AEW:v1:oldB') return '第一条是 ' + got[0].key + '（应该是最新的 oldB）';
+      if (got[1].hiddenColumns !== 2 || got[1].layouts !== 1) {
+        return 'oldA 的统计不对：隐藏 ' + got[1].hiddenColumns + ' 列，' + got[1].layouts + ' 个方案';
+      }
+      return true;
+    });
+
+    t('旧路径设置：自己的键不出现在列表里', function () {
+      if (!AE.listForeignSettings) return 'settings.js 没加载，跳过';
+      var got = AE.listForeignSettings(fakeStore(bucket()), MY);
+      for (var i = 0; i < got.length; i++) {
+        if (got[i].key === MY) return '把自己也列出来了';
+      }
+      return true;
+    });
+
+    t('旧路径设置：读不了的那条仍然列出，但标成不可用', function () {
+      if (!AE.listForeignSettings) return 'settings.js 没加载，跳过';
+      var got = AE.listForeignSettings(
+        fakeStore({ 'AEW:v1:future': JSON.stringify({ schemaVersion: 99, savedAt: 100 }) }), MY);
+      if (got.length !== 1) return '列了 ' + got.length + ' 条';
+      return got[0].usable === false || '居然说可用';
+    });
+
+    t('旧路径设置：取回会写到自己的键上', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      var store = fakeStore(bucket());
+      var got = AE.adoptSettingsFrom('AEW:v1:oldA', store, MY);
+      if (!got) return '取回返回了 null';
+      if (got.minLevel !== 11) return '取回的 minLevel = ' + got.minLevel;
+      return JSON.parse(store.getItem(MY)).minLevel === 11 || '自己的键没被更新';
+    });
+
+    t('旧路径设置：取回不会销毁来源，取错了还能取回来', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      var store = fakeStore(bucket());
+      AE.adoptSettingsFrom('AEW:v1:oldA', store, MY);
+      var src = store.getItem('AEW:v1:oldA');
+      return (src && JSON.parse(src).minLevel === 11) || '来源被吃掉了';
+    });
+
+    t('旧路径设置：取回后时间戳刷新，旧的 settings.js 盖不回去', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      var store = fakeStore(bucket());
+      AE.adoptSettingsFrom('AEW:v1:oldA', store, MY);   // 原本 savedAt=100
+      var now = Math.floor(Date.now() / 1000);
+      var at = JSON.parse(store.getItem(MY)).savedAt;
+      return (at >= now - 5 && at <= now + 5) || 'savedAt 还是 ' + at;
+    });
+
+    t('旧路径设置：拒绝新版本写的那条，且不动自己的设置', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      var seed = {};
+      seed[MY] = JSON.stringify({ schemaVersion: 1, savedAt: 10, minLevel: 20 });
+      seed['AEW:v1:future'] = JSON.stringify({ schemaVersion: 99, savedAt: 900, minLevel: 5 });
+      var store = fakeStore(seed);
+      if (AE.adoptSettingsFrom('AEW:v1:future', store, MY) !== null) return '还是取回了';
+      return JSON.parse(store.getItem(MY)).minLevel === 20 || '失败时把自己的设置弄坏了';
+    });
+
+    t('旧路径设置：取回一个不存在的键，自己的设置不受影响', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      var store = fakeStore(bucket());
+      if (AE.adoptSettingsFrom('AEW:v1:nope', store, MY) !== null) return '声称成功了';
+      return JSON.parse(store.getItem(MY)).minLevel === 20 || '自己的设置变了';
+    });
+
+    t('旧路径设置：取回的结果补全了旧记录没有的新字段', function () {
+      if (!AE.adoptSettingsFrom) return 'settings.js 没加载，跳过';
+      // 真实场景：用户那条旧记录是 layouts / panelTab / groupOrder 出现之前存的。
+      var store = fakeStore({
+        'AEW:v1:oldA': JSON.stringify({ schemaVersion: 1, savedAt: 100, minLevel: 70,
+                                        hiddenColumns: { ilvl: true } })
+      });
+      var got = AE.adoptSettingsFrom('AEW:v1:oldA', store, MY);
+      if (!got) return '取回返回了 null';
+      if (got.minLevel !== 70) return 'minLevel = ' + got.minLevel;
+      if (!Array.isArray(got.layouts)) return 'layouts 是 ' + typeof got.layouts;
+      if (got.panelTab !== 'filter') return 'panelTab = ' + got.panelTab;
+      return got.hiddenColumns.ilvl === true || '隐藏列丢了';
+    });
+
     return { pass: pass, fail: fail, skipped: skipped, results: results };
   };
 

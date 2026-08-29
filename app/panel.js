@@ -713,6 +713,46 @@
       '设置来源：' + (AE.settingsOrigin || '默认') +
       (AE.storageOk ? '' : '　（浏览器本地存储不可用，改动不会被记住）')));
 
+    // ---- settings left behind at an old path ------------------------------
+    // Automatic adoption only fires when this folder has no settings of its own,
+    // because silently overwriting settings you are using would be worse than the
+    // problem it solves. That leaves one case uncovered: the folder moved, and you
+    // then changed a few things at the new path -- now the old entry is stranded.
+    // Listing it is the only way to reach it, since the browser gives no UI for
+    // localStorage on file://.
+    var foreign = AE.listForeignSettings ? AE.listForeignSettings() : [];
+    if (foreign.length) {
+      var old = section('old-settings', '旧路径的设置（' + foreign.length + '）');
+      old.appendChild(el('p', 'note',
+        '浏览器是按文件夹路径分开存设置的，所以这个文件夹一旦被移动或改名，' +
+        '原来调好的设置就看不见了 —— 但它还在，就是下面这些。' +
+        '取回会覆盖当前设置，取回前建议先「导出 JSON」备份一份。'));
+      foreign.forEach(function (f) {
+        var row = el('div', 'layout-row');
+        var when = f.savedAt
+          ? new Date(f.savedAt * 1000).toLocaleString()
+          : '时间未记录';
+        var info = el('div', 'layout-name', when);
+        info.appendChild(el('span', 'hint',
+          '隐藏 ' + f.hiddenColumns + ' 列　·　' + f.layouts + ' 个方案'));
+        info.title = f.key;
+        row.appendChild(info);
+        if (f.usable) {
+          row.appendChild(button('取回', 'mini', function () {
+            if (!global.confirm('用这份设置替换当前设置？\n\n' + when +
+                                '\n隐藏 ' + f.hiddenColumns + ' 列，' + f.layouts + ' 个方案')) return;
+            var got = AE.adoptSettingsFrom(f.key);
+            if (!got) { global.alert('取回失败：这份设置读不出来。'); return; }
+            global.location.reload();
+          }));
+        } else {
+          row.appendChild(el('span', 'hint', '版本太新，读不了'));
+        }
+        old.appendChild(row);
+      });
+      cfg.appendChild(old);
+    }
+
     // ---- update ----------------------------------------------------------
     // A real re-check needs the network, and file:// has none -- fetch and XHR
     // are both blocked. So the page can only report what the last scan found and
