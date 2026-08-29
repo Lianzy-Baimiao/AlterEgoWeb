@@ -237,6 +237,38 @@ table#grid {
   letter-spacing: 1px;
   overflow: visible;
 }
+/* ---- settings tab strip -------------------------------------------------- */
+#panel-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  flex: none;
+  flex-wrap: wrap;
+}
+#panel-tabs button.tab {
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--fg2);
+  padding: 5px 10px;
+  font-size: 12px;
+  position: relative;
+  top: 1px;
+}
+#panel-tabs button.tab:hover { color: var(--fg); background: var(--bg3); }
+/* The active tab joins the content below it: same background as the body, and
+   its bottom border is punched out by the panel's own border line. */
+#panel-tabs button.tab.on {
+  background: var(--bg2);
+  color: var(--accent);
+  border-color: var(--line);
+  box-shadow: 0 1px 0 0 var(--bg2);
+  font-weight: 600;
+}
+
 /* ---- saved layout rows (settings panel) ---------------------------------- */
 .layout-row {
   display: flex;
@@ -248,6 +280,15 @@ table#grid {
 .layout-row.on .layout-name { color: var(--accent); font-weight: 600; }
 .layout-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout-btns { display: flex; gap: 4px; flex: none; }
+.layout-scope {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--fg3);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
 
 /* The layout picker sits in among the header buttons, so it has to read as one
    of them. A stock <select> here looked like it came from a different program:

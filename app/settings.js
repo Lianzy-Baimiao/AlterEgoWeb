@@ -70,6 +70,12 @@
       // never quietly changes which characters you are looking at.
       layouts: [],
       activeLayout: '',
+      // Authoring choice for the NEXT saved layout, not a property of any
+      // existing one -- each layout carries its own scope.
+      layoutSaveAll: false,
+
+      // Which settings tab was open last. See PANEL_TABS in panel.js.
+      panelTab: 'filter',
 
       // Appearance.
       theme: 'dark',

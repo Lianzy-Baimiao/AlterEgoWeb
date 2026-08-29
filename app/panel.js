@@ -124,20 +124,30 @@
     return '方案';
   }
 
-  /** One saved layout: its name, plus 应用 / 覆盖 / 重命名 / 删除. */
-  function layoutRow(name, isActive) {
+  /** One saved layout: name, what it stores, plus 应用 / 覆盖 / 重命名 / 删除. */
+  function layoutRow(entry, isActive) {
+    var name = entry.name;
     var row = el('div', 'layout-row' + (isActive ? ' on' : ''));
     var lab = el('span', 'layout-name', (isActive ? '● ' : '') + name);
     lab.title = isActive ? '当前表格就是这个方案' : '点「应用」切到这个方案';
     row.appendChild(lab);
+
+    // Spelled out on every row: a preset that also moves your filters is a
+    // different animal from one that only rearranges columns.
+    var tag = el('span', 'layout-scope', AE.layoutScopeLabel(entry));
+    tag.title = AE.layoutScope(entry) === 'all'
+      ? '切到这个方案会一并换掉筛选（最低等级、隐藏的角色…）和外观（皮肤、字号…）'
+      : '只换列：分组顺序、组内列顺序、哪些列隐藏';
+    row.appendChild(tag);
 
     var btns = el('span', 'layout-btns');
     if (!isActive) {
       btns.appendChild(button('应用', 'mini', function () { AE.applyLayout(name); }));
     }
     btns.appendChild(button('覆盖', 'mini', function () {
-      if (!global.confirm('用当前的列顺序和显隐覆盖方案「' + name + '」？')) return;
-      AE.saveLayout(name);
+      if (!global.confirm('用当前状态覆盖方案「' + name + '」？\n（它存的是：' +
+                          AE.layoutScopeLabel(entry) + '）')) return;
+      AE.saveLayout(name);          // keeps the row's own scope
       AE.renderLayoutPicker();
       AE.buildSettingsPanel();
       AE.toast({ title: '已覆盖方案：' + name, kind: 'good', ms: 2500 });
@@ -187,15 +197,49 @@
     panel.scrollTop = prev.top;
   }
 
-  AE.buildSettingsPanel = function () {
-    var st = AE.state;
-    var s = st.settings;
-    var m = st.model;
-    var panel = doc.getElementById('panel-body');
-    var prev = panel.childNodes.length ? capturePanelState(panel) : null;
-    panel.innerHTML = '';
-    checkBoxes = [];
+  // ------------------------------------------------------------- panel tabs
+  //
+  // Eleven sections in a 380px drawer meant scrolling past sixteen character
+  // checkboxes to reach 显示的列. They are grouped into six tabs instead, and only
+  // the active tab is built -- so the cost of the character list is not paid when
+  // you are looking at the column list.
+  //
+  // The strip lives OUTSIDE #panel-body, which buildSettingsPanel clears.
+  var PANEL_TABS = [
+    { id: 'layout', label: '布局', title: '列的顺序和命名方案' },
+    { id: 'filter', label: '筛选', title: '哪些角色进表' },
+    { id: 'data',   label: '数据', title: '数据源 / 服务器 / 角色' },
+    { id: 'cols',   label: '列',   title: '每一列的显隐' },
+    { id: 'look',   label: '外观', title: '皮肤、明暗、字体、字号' },
+    { id: 'misc',   label: '其他', title: '外部主页、副本名称、配置、赞赏' }
+  ];
 
+  function activeTab(s) {
+    for (var i = 0; i < PANEL_TABS.length; i++) {
+      if (PANEL_TABS[i].id === s.panelTab) return s.panelTab;
+    }
+    return 'filter';
+  }
+
+  function renderPanelTabs(s) {
+    var host = doc.getElementById('panel-tabs');
+    if (!host) return;
+    var cur = activeTab(s);
+    host.innerHTML = '';
+    PANEL_TABS.forEach(function (t) {
+      var b = button(t.label, 'tab' + (t.id === cur ? ' on' : ''), function () {
+        if (s.panelTab === t.id) return;
+        s.panelTab = t.id;
+        AE.saveSettings(s);
+        AE.buildSettingsPanel();
+      });
+      b.title = t.title;
+      b.setAttribute('aria-pressed', t.id === cur ? 'true' : 'false');
+      host.appendChild(b);
+    });
+  }
+
+  function tabLayout(panel, st, s, m) {
     // ---- layouts ---------------------------------------------------------
     // Rows rather than a dropdown-plus-contextual-buttons: with a dropdown there
     // is no way to rename or delete a layout once you have nudged a column and
@@ -211,6 +255,11 @@
       .map(function (l) { return l.name; });
     var activeName = AE.activeLayoutName();
 
+    lay.appendChild(check('新方案同时记住筛选和外观',
+      function () { return s.layoutSaveAll; },
+      function (v) { s.layoutSaveAll = v; AE.saveSettings(s); },
+      '不勾就只记列'));
+
     var layTop = el('div', 'row-buttons');
     layTop.appendChild(button('保存为新方案', null, function () {
       var n = global.prompt('给这个布局起个名字', nextLayoutName(savedNames));
@@ -219,7 +268,7 @@
       if (!n) return;
       if (savedNames.indexOf(n) >= 0 &&
           !global.confirm('已经有一个叫「' + n + '」的方案，覆盖它？')) return;
-      AE.saveLayout(n);
+      AE.saveLayout(n, s.layoutSaveAll ? 'all' : 'cols');
       AE.renderLayoutPicker();
       AE.buildSettingsPanel();
       AE.toast({ title: '已保存方案：' + n, kind: 'good', ms: 2500 });
@@ -236,11 +285,13 @@
       lay.appendChild(el('p', 'hint2',
         '还没有保存过方案。把列拖成你要的样子、勾好显隐，再点「保存为新方案」。'));
     }
-    savedNames.forEach(function (name) {
-      lay.appendChild(layoutRow(name, name === activeName));
+    AE.layouts().forEach(function (entry) {
+      if (entry && entry.name) lay.appendChild(layoutRow(entry, entry.name === activeName));
     });
     panel.appendChild(lay);
+  }
 
+  function tabFilter(panel, st, s, m) {
     // ---- filters ---------------------------------------------------------
     var filt = section('filters', '筛选', { open: true });
 
@@ -294,7 +345,9 @@
     modeWrap.appendChild(sel);
     filt.appendChild(modeWrap);
     panel.appendChild(filt);
+  }
 
+  function tabData(panel, st, s, m) {
     // ---- data sources ----------------------------------------------------
     var src = section('sources', '数据源（' + m.sources.length + '）', { open: true });
     m.sources.forEach(function (so) {
@@ -394,7 +447,9 @@
       charSec.appendChild(lab);
     });
     panel.appendChild(charSec);
+  }
 
+  function tabCols(panel, st, s, m) {
     // ---- columns ---------------------------------------------------------
     var colSec = section('columns', '显示的列');
 
@@ -491,7 +546,9 @@
     }
 
     panel.appendChild(colSec);
+  }
 
+  function tabLook(panel, st, s, m) {
     // ---- appearance ------------------------------------------------------
     var look = section('look', '显示效果');
 
@@ -546,7 +603,9 @@
       function (v) { s.headerMode = v; AE.rebuild(); }));
 
     panel.appendChild(look);
+  }
 
+  function tabMisc(panel, st, s, m) {
     // ---- external links --------------------------------------------------
     var links = section('links', '外部主页');
     links.appendChild(el('p', 'note',
@@ -735,8 +794,40 @@
     fundLink.appendChild(fa);
     fund.appendChild(fundLink);
     panel.appendChild(fund);
+  }
 
-    restorePanelState(panel, prev);
+  var TAB_BUILDERS = {
+    layout: tabLayout,
+    filter: tabFilter,
+    data: tabData,
+    cols: tabCols,
+    look: tabLook,
+    misc: tabMisc
+  };
+
+  // Scroll offset is remembered PER TAB: carrying one tab's offset into another
+  // would land you in the middle of unrelated content.
+  var tabScroll = {};
+  var lastTab = '';
+
+
+  AE.buildSettingsPanel = function () {
+    var st = AE.state;
+    var s = st.settings;
+    var m = st.model;
+    var panel = doc.getElementById('panel-body');
+    var tab = activeTab(s);
+    var prev = (panel.childNodes.length && tab === lastTab) ? capturePanelState(panel) : null;
+    if (lastTab && lastTab !== tab) tabScroll[lastTab] = panel.scrollTop;
+    panel.innerHTML = '';
+    checkBoxes = [];
+
+    renderPanelTabs(s);
+    TAB_BUILDERS[tab](panel, st, s, m);
+
+    if (prev) restorePanelState(panel, prev);
+    else panel.scrollTop = tabScroll[tab] || 0;
+    lastTab = tab;
   };
 
   AE.applyImportedSettings = function (o) {

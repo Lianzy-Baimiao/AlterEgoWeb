@@ -440,7 +440,76 @@
              ('末尾是 ' + got[got.length - 1] + '，共 ' + got.length + ' 列');
     });
 
+    // ---- layout presets --------------------------------------------------
+    // AE.pickActiveLayout is pure, so these run without a live table. They guard
+    // the bug where picking 方案3 in the header dropdown snapped the label back to
+    // 方案1: 方案1 was columns-only, its columns matched, and it came first.
+
+    function fakeSettings(over) {
+      var s = AE.settingsDefaults();
+      Object.keys(over || {}).forEach(function (k) { s[k] = over[k]; });
+      return s;
+    }
+
+    t('布局方案：优先认上次应用的那一个', function () {
+      if (!AE.pickActiveLayout) return 'layouts.js 没加载，跳过';
+      var s = fakeSettings({ minLevel: 20, skin: 'jade' });
+      // Two presets with identical columns; the second also remembers filters.
+      var cols = { groupOrder: [], columnOrder: {}, hiddenColumns: {}, hiddenGroups: {} };
+      s.layouts = [
+        { name: '方案1', scope: 'cols', groupOrder: [], columnOrder: {}, hiddenColumns: {}, hiddenGroups: {} },
+        { name: '方案3', scope: 'all', groupOrder: [], columnOrder: {}, hiddenColumns: {}, hiddenGroups: {},
+          filters: pickKeys(s, AE.LAYOUT_FILTER_KEYS), look: pickKeys(s, AE.LAYOUT_LOOK_KEYS) }
+      ];
+      s.activeLayout = '方案3';
+      var got = AE.pickActiveLayout(s);
+      return got === '方案3' || ('认成了 ' + got + '（应该是 方案3）');
+    });
+
+    t('布局方案：上次那个不再匹配时退回第一个匹配的', function () {
+      if (!AE.pickActiveLayout) return 'layouts.js 没加载，跳过';
+      var s = fakeSettings({ minLevel: 80 });
+      s.layouts = [
+        { name: '方案1', scope: 'cols', groupOrder: [], columnOrder: {}, hiddenColumns: {}, hiddenGroups: {} },
+        { name: '方案3', scope: 'all', groupOrder: [], columnOrder: {}, hiddenColumns: {}, hiddenGroups: {},
+          filters: pickKeys(fakeSettings({ minLevel: 20 }), AE.LAYOUT_FILTER_KEYS),
+          look: pickKeys(s, AE.LAYOUT_LOOK_KEYS) }
+      ];
+      s.activeLayout = '方案3';       // stale: minLevel is 80 now, the preset says 20
+      var got = AE.pickActiveLayout(s);
+      return got === '方案1' || ('认成了 "' + got + '"（应该是 方案1）');
+    });
+
+    t('布局方案：只管列的方案不受筛选改动影响', function () {
+      if (!AE.pickActiveLayout) return 'layouts.js 没加载，跳过';
+      var s = fakeSettings({ minLevel: 5, hideZeroRating: true, skin: 'amber' });
+      s.layouts = [{ name: '只列', scope: 'cols', groupOrder: [], columnOrder: {},
+                     hiddenColumns: {}, hiddenGroups: {} }];
+      if (AE.pickActiveLayout(s) !== '只列') return '改了筛选就不认了';
+      s.hiddenColumns = { ilvl: true };
+      return AE.pickActiveLayout(s) === '' || '改了列还认';
+    });
+
+    t('布局方案：带筛选的方案会因为筛选改动而脱钩', function () {
+      if (!AE.pickActiveLayout) return 'layouts.js 没加载，跳过';
+      var s = fakeSettings({ minLevel: 70 });
+      s.layouts = [{ name: '全套', scope: 'all', groupOrder: [], columnOrder: {},
+                     hiddenColumns: {}, hiddenGroups: {},
+                     filters: pickKeys(s, AE.LAYOUT_FILTER_KEYS),
+                     look: pickKeys(s, AE.LAYOUT_LOOK_KEYS) }];
+      s.activeLayout = '全套';
+      if (AE.pickActiveLayout(s) !== '全套') return '刚存好就不认';
+      s.minLevel = 10;
+      return AE.pickActiveLayout(s) === '' || '改了最低等级还认';
+    });
+
     return { pass: pass, fail: fail, skipped: skipped, results: results };
   };
+
+  function pickKeys(src, keys) {
+    var o = {};
+    (keys || []).forEach(function (k) { o[k] = src[k]; });
+    return o;
+  }
 
 })(typeof window !== 'undefined' ? window : globalThis);

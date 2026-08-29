@@ -19,31 +19,87 @@
   var AE = global.AE = global.AE || {};
   var doc = global.document;
 
-  function sortedCopy(o) {
-    var out = {};
-    Object.keys(o || {}).sort().forEach(function (k) { out[k] = o[k]; });
+  // A layout's SCOPE decides how much it carries:
+  //   'cols' -- group order, per-group column order, what is hidden
+  //   'all'  -- the above plus the filters and the appearance
+  //
+  // 'cols' is the default and stays the default. A preset that silently changes
+  // which characters are in the table is a real footgun, so carrying filters is
+  // opt-in per preset, and every row says which kind it is.
+  var FILTER_KEYS = ['enabledMode', 'minLevel', 'hideZeroRating', 'hideStaleDays',
+                     'search', 'weeklyActiveOnly',
+                     'hiddenCharacters', 'hiddenRealms', 'hiddenSources'];
+  var LOOK_KEYS = ['theme', 'skin', 'fontFamily', 'fontSize',
+                   'classColors', 'headerMode', 'currencyShowCap'];
+
+  AE.LAYOUT_FILTER_KEYS = FILTER_KEYS;
+  AE.LAYOUT_LOOK_KEYS = LOOK_KEYS;
+
+  /** Deep clone with every object's keys sorted, so equal states stringify equal. */
+  function canon(v) {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      var o = {};
+      Object.keys(v).sort().forEach(function (k) { o[k] = canon(v[k]); });
+      return o;
+    }
+    return v;
+  }
+
+  // canon() at the end, not just per value: without it the keys come out in
+  // FILTER_KEYS order here but alphabetical when read back through canon(), and
+  // the two JSON strings never match -- so a preset would never look active.
+  function pick(src, keys) {
+    var o = {};
+    keys.forEach(function (k) { o[k] = src[k]; });
+    return canon(o);
+  }
+
+  function scopeOf(x) { return (x && x.scope === 'all') ? 'all' : 'cols'; }
+
+  /** The live settings, as a layout of the given scope. */
+  function liveShape(s, scope) {
+    var out = {
+      scope: scopeOf({ scope: scope }),
+      groupOrder: (s.groupOrder || []).slice(),
+      columnOrder: canon(s.columnOrder || {}),
+      hiddenColumns: canon(s.hiddenColumns || {}),
+      hiddenGroups: canon(s.hiddenGroups || {})
+    };
+    if (out.scope === 'all') {
+      out.filters = pick(s, FILTER_KEYS);
+      out.look = pick(s, LOOK_KEYS);
+    }
     return out;
   }
 
-  /** Canonical form, so two equal shapes always stringify identically. */
-  function norm(x) {
-    x = x || {};
-    var co = {};
-    Object.keys(x.columnOrder || {}).sort().forEach(function (g) {
-      co[g] = (x.columnOrder[g] || []).slice();
-    });
-    return {
-      groupOrder: (x.groupOrder || []).slice(),
-      columnOrder: co,
-      hiddenColumns: sortedCopy(x.hiddenColumns),
-      hiddenGroups: sortedCopy(x.hiddenGroups)
+  /** A stored entry, re-canonicalised so it compares against liveShape. */
+  function savedShape(e) {
+    e = e || {};
+    var out = {
+      scope: scopeOf(e),
+      groupOrder: (e.groupOrder || []).slice(),
+      columnOrder: canon(e.columnOrder || {}),
+      hiddenColumns: canon(e.hiddenColumns || {}),
+      hiddenGroups: canon(e.hiddenGroups || {})
     };
+    if (out.scope === 'all') {
+      out.filters = canon(e.filters || {});
+      out.look = canon(e.look || {});
+    }
+    return out;
   }
 
-  AE.layoutShape = function (s) { return norm(s); };
+  AE.layoutScope = scopeOf;
 
-  AE.sameLayout = function (a, b) {
-    return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+  /** What a row should say it stores. */
+  AE.layoutScopeLabel = function (e) {
+    return scopeOf(e) === 'all' ? '列 + 筛选 + 外观' : '列';
+  };
+
+  /** Does the live table already match this stored layout, at its own scope? */
+  AE.sameLayout = function (s, saved) {
+    return JSON.stringify(liveShape(s, scopeOf(saved))) === JSON.stringify(savedShape(saved));
   };
 
   function list() {
@@ -53,14 +109,33 @@
   }
 
   AE.layouts = list;
+  /**
+   * Which saved layout `s` currently matches, or '' for none.
+   *
+   * Prefers the one last applied or saved (`s.activeLayout`) as long as it still
+   * matches. Two presets can legitimately be indistinguishable at the NARROWER
+   * one's scope -- a 'cols' preset matches whenever its columns match, whatever a
+   * wider preset did to the filters -- so taking the first hit in array order
+   * made the wider preset look like it never switched: you picked 方案3, the
+   * filters and skin did change, and the label snapped back to 方案1.
+   *
+   * Pure on purpose (takes settings, reads no module state) so it is testable.
+   */
+  AE.pickActiveLayout = function (s) {
+    var all = ((s && s.layouts) || []).filter(function (l) { return l && l.name; });
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (all[i].name === s.activeLayout && AE.sameLayout(s, all[i])) return all[i].name;
+    }
+    for (i = 0; i < all.length; i++) {
+      if (AE.sameLayout(s, all[i])) return all[i].name;
+    }
+    return '';
+  };
+
   /** Name of the saved layout the table currently matches, or '' for none. */
   AE.activeLayoutName = function () {
-    var live = norm(AE.state.settings);
-    var hit = '';
-    list().forEach(function (l) {
-      if (!hit && l && AE.sameLayout(live, l)) hit = l.name;
-    });
-    return hit;
+    return AE.pickActiveLayout(AE.state.settings);
   };
 
   AE.applyLayout = function (name) {
@@ -69,29 +144,52 @@
     list().forEach(function (l) { if (l && l.name === name) found = l; });
     if (!found) return false;
 
-    var sh = norm(found);
+    var sh = savedShape(found);
     s.groupOrder = sh.groupOrder;
     s.columnOrder = sh.columnOrder;
     s.hiddenColumns = sh.hiddenColumns;
     s.hiddenGroups = sh.hiddenGroups;
+
+    if (sh.scope === 'all') {
+      // Only keys the preset actually stored, so a preset written by an older
+      // build does not blank a setting it never heard of.
+      FILTER_KEYS.forEach(function (k) {
+        if (sh.filters[k] !== undefined) s[k] = sh.filters[k];
+      });
+      LOOK_KEYS.forEach(function (k) {
+        if (sh.look[k] !== undefined) s[k] = sh.look[k];
+      });
+    }
+
     s.activeLayout = name;
     AE.rebuild();
+    if (sh.scope === 'all') {
+      // rebuild() does not touch appearance or the row filter.
+      AE.refresh();
+      if (AE.repaintThemeSwitch) AE.repaintThemeSwitch();
+    }
     // The checkbox tree mirrors hiddenColumns / hiddenGroups, so it has to follow.
     AE.buildSettingsPanel();
     return true;
   };
 
-  /** Save the live shape under `name`, replacing a same-named layout. */
-  AE.saveLayout = function (name) {
+  /**
+   * Save the live state under `name`, replacing a same-named layout.
+   * `scope` defaults to the existing entry's scope when overwriting, so 覆盖 never
+   * silently promotes a columns-only preset into one that also moves your filters.
+   */
+  AE.saveLayout = function (name, scope) {
     name = String(name || '').trim();
     if (!name) return false;
     var s = AE.state.settings;
-    var entry = norm(s);
-    entry.name = name;
 
     var all = list();
     var at = -1;
     for (var i = 0; i < all.length; i++) if (all[i] && all[i].name === name) at = i;
+    if (scope === undefined) scope = (at >= 0) ? scopeOf(all[at]) : 'cols';
+
+    var entry = liveShape(s, scope);
+    entry.name = name;
     if (at >= 0) all[at] = entry; else all.push(entry);
 
     s.activeLayout = name;
