@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $SCHEMA_VERSION = 1
-$TOOL_VERSION   = '1.4.1'
+$TOOL_VERSION   = '1.5.0'
 $REPO           = 'Lianzy-Baimiao/AlterEgoWeb'
 $AUTHOR         = '白描'
 
@@ -45,10 +45,25 @@ function Write-Warn { param([string]$m) Write-Host "  ! $m" -ForegroundColor Yel
 
 # Distinguishes "we detected a situation and want to explain it" from "the script
 # crashed". Only the latter is worth printing a stack trace for.
+#
+# -Code is what the GUI launcher keys its Chinese explanation off. The English
+# text below is the console/.bat audience; the launcher never shows it as the
+# headline, because "no AlterEgo.lua in any account's SavedVariables" tells a
+# player nothing about what to actually do. Codes are emitted as
+# "SCAN_ERROR=<code>" plus optional "SCAN_DATA=<key>=<value>" lines so the
+# launcher can parse them out of stdout without a second channel.
 $script:FriendlyError = $false
+$script:ErrorCode     = ''
+$script:ErrorData     = @{}
 function Stop-Friendly {
-    param([Parameter(Mandatory)][string]$Message)
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [string]$Code = 'UNKNOWN',
+        [hashtable]$Data
+    )
     $script:FriendlyError = $true
+    $script:ErrorCode     = $Code
+    if ($Data) { $script:ErrorData = $Data }
     throw $Message
 }
 
@@ -401,6 +416,122 @@ function Get-AlterEgoSources {
 }
 
 # --------------------------------------------------------------------------
+# Why is there no data?
+# --------------------------------------------------------------------------
+# "Found WoW, but no AlterEgo.lua" has at least five different causes and five
+# different fixes -- addon never installed, unpacked one folder too deep,
+# installed but unticked, game never logged in, or logged in but never saved.
+# Telling them apart costs a few directory listings, and it is the difference
+# between the launcher saying "go install the addon" and the user staring at a
+# log. Runs only on the failure path, so the cost never shows up in a good scan.
+#
+# Addon enable state lives per character in
+#   WTF\Account\<account>\<Realm>\<Character>\AddOns.txt
+# as lines like "AlterEgo: enabled". There is no account-wide file to check.
+function Get-NoDataDiagnosis {
+    param([Parameter(Mandatory)]$Roots)
+
+    $addonsDir = ''      # first Interface\AddOns we saw -- where to unpack into
+    $addonPath = ''      # the AlterEgo folder, if it exists at all
+    $hasToc    = $false
+    $chars     = 0
+    $enabled   = 0
+    $disabled  = 0
+
+    foreach ($root in $Roots) {
+        foreach ($flavor in @(Get-FlavorDirs -RootPath $root.path)) {
+            $ad = Join-Path $flavor.FullName 'Interface\AddOns'
+            if (-not $addonsDir) { $addonsDir = $ad }
+
+            $ae = Join-Path $ad 'AlterEgo'
+            if (Test-Path -LiteralPath $ae) {
+                if (-not $addonPath) { $addonPath = $ae }
+                if (Test-Path -LiteralPath (Join-Path $ae 'AlterEgo.toc')) { $hasToc = $true }
+            }
+
+            $acctRoot = Join-Path $flavor.FullName 'WTF\Account'
+            if (-not (Test-Path -LiteralPath $acctRoot)) { continue }
+            $acctDirs = @(Get-ChildItem -LiteralPath $acctRoot -Directory -ErrorAction SilentlyContinue |
+                          Where-Object { $_.Name -ne 'SavedVariables' })
+            foreach ($acct in $acctDirs) {
+                # Two levels down, explicitly: -Recurse would also walk
+                # SavedVariables and the per-character cache files for nothing.
+                foreach ($realm in @(Get-ChildItem -LiteralPath $acct.FullName -Directory -ErrorAction SilentlyContinue)) {
+                    foreach ($char in @(Get-ChildItem -LiteralPath $realm.FullName -Directory -ErrorAction SilentlyContinue)) {
+                        $f = Join-Path $char.FullName 'AddOns.txt'
+                        if (-not (Test-Path -LiteralPath $f)) { continue }
+                        $chars++
+                        try {
+                            $txt = [System.IO.File]::ReadAllText($f, [System.Text.UTF8Encoding]::new($false))
+                        } catch { continue }
+                        $m = [regex]::Match($txt, '(?im)^\s*AlterEgo\s*:\s*(\w+)\s*$')
+                        if (-not $m.Success) { continue }
+                        if ($m.Groups[1].Value -ieq 'enabled') { $enabled++ } else { $disabled++ }
+                    }
+                }
+            }
+        }
+    }
+
+    if (-not $addonsDir) { $addonsDir = '(Interface\AddOns)' }
+    return [pscustomobject]@{
+        addonsDir = $addonsDir
+        addonPath = $addonPath
+        hasToc    = $hasToc
+        chars     = $chars
+        enabled   = $enabled
+        disabled  = $disabled
+    }
+}
+
+# Turns the diagnosis into (code, one-line English summary, hint). The launcher
+# uses the code; the console shows the text.
+function Get-NoDataVerdict {
+    param([Parameter(Mandatory)]$Diag, [int]$UnreadableCount = 0)
+
+    if ($UnreadableCount -gt 0) {
+        return [pscustomobject]@{
+            code = 'SV_UNREADABLE'
+            text = 'Found AlterEgo.lua, but every copy was incomplete or unreadable.'
+            hint = 'Fully exit World of Warcraft (not just log out) and run this again.'
+        }
+    }
+    if (-not $Diag.addonPath) {
+        return [pscustomobject]@{
+            code = 'NO_ADDON'
+            text = 'The AlterEgo addon is not installed.'
+            hint = "Unpack it into $($Diag.addonsDir), then log a character in and /reload."
+        }
+    }
+    if (-not $Diag.hasToc) {
+        return [pscustomobject]@{
+            code = 'ADDON_BROKEN'
+            text = 'An AlterEgo folder exists but has no AlterEgo.toc, so the game never loads it.'
+            hint = 'Usually one nested folder too many: AddOns\AlterEgo\AlterEgo\AlterEgo.toc.'
+        }
+    }
+    if ($Diag.chars -eq 0) {
+        return [pscustomobject]@{
+            code = 'NO_CHARACTER'
+            text = 'This World of Warcraft folder has no character data at all.'
+            hint = 'Either the wrong install was picked, or nobody has logged in here yet.'
+        }
+    }
+    if ($Diag.enabled -eq 0 -and $Diag.disabled -gt 0) {
+        return [pscustomobject]@{
+            code = 'ADDON_DISABLED'
+            text = 'AlterEgo is installed but disabled for every character.'
+            hint = 'Tick it in the AddOns list at the character select screen.'
+        }
+    }
+    return [pscustomobject]@{
+        code = 'NO_SAVEDVARS'
+        text = 'AlterEgo is installed and enabled, but has never written its SavedVariables.'
+        hint = 'Log a character in, then /reload or exit the game -- that is when it saves.'
+    }
+}
+
+# --------------------------------------------------------------------------
 # Addon's own lookup tables
 # --------------------------------------------------------------------------
 # Embedding these means season -> challengeModeID -> abbr/name, raid lists, and
@@ -677,7 +808,8 @@ try {
     Write-Host 'Locating World of Warcraft...'
     $roots = @(Get-WowRoots)
     if ($roots.Count -eq 0) {
-        Stop-Friendly ("No World of Warcraft installation found.`r`n" +
+        Stop-Friendly -Code 'NO_WOW' -Message (
+               "No World of Warcraft installation found.`r`n" +
                "  Fix: edit tools\config.json and set wowPaths, for example:`r`n" +
                '    { "wowPaths": ["E:\\World of Warcraft"] }')
     }
@@ -687,8 +819,15 @@ try {
     Write-Host 'Reading AlterEgo SavedVariables...'
     $scan = Get-AlterEgoSources -Roots $roots
     if ($scan.sources.Count -eq 0) {
-        Stop-Friendly ("Found WoW, but no AlterEgo.lua in any account's SavedVariables.`r`n" +
-               '  Is the AlterEgo addon installed, and have you logged in since installing it?')
+        Write-Host ''
+        Write-Host 'No data. Working out why...'
+        $diag    = Get-NoDataDiagnosis -Roots $roots
+        $verdict = Get-NoDataVerdict -Diag $diag -UnreadableCount $scan.errors.Count
+        Stop-Friendly -Code $verdict.code -Data @{
+            addonsDir = $diag.addonsDir
+            addonPath = $diag.addonPath
+            wowRoot   = $roots[0].path
+        } -Message ($verdict.text + "`r`n  " + $verdict.hint)
     }
 
     Write-Host ''
@@ -857,6 +996,16 @@ try {
     exit 0
 
 } catch {
+    Write-Host ''
+    # Machine-readable first, so the launcher can find it even if the human text
+    # below grows. Values are forced onto one line each.
+    $code = $script:ErrorCode
+    if (-not $script:FriendlyError -or -not $code) { $code = 'UNKNOWN' }
+    Write-Host "SCAN_ERROR=$code"
+    foreach ($k in @($script:ErrorData.Keys)) {
+        $v = ([string]$script:ErrorData[$k]) -replace '[\r\n]+', ' '
+        if ($v) { Write-Host "SCAN_DATA=$k=$v" }
+    }
     Write-Host ''
     Write-Host 'SCAN FAILED' -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red

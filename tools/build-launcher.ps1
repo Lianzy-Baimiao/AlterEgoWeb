@@ -103,12 +103,10 @@ $T = @{
     Title      = 'AlterEgo 本地看板'
     Scanning   = '正在扫描魔兽世界目录...'
     NoScript   = "找不到 tools\scan.ps1。`n请确认这个程序和 index.html、tools 文件夹在同一个目录里。"
-    OutHead    = "`n`n--- 扫描输出 ---`n"
-    Hint       = "`n`n提示：也可以直接双击 启动.bat 查看完整过程。"
+    Footnote   = '想看完整的扫描过程，可以双击本文件夹里的 启动.bat。'
     NoPwsh     = "无法运行 PowerShell 扫描脚本。`n"
-    ScanFail   = '扫描失败，没有生成数据。'
-    NoPage     = '扫描成功，但找不到 index.html。'
-    NoBrowse   = "数据已生成，但无法自动打开浏览器。`n请手动打开 index.html。`n`n"
+    NoPage     = "扫描成功，但找不到 index.html。`n请确认这个程序和 index.html 在同一个目录里。"
+    NoBrowse   = "数据已生成，但无法自动打开浏览器。`n请手动打开 index.html。"
     Font       = 'Microsoft YaHei UI'
     TrayOpen   = '打开看板'
     TrayRescan = '立即重新扫描'
@@ -136,6 +134,46 @@ $T = @{
     BehaveTray = '留在托盘'
     BehaveExit = '一起退出'
     BehaveAsk  = '每次询问'
+
+    # ---- failure explanations, keyed by scan.ps1's SCAN_ERROR code ----------
+    # scan.ps1's own output is ASCII English on purpose (console codepage 936).
+    # These are what the user actually reads: what went wrong, and the exact
+    # steps out of it. %ADDONS% is replaced at runtime with the real
+    # Interface\AddOns path that the scan reported.
+    BtnRetry   = '重新扫描'
+    BtnSetDir  = '设置游戏目录...'
+    BtnAddons  = '打开插件目录'
+    BtnDownload= '下载 AlterEgo'
+    BtnDetail  = '详细信息 ▼'
+    BtnDetail2 = '详细信息 ▲'
+    BtnCopy    = '复制详情'
+    BtnCopied  = '已复制'
+    BtnClose   = '关闭'
+    AddonUrl   = 'https://www.curseforge.com/wow/addons/alterego'
+
+    HeadNoWow  = '没有找到魔兽世界的安装目录'
+    BodyNoWow  = "注册表、战网配置、常见路径都试过了，都没找到，需要你手动指定一次。`n`n1. 点下面的「设置游戏目录」；`n2. 选中包含 _retail_ 的那一层，例如 D:\World of Warcraft；`n3. 选完会自动保存并重新扫描。"
+
+    HeadNoAddon= '你还没有安装 AlterEgo 插件'
+    BodyNoAddon= "这个看板只负责把 AlterEgo 插件存下来的数据整理成网页，它自己不进游戏取数据。所以必须先装插件，并且进游戏跑一次让它存盘。`n`n1. 下载 AlterEgo：点下面的「下载 AlterEgo」，或者在 CurseForge 客户端里搜 AlterEgo；`n2. 解压到这个目录：`n      %ADDONS%`n   解压后应该能直接看到 AlterEgo\AlterEgo.toc 这个文件；`n3. 启动游戏，登录任意一个角色；`n4. 输入 /reload，或者退出登录、退出游戏 —— 插件的数据是这个时候才写进硬盘的；`n5. 回来点下面的「重新扫描」。"
+
+    HeadBroken = 'AlterEgo 插件的目录层级不对，游戏加载不了'
+    BodyBroken = "找到了 AlterEgo 文件夹，但里面没有 AlterEgo.toc。这基本上都是解压的时候多套了一层目录。`n`n对的：  %ADDONS%\AlterEgo\AlterEgo.toc`n错的：  ...\AddOns\AlterEgo\AlterEgo\AlterEgo.toc`n`n如果是后一种，把里面那层 AlterEgo 文件夹整个剪出来，覆盖掉外面那层就行。`n`n改完启动游戏登录一次角色，输入 /reload，再回来点下面的「重新扫描」。"
+
+    HeadDisabled='AlterEgo 插件装好了，但被禁用了'
+    BodyDisabled="所有角色的插件列表里 AlterEgo 都是关闭状态，游戏不会加载它，也就不会产生任何数据。`n`n1. 启动游戏，在角色选择界面点左下角的「插件」；`n2. 勾上 AlterEgo（右上角切到「全部角色」可以一次全开）；`n3. 登录角色，输入 /reload，或者退出登录、退出游戏；`n4. 回来点下面的「重新扫描」。"
+
+    HeadNoChar = '这个游戏目录里还没有任何角色数据'
+    BodyNoChar = "看起来这个魔兽世界从来没登录过，或者它不是你平时在玩的那个安装目录 —— 装了两份、或者放在别的盘，这种情况很常见。`n`n1. 先用下面的「设置游戏目录」确认选的是哪一个；`n2. 启动游戏登录一个角色，然后退出游戏；`n3. 回来点「重新扫描」。"
+
+    HeadNoSaved= 'AlterEgo 插件已经装好，但还没有生成数据'
+    BodyNoSaved= "插件在位，也是开启的，只是还没往硬盘里写过存档。插件的数据只在 /reload、退出登录、退出游戏这三个时机才落盘 —— 游戏开着的时候它只在内存里。`n`n1. 启动游戏，登录任意一个角色；`n2. 点一下小地图上的 AlterEgo 图标，让它把这个角色的数据收一遍；`n3. 输入 /reload，或者退出登录、退出游戏；`n4. 回来点下面的「重新扫描」。`n`n（本程序常驻托盘时会盯着存档文件，你在游戏里 /reload 之后它会自己重扫。）"
+
+    HeadUnread = '找到了 AlterEgo 的存档，但读到的内容不完整'
+    BodyUnread = "一般是游戏还开着，存档文件正在被写入，读到的是半截内容。`n`n1. 完全退出魔兽世界 —— 不是回角色选择界面，是把游戏关掉；`n2. 回来点下面的「重新扫描」。`n`n如果游戏确实已经关了还是这个提示，那就是存档文件坏了：删掉它，进游戏重新收集一次即可。"
+
+    HeadUnknown= '扫描失败，没有生成数据'
+    BodyUnknown= "这次的失败原因不在已知情况里。下面的「详细信息」是扫描器的原始输出，可以照着排查，也可以点「复制详情」发给作者。"
 }
 
 # PowerShell string -> C# string literal, ASCII-only.
@@ -176,10 +214,8 @@ public static class Launcher
     const string T_TITLE      = @@TITLE@@;
     const string T_SCANNING   = @@SCANNING@@;
     const string T_NOSCRIPT   = @@NOSCRIPT@@;
-    const string T_OUTHEAD    = @@OUTHEAD@@;
-    const string T_HINT       = @@HINT@@;
+    const string T_FOOTNOTE   = @@FOOTNOTE@@;
     const string T_NOPWSH     = @@NOPWSH@@;
-    const string T_SCANFAIL   = @@SCANFAIL@@;
     const string T_NOPAGE     = @@NOPAGE@@;
     const string T_NOBROWSE   = @@NOBROWSE@@;
     const string T_FONT       = @@FONT@@;
@@ -211,6 +247,33 @@ public static class Launcher
     const string T_BEHAVETRAY = @@BEHAVETRAY@@;
     const string T_BEHAVEEXIT = @@BEHAVEEXIT@@;
     const string T_BEHAVEASK  = @@BEHAVEASK@@;
+
+    const string T_BTNRETRY   = @@BTNRETRY@@;
+    const string T_BTNSETDIR  = @@BTNSETDIR@@;
+    const string T_BTNADDONS  = @@BTNADDONS@@;
+    const string T_BTNDOWNLOAD= @@BTNDOWNLOAD@@;
+    const string T_BTNDETAIL  = @@BTNDETAIL@@;
+    const string T_BTNDETAIL2 = @@BTNDETAIL2@@;
+    const string T_BTNCOPY    = @@BTNCOPY@@;
+    const string T_BTNCOPIED  = @@BTNCOPIED@@;
+    const string T_BTNCLOSE   = @@BTNCLOSE@@;
+    const string T_ADDONURL   = @@ADDONURL@@;
+    const string T_HEADNOWOW  = @@HEADNOWOW@@;
+    const string T_BODYNOWOW  = @@BODYNOWOW@@;
+    const string T_HEADNOADDON= @@HEADNOADDON@@;
+    const string T_BODYNOADDON= @@BODYNOADDON@@;
+    const string T_HEADBROKEN = @@HEADBROKEN@@;
+    const string T_BODYBROKEN = @@BODYBROKEN@@;
+    const string T_HEADDISABLED=@@HEADDISABLED@@;
+    const string T_BODYDISABLED=@@BODYDISABLED@@;
+    const string T_HEADNOCHAR = @@HEADNOCHAR@@;
+    const string T_BODYNOCHAR = @@BODYNOCHAR@@;
+    const string T_HEADNOSAVED= @@HEADNOSAVED@@;
+    const string T_BODYNOSAVED= @@BODYNOSAVED@@;
+    const string T_HEADUNREAD = @@HEADUNREAD@@;
+    const string T_BODYUNREAD = @@BODYUNREAD@@;
+    const string T_HEADUNKNOWN= @@HEADUNKNOWN@@;
+    const string T_BODYUNKNOWN= @@BODYUNKNOWN@@;
 
     static string BaseDir;
     static string ScanScript;
@@ -285,13 +348,317 @@ public static class Launcher
         }
     }
 
-    static void Fail(string headline, string detail)
+    // ------------------------------------------------------------ failure UI
+    //
+    // This was a MessageBox whose body was the scanner's raw English log. For
+    // the audience this tool has, that is not a message -- it is a wall of text
+    // with the answer missing. scan.ps1 now classifies the failure and prints
+    // "SCAN_ERROR=<code>", so the dialog can say what went wrong in Chinese,
+    // list the steps that fix it, offer the one button that helps, and keep the
+    // log behind a toggle for bug reports.
+    class FailDialog : Form
     {
-        string msg = headline;
-        if (!string.IsNullOrEmpty(detail))
-            msg += T_OUTHEAD + detail.Trim();
-        msg += T_HINT;
-        MessageBox.Show(msg, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        const int W = 680;          // client width
+        const int PAD = 18;
+        const int DETAIL_H = 200;
+
+        TextBox Detail;
+        Button Toggle;
+        Control DefaultFocus;
+        string Raw;
+        int RowBottom;              // client height with the log collapsed
+
+        // Explicit measurement rather than AutoSize: each block's height is
+        // needed to place the next one, and AutoSize only settles during layout.
+        static int Measure(string text, Font f, int w)
+        {
+            return TextRenderer.MeasureText(text, f, new Size(w, int.MaxValue),
+                       TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 4;
+        }
+
+        Label AddText(string s, Font f, Color c, int x, int y, int w)
+        {
+            Label l = new Label();
+            l.Font = f;
+            l.ForeColor = c;
+            l.Text = s;
+            l.AutoSize = false;
+            l.Bounds = new Rectangle(x, y, w, Measure(s, f, w));
+            Controls.Add(l);
+            return l;
+        }
+
+        static Button AddButton(string text, Font f)
+        {
+            Button b = new Button();
+            b.Font = f;
+            b.Text = text;
+            b.Height = 30;
+            b.Width = Math.Max(88, TextRenderer.MeasureText(text, f).Width + 28);
+            b.FlatStyle = FlatStyle.System;
+            return b;
+        }
+        public FailDialog(string head, string body, string raw,
+                          string[] labels, EventHandler[] actions, bool expand)
+        {
+            Raw = Normalize(raw);
+
+            Text = T_TITLE;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Color.White;
+
+            Font headFont = new Font(T_FONT, 13.5F, FontStyle.Bold);
+            Font bodyFont = new Font(T_FONT, 10F);
+            Font hintFont = new Font(T_FONT, 8.5F);
+            Font btnFont  = new Font(T_FONT, 9F);
+
+            int left = PAD + 46;
+            int tw = W - left - PAD;
+            int y = PAD;
+
+            PictureBox pic = new PictureBox();
+            pic.Image = SystemIcons.Error.ToBitmap();
+            pic.SizeMode = PictureBoxSizeMode.Zoom;
+            pic.Bounds = new Rectangle(PAD, y + 2, 32, 32);
+            Controls.Add(pic);
+
+            y = AddText(head, headFont, Color.FromArgb(176, 42, 42), left, y, tw).Bottom + 14;
+            if (!string.IsNullOrEmpty(body))
+                y = AddText(body, bodyFont, Color.FromArgb(38, 42, 50), left, y, tw).Bottom + 16;
+            y = AddText(T_FOOTNOTE, hintFont, Color.FromArgb(132, 138, 150), left, y, tw).Bottom + 18;
+            // ---- button row: actions then 关闭, right-aligned as one group ----
+            Button close = AddButton(T_BTNCLOSE, btnFont);
+            close.DialogResult = DialogResult.Cancel;
+
+            int n = (labels == null) ? 0 : labels.Length;
+            Button[] acts = new Button[n];
+            int total = close.Width;
+            for (int i = 0; i < n; i++)
+            {
+                acts[i] = AddButton(labels[i], btnFont);
+                acts[i].Click += actions[i];
+                total += acts[i].Width + 8;
+            }
+
+            int x = W - PAD - total;
+            for (int i = 0; i < n; i++)
+            {
+                acts[i].Location = new Point(x, y);
+                Controls.Add(acts[i]);
+                x += acts[i].Width + 8;
+            }
+            close.Location = new Point(x, y);
+            Controls.Add(close);
+
+            if (Raw.Length > 0)
+            {
+                Toggle = AddButton(T_BTNDETAIL, btnFont);
+                Toggle.Location = new Point(PAD, y);
+                Toggle.Click += delegate(object s, EventArgs e) { SetExpanded(!Detail.Visible); };
+                Controls.Add(Toggle);
+
+                // Confirms in place rather than via a balloon: on a first-run
+                // failure there is no tray icon yet to show one.
+                Button copy = AddButton(T_BTNCOPY, btnFont);
+                copy.Location = new Point(Toggle.Right + 8, y);
+                copy.Click += delegate(object s, EventArgs e)
+                {
+                    try
+                    {
+                        Clipboard.SetText(Raw);
+                        copy.Text = T_BTNCOPIED;
+                        copy.Enabled = false;
+                    }
+                    catch { }
+                };
+                Controls.Add(copy);
+                Detail = new TextBox();
+                Detail.Multiline = true;
+                Detail.ReadOnly = true;
+                Detail.WordWrap = false;
+                Detail.ScrollBars = ScrollBars.Both;
+                Detail.Font = new Font("Consolas", 8.5F);
+                Detail.BackColor = Color.FromArgb(246, 247, 249);
+                Detail.Text = Raw;
+                Detail.Bounds = new Rectangle(PAD, y + 30 + 12, W - 2 * PAD, DETAIL_H);
+                Detail.Visible = false;
+                Controls.Add(Detail);
+            }
+
+            RowBottom = y + 30 + PAD;
+            // 重新扫描 is always the last action, and it is what the user wants
+            // after following the steps above -- so it gets the focus ring and
+            // Enter. Without this the ring lands on whatever was added first,
+            // while Enter fires something else, which reads as a bug.
+            CancelButton = close;
+            AcceptButton = (n > 0) ? acts[n - 1] : close;
+            DefaultFocus = (n > 0) ? (Control)acts[n - 1] : (Control)close;
+            SetExpanded(expand && Raw.Length > 0);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (DefaultFocus != null) DefaultFocus.Focus();
+        }
+
+        void SetExpanded(bool on)
+        {
+            if (Detail != null)
+            {
+                Detail.Visible = on;
+                Toggle.Text = on ? T_BTNDETAIL2 : T_BTNDETAIL;
+            }
+            ClientSize = new Size(W, (on && Detail != null) ? Detail.Bottom + PAD : RowBottom);
+        }
+
+        // RunScan joins stdout and stderr with a bare \n, so the log arrives with
+        // mixed line endings and a TextBox renders a lone \n as a box glyph.
+        static string Normalize(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n").Trim();
+        }
+    }
+    // Generic failure: first line becomes the headline, the rest the body.
+    static void Fail(string message, string detail)
+    {
+        string head = message, body = "";
+        int nl = message.IndexOf('\n');
+        if (nl >= 0)
+        {
+            head = message.Substring(0, nl).Trim();
+            body = message.Substring(nl + 1).Trim();
+        }
+        FailDialog dlg = new FailDialog(head, body, detail, new string[0],
+                                       new EventHandler[0], !string.IsNullOrEmpty(detail));
+        dlg.ShowDialog();
+    }
+
+    // scan.ps1 prints "SCAN_ERROR=<code>" and "SCAN_DATA=<key>=<value>" on the
+    // failure path. Read those back rather than pattern-matching English prose.
+    static string ScanErrorCode(string output)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(output, "^SCAN_ERROR=([A-Z_]+)",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+        return m.Success ? m.Groups[1].Value : "";
+    }
+
+    static string ScanErrorData(string output, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(output, "^SCAN_DATA=" + key + "=(.*)$",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+        return m.Success ? m.Groups[1].Value.Trim() : "";
+    }
+
+    static void OpenUrl(string url)
+    {
+        try
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(url);
+            psi.UseShellExecute = true;
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    static void OpenFolder(string dir)
+    {
+        try
+        {
+            // A WoW install always has Interface\AddOns, but creating it is
+            // harmless and beats opening nothing if it somehow went missing.
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            ProcessStartInfo psi = new ProcessStartInfo("explorer.exe", "\"" + dir + "\"");
+            psi.UseShellExecute = true;
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+    /// Explains a failed scan. Returns DialogResult.Retry when the user fixed
+    /// something and wants another go.
+    static DialogResult FailScan(string output)
+    {
+        string code = ScanErrorCode(output);
+        string addons = ScanErrorData(output, "addonsDir");
+        bool haveAddons = addons.Length > 3 && addons.IndexOf(":\\") == 1;
+
+        string head, body;
+        bool wantSetDir = false, wantAddons = false, wantDownload = false, expand = false;
+
+        if      (code == "NO_WOW")         { head = T_HEADNOWOW;    body = T_BODYNOWOW;    wantSetDir = true; }
+        else if (code == "NO_ADDON")       { head = T_HEADNOADDON;  body = T_BODYNOADDON;  wantDownload = true; wantAddons = true; }
+        else if (code == "ADDON_BROKEN")   { head = T_HEADBROKEN;   body = T_BODYBROKEN;   wantAddons = true; }
+        else if (code == "ADDON_DISABLED") { head = T_HEADDISABLED; body = T_BODYDISABLED; }
+        else if (code == "NO_CHARACTER")   { head = T_HEADNOCHAR;   body = T_BODYNOCHAR;   wantSetDir = true; }
+        else if (code == "NO_SAVEDVARS")   { head = T_HEADNOSAVED;  body = T_BODYNOSAVED;  }
+        else if (code == "SV_UNREADABLE")  { head = T_HEADUNREAD;   body = T_BODYUNREAD;   }
+        else                               { head = T_HEADUNKNOWN;  body = T_BODYUNKNOWN;  expand = true; }
+
+        body = body.Replace("%ADDONS%", haveAddons ? addons : "...\\_retail_\\Interface\\AddOns");
+
+        // Assigned before ShowDialog, so the closures below see a live dialog.
+        FailDialog dlg = null;
+        var labels = new System.Collections.Generic.List<string>();
+        var acts = new System.Collections.Generic.List<EventHandler>();
+
+        if (wantDownload)
+        {
+            labels.Add(T_BTNDOWNLOAD);
+            acts.Add(delegate(object s, EventArgs e) { OpenUrl(T_ADDONURL); });
+        }
+        if (wantAddons && haveAddons)
+        {
+            labels.Add(T_BTNADDONS);
+            acts.Add(delegate(object s, EventArgs e) { OpenFolder(addons); });
+        }
+        if (wantSetDir)
+        {
+            labels.Add(T_BTNSETDIR);
+            acts.Add(delegate(object s, EventArgs e)
+            {
+                if (PickGameDir()) dlg.DialogResult = DialogResult.Retry;
+            });
+        }
+        labels.Add(T_BTNRETRY);
+        acts.Add(delegate(object s, EventArgs e) { dlg.DialogResult = DialogResult.Retry; });
+
+        dlg = new FailDialog(head, body, output, labels.ToArray(), acts.ToArray(), expand);
+        return dlg.ShowDialog();
+    }
+    // A failed first scan happens before the tray icon exists, so anything that
+    // can run on that path has to tolerate Tray == null.
+    static void SetTrayText(string s)
+    {
+        if (Tray != null) Tray.Text = s;
+    }
+
+    static void Notify(string text)
+    {
+        if (Tray == null || !Tray.Visible) return;
+        Tray.BalloonTipTitle = T_TITLE;
+        Tray.BalloonTipText = text;
+        Tray.ShowBalloonTip(2500);
+    }
+
+    // Runs a scan behind the splash window. Used for the first scan and for every
+    // retry from the failure dialog.
+    static bool ScanWithSplash(out string output)
+    {
+        Splash sp = new Splash();
+        sp.Show();
+        Application.DoEvents();
+        try { return RunScan(out output); }
+        finally { sp.Close(); sp.Dispose(); }
     }
 
     // ---------------------------------------------------------------- scan
@@ -654,7 +1021,7 @@ public static class Launcher
         }
         catch (Exception ex)
         {
-            Fail(T_NOBROWSE + ex.Message, null);
+            Fail(T_NOBROWSE, ex.Message);
         }
     }
 
@@ -663,12 +1030,16 @@ public static class Launcher
     // A folder picker beats telling the user to hand-edit JSON, and it is the
     // only part of the config that ever needs changing on a machine where
     // auto-detection fails.
-    static void PickGameDir()
+    //
+    // Returns true when a path was saved. Rescanning is the caller's business:
+    // this is reachable both from the tray menu and from the failure dialog, and
+    // those two want different things to happen next.
+    static bool PickGameDir()
     {
         FolderBrowserDialog dlg = new FolderBrowserDialog();
         dlg.Description = T_PICKDIR;
         dlg.ShowNewFolderButton = false;
-        if (dlg.ShowDialog() != DialogResult.OK) return;
+        if (dlg.ShowDialog() != DialogResult.OK) return false;
 
         string chosen = dlg.SelectedPath;
         // Accept either the root or the _retail_ folder itself.
@@ -684,14 +1055,10 @@ public static class Launcher
         else
         {
             MessageBox.Show(T_DIRBAD, T_TITLE, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            return false;
         }
 
-        if (!WriteWowPath(chosen)) return;
-        Tray.BalloonTipTitle = T_TITLE;
-        Tray.BalloonTipText = T_DIRSAVED;
-        Tray.ShowBalloonTip(2500);
-        Rescan(true);
+        return WriteWowPath(chosen);
     }
 
     // Rewrites one key in tools/config.json. A regex rather than a JSON parser
@@ -779,9 +1146,7 @@ public static class Launcher
                             new object[] { T_TITLE });
             st.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, null);
 
-            Tray.BalloonTipTitle = T_TITLE;
-            Tray.BalloonTipText = T_SHORTCUTOK;
-            Tray.ShowBalloonTip(2500);
+            Notify(T_SHORTCUTOK);
         }
         catch (Exception ex)
         {
@@ -881,23 +1246,25 @@ public static class Launcher
     {
         if (Rescanning) return;
         Rescanning = true;
-        Tray.Text = T_TRAYBUSY;
+        SetTrayText(T_TRAYBUSY);
         try
         {
-            string output;
-            bool ok = RunScan(out output);
-            Tray.Text = T_TRAYIDLE;
-            if (!ok)
+            while (true)
             {
-                if (interactive) Fail(T_SCANFAIL, output);
-                return;
+                string output;
+                bool ok = RunScan(out output);
+                SetTrayText(T_TRAYIDLE);
+                if (ok) break;
+                // A background rescan that fails is almost always "the game is
+                // mid-write"; the next poll picks it up. Never pop a dialog for it.
+                if (!interactive) return;
+                if (FailScan(output) != DialogResult.Retry) return;
+                SetTrayText(T_TRAYBUSY);
             }
             // Re-baseline, or the poll would fire again on the same change.
             foreach (string f in WatchFiles) LastSeen[f] = Stamp(f);
 
-            Tray.BalloonTipTitle = T_TITLE;
-            Tray.BalloonTipText = T_TRAYDONE;
-            Tray.ShowBalloonTip(2500);
+            Notify(T_TRAYDONE);
         }
         finally { Rescanning = false; }
     }
@@ -931,15 +1298,14 @@ public static class Launcher
             return 0;
         }
 
-        Splash splash = new Splash();
-        splash.Show();
-        Application.DoEvents();
-
+        // The failure dialog offers a retry, because most of the fixes it
+        // suggests (install the addon, log in, /reload) are done while it is on
+        // screen. Making the user relaunch the exe afterwards would be rude.
         string firstOutput;
-        bool first = RunScan(out firstOutput);
-        splash.Close();
-
-        if (!first) { Fail(T_SCANFAIL, firstOutput); return 1; }
+        while (!ScanWithSplash(out firstOutput))
+        {
+            if (FailScan(firstOutput) != DialogResult.Retry) return 1;
+        }
         if (!File.Exists(PageFile)) { Fail(T_NOPAGE, firstOutput); return 1; }
 
         OpenDashboard();
@@ -974,7 +1340,12 @@ public static class Launcher
         BehaveItems = new ToolStripMenuItem[] { bExit, bTray, bAsk };
         menu.Items.Add(behave);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(T_TRAYSETDIR, null, delegate(object s, EventArgs e) { PickGameDir(); });
+        menu.Items.Add(T_TRAYSETDIR, null, delegate(object s, EventArgs e)
+        {
+            if (!PickGameDir()) return;
+            Notify(T_DIRSAVED);
+            Rescan(true);
+        });
         menu.Items.Add(T_TRAYSHORTCUT, null, delegate(object s, EventArgs e) { CreateDesktopShortcut(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T_TRAYEXIT, null, delegate(object s, EventArgs e) { QuitApp(); });
@@ -982,14 +1353,7 @@ public static class Launcher
         Tray.DoubleClick += delegate(object s, EventArgs e) { OpenDashboard(); };
         Tray.BalloonTipClicked += delegate(object s, EventArgs e)
         {
-            if (string.IsNullOrEmpty(UpdateUrl)) return;
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo(UpdateUrl);
-                psi.UseShellExecute = true;
-                Process.Start(psi);
-            }
-            catch { }
+            if (!string.IsNullOrEmpty(UpdateUrl)) OpenUrl(UpdateUrl);
         };
 
         Debounce = new System.Windows.Forms.Timer();

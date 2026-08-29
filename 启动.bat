@@ -28,10 +28,18 @@ rem cheerfully open a stale dashboard.
 if errorlevel 1 (
   echo.
   echo ---------------------------------------------------------------
-  echo  SCAN FAILED - see the message above.
+  echo  SCAN FAILED - the SCAN_ERROR line above says which case it is:
   echo.
-  echo  Most likely fix: edit tools\config.json and set wowPaths, e.g.
-  echo    { "wowPaths": ["E:\\World of Warcraft"] }
+  echo    NO_WOW           set wowPaths in tools\config.json
+  echo    NO_ADDON         the AlterEgo addon is not installed
+  echo    ADDON_BROKEN     unpacked one folder too deep, no .toc
+  echo    ADDON_DISABLED   tick AlterEgo in the in-game AddOns list
+  echo    NO_CHARACTER     log a character in once, then exit
+  echo    NO_SAVEDVARS     log in, then /reload or exit the game
+  echo    SV_UNREADABLE    fully exit the game, then try again
+  echo.
+  echo  The .exe in this folder explains each of these in Chinese,
+  echo  with the exact steps and a retry button. Use it instead.
   echo ---------------------------------------------------------------
   echo.
   pause

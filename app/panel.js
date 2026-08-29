@@ -12,6 +12,8 @@
   var L = AE.Labels;
   var doc = global.document;
 
+  var SUPPORT_URL = 'https://ifdian.net/a/lianzy';
+
   function el(tag, cls, text) {
     var n = doc.createElement(tag);
     if (cls) n.className = cls;
@@ -19,12 +21,30 @@
     return n;
   }
 
-  function section(title, opts) {
+  // `key` is a stable identity for the section, independent of the title -- the
+  // titles carry counts ('角色（12）') that change between builds, so they cannot
+  // be used to match a section to its previous open/closed state.
+  function section(key, title, opts) {
     var d = el('details', 'sec');
+    d.setAttribute('data-sec', key);
     if (opts && opts.open) d.open = true;
     d.appendChild(el('summary', null, title));
     return d;
   }
+
+  // Every checkbox built by check() below, with the getter that decides its
+  // state. The bulk 全选 / 全不选 buttons flip a lot of settings at once and then
+  // need the boxes to agree with them; re-reading the getters does that without
+  // rebuilding the panel. Rebuilding is what used to make the drawer jump back
+  // to the top -- clearing #panel-body resets its scrollTop and collapses every
+  // <details> the user had opened.
+  var checkBoxes = [];
+
+  AE.syncSettingsChecks = function () {
+    for (var i = 0; i < checkBoxes.length; i++) {
+      checkBoxes[i].box.checked = !!checkBoxes[i].get();
+    }
+  };
 
   /** Checkbox row. `get` reads current state, `set(v)` applies it. */
   function check(label, get, set, hint) {
@@ -33,6 +53,7 @@
     box.type = 'checkbox';
     box.checked = !!get();
     box.addEventListener('change', function () { set(box.checked); });
+    checkBoxes.push({ box: box, get: get });
     lab.appendChild(box);
     lab.appendChild(el('span', null, label));
     if (hint) {
@@ -94,15 +115,42 @@
 
   // ------------------------------------------------------------------- panel
 
+  // A full rebuild is still needed when the panel's own contents change shape
+  // (the 角色显示依据 dropdown rewrites the filter fields; a reparse changes the
+  // column list). Carry the scroll offset and the open sections across it so the
+  // rebuild is invisible. Both are read and reapplied in one synchronous pass, so
+  // the browser never paints the intermediate state.
+  function capturePanelState(panel) {
+    var open = {};
+    var secs = panel.querySelectorAll('details.sec');
+    for (var i = 0; i < secs.length; i++) {
+      var k = secs[i].getAttribute('data-sec');
+      if (k) open[k] = secs[i].open;
+    }
+    return { top: panel.scrollTop, open: open };
+  }
+
+  function restorePanelState(panel, prev) {
+    if (!prev) return;
+    var secs = panel.querySelectorAll('details.sec');
+    for (var i = 0; i < secs.length; i++) {
+      var k = secs[i].getAttribute('data-sec');
+      if (k && Object.prototype.hasOwnProperty.call(prev.open, k)) secs[i].open = prev.open[k];
+    }
+    panel.scrollTop = prev.top;
+  }
+
   AE.buildSettingsPanel = function () {
     var st = AE.state;
     var s = st.settings;
     var m = st.model;
     var panel = doc.getElementById('panel-body');
+    var prev = panel.childNodes.length ? capturePanelState(panel) : null;
     panel.innerHTML = '';
+    checkBoxes = [];
 
     // ---- filters ---------------------------------------------------------
-    var filt = section('筛选', { open: true });
+    var filt = section('filters', '筛选', { open: true });
 
     var searchWrap = el('label', 'field');
     searchWrap.appendChild(el('span', null, '搜索'));
@@ -156,7 +204,7 @@
     panel.appendChild(filt);
 
     // ---- data sources ----------------------------------------------------
-    var src = section('数据源（' + m.sources.length + '）', { open: true });
+    var src = section('sources', '数据源（' + m.sources.length + '）', { open: true });
     m.sources.forEach(function (so) {
       var row = el('div', 'source-row');
 
@@ -209,7 +257,7 @@
     panel.appendChild(src);
 
     // ---- realms ----------------------------------------------------------
-    var realmSec = section('服务器（' + m.realms.length + '）');
+    var realmSec = section('realms', '服务器（' + m.realms.length + '）');
     m.realms.forEach(function (r) {
       realmSec.appendChild(check(r.name,
         function () { return !s.hiddenRealms[r.name]; },
@@ -223,16 +271,16 @@
     panel.appendChild(realmSec);
 
     // ---- characters ------------------------------------------------------
-    var charSec = section('角色（' + m.characters.length + '）');
+    var charSec = section('chars', '角色（' + m.characters.length + '）');
     var quick = el('div', 'row-buttons');
     quick.appendChild(button('全选', 'mini', function () {
       s.hiddenCharacters = {};
-      AE.buildSettingsPanel();
+      AE.syncSettingsChecks();
       AE.refresh();
     }));
     quick.appendChild(button('全不选', 'mini', function () {
       m.characters.forEach(function (ch) { s.hiddenCharacters[ch.key] = true; });
-      AE.buildSettingsPanel();
+      AE.syncSettingsChecks();
       AE.refresh();
     }));
     charSec.appendChild(quick);
@@ -256,7 +304,7 @@
     panel.appendChild(charSec);
 
     // ---- columns ---------------------------------------------------------
-    var colSec = section('显示的列');
+    var colSec = section('columns', '显示的列');
 
     // The group checkbox hides the whole band in one go; 全选 / 全不选 operate on
     // the individual columns inside it. They are different things: unchecking the
@@ -265,7 +313,7 @@
     colTop.appendChild(button('全部显示', 'mini', function () {
       s.hiddenGroups = {};
       s.hiddenColumns = {};
-      AE.buildSettingsPanel();
+      AE.syncSettingsChecks();
       AE.refresh();
     }));
     colTop.appendChild(button('只留基础', 'mini', function () {
@@ -274,7 +322,7 @@
       AE.GROUPS.forEach(function (g) {
         if (g.id !== 'base') s.hiddenGroups[g.id] = true;
       });
-      AE.buildSettingsPanel();
+      AE.syncSettingsChecks();
       AE.refresh();
     }));
     colSec.appendChild(colTop);
@@ -298,12 +346,12 @@
       groupBtns.appendChild(button('全选', 'mini', function () {
         groupCols.forEach(function (c) { delete s.hiddenColumns[c.id]; });
         delete s.hiddenGroups[g.id];
-        AE.buildSettingsPanel();
+        AE.syncSettingsChecks();
         AE.refresh();
       }));
       groupBtns.appendChild(button('全不选', 'mini', function () {
         groupCols.forEach(function (c) { s.hiddenColumns[c.id] = true; });
-        AE.buildSettingsPanel();
+        AE.syncSettingsChecks();
         AE.refresh();
       }));
       head.appendChild(groupBtns);
@@ -325,7 +373,7 @@
     panel.appendChild(colSec);
 
     // ---- appearance ------------------------------------------------------
-    var look = section('显示效果');
+    var look = section('look', '显示效果');
 
     look.appendChild(selectField('皮肤', s.skin,
       AE.SKINS.map(function (k) { return [k.id, k.label]; }),
@@ -380,7 +428,7 @@
     panel.appendChild(look);
 
     // ---- external links --------------------------------------------------
-    var links = section('外部主页');
+    var links = section('links', '外部主页');
     links.appendChild(el('p', 'note',
       'Raider.IO 的链接格式已经实测可用（服务器名用中文也能打开）。' +
       'Warcraft Logs 拒绝脚本访问，它的格式没能在本机验证，第一次点击请确认一下，' +
@@ -402,7 +450,7 @@
     var needFix = m.columns.dungeonIds.filter(function (id) {
       return L.dungeonNeedsTranslation(id, s.dungeonNameOverrides, m.dungeonNames);
     });
-    var nameSec = section('副本名称' + (needFix.length ? '（' + needFix.length + ' 个缺中文名）' : ''));
+    var nameSec = section('dungeon-names', '副本名称' + (needFix.length ? '（' + needFix.length + ' 个缺中文名）' : ''));
     nameSec.appendChild(el('p', 'note',
       '中文名是从游戏自己的字符串里还原的：副本锁定记录，以及你身上钥石的物品名。' +
       '两个来源都没覆盖到的副本会显示英文名，可以在这里手动填写。' +
@@ -434,7 +482,7 @@
     panel.appendChild(nameSec);
 
     // ---- config ----------------------------------------------------------
-    var cfg = section('配置');
+    var cfg = section('config', '配置');
     cfg.appendChild(el('p', 'note',
       '浏览器的本地存储不会随文件夹一起复制。要把设置带走，点“保存设置到文件”，' +
       '下次运行启动脚本时会自动从下载文件夹收进 data/settings.js。'));
@@ -541,6 +589,34 @@
     }
     cfg.appendChild(about);
     panel.appendChild(cfg);
+
+    // ---- support ----------------------------------------------------------
+    // file:// can OPEN an https URL, it just cannot fetch one, so the button
+    // works. 复制链接 is the fallback for a machine where the app-mode window has
+    // nothing to hand the URL off to.
+    var fund = section('support', '赞赏');
+    fund.appendChild(el('p', 'note',
+      '这个工具是免费的，没有广告也没有内购。如果它帮你省下了每周翻小号的时间，' +
+      '可以去爱发电请我喝一杯 —— 完全自愿，不赞赏功能也一个都不少。'));
+    var fundBtns = el('div', 'row-buttons');
+    fundBtns.appendChild(button('打开赞赏页', null, function () {
+      global.open(SUPPORT_URL, '_blank', 'noopener');
+    }));
+    fundBtns.appendChild(button('复制链接', 'mini', function () {
+      AE.copyWithToast(SUPPORT_URL, '赞赏页地址');
+    }));
+    fund.appendChild(fundBtns);
+
+    var fundLink = el('p', 'note');
+    var fa = el('a', null, SUPPORT_URL);
+    fa.href = SUPPORT_URL;
+    fa.target = '_blank';
+    fa.rel = 'noopener noreferrer';
+    fundLink.appendChild(fa);
+    fund.appendChild(fundLink);
+    panel.appendChild(fund);
+
+    restorePanelState(panel, prev);
   };
 
   AE.applyImportedSettings = function (o) {
