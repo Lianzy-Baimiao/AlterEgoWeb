@@ -469,6 +469,27 @@
     var size = Math.max(10, Math.min(18, Number(s.fontSize) || 12));
     root.style.setProperty('--table-size', size + 'px');
     root.style.setProperty('--ui-size', (size + 1) + 'px');
+
+    applyThemeColor();
+  }
+
+  /**
+   * Hand the current header colour to the browser as <meta name="theme-color">.
+   *
+   * The launcher opens the page with --app=, and a Chromium app window paints
+   * its title bar from theme-color. Without this the title bar follows the OS
+   * setting, so a dark page could sit under a white title bar (and vice versa).
+   * --bg2 is the <header> background, so the title bar and the button strip
+   * directly beneath it read as one surface. Reading it back from the cascade
+   * rather than duplicating the value here keeps it right for every skin/theme
+   * combination without a second colour table.
+   */
+  function applyThemeColor() {
+    var meta = doc.querySelector('meta[name="theme-color"]');
+    if (!meta) return;
+    var c = global.getComputedStyle(doc.body).getPropertyValue('--bg2');
+    c = String(c || '').trim();
+    if (c) meta.setAttribute('content', c);
   }
 
   AE.applyAppearance = applyAppearance;

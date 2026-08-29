@@ -930,11 +930,57 @@ public static class Launcher
     static extern bool IsIconic(IntPtr hWnd);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr procId);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint attachTo, uint attachFrom, bool attach);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool BringWindowToTop(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr param);
 
     const int SW_RESTORE = 9;
+    const int SW_SHOW = 5;
     const uint WM_CLOSE = 0x0010;
+
+    /// <summary>
+    /// Force a window to the front.
+    ///
+    /// A bare SetForegroundWindow is not enough here: Windows refuses it unless
+    /// the calling process already owns the foreground, and when the user
+    /// double-clicks the exe from an Explorer window it is Explorer that owns it.
+    /// That is why the dashboard came up BEHIND the folder. Attaching our input
+    /// queue to the current foreground thread lifts the restriction for the
+    /// duration of the call.
+    /// </summary>
+    static void ForceForeground(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return;
+        try
+        {
+            if (IsIconic(hWnd)) ShowWindow(hWnd, SW_RESTORE);
+            else ShowWindow(hWnd, SW_SHOW);
+
+            IntPtr fore = GetForegroundWindow();
+            if (fore == hWnd) return;
+
+            uint foreThread = GetWindowThreadProcessId(fore, IntPtr.Zero);
+            uint thisThread = GetCurrentThreadId();
+            bool attached = false;
+            if (foreThread != 0 && foreThread != thisThread)
+            {
+                attached = AttachThreadInput(foreThread, thisThread, true);
+            }
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            if (attached) AttachThreadInput(foreThread, thisThread, false);
+        }
+        catch { /* cosmetic only -- never worth failing the launch over */ }
+    }
 
     // Held for the process lifetime so it is not collected; a released mutex
     // would let a second instance through.
@@ -967,9 +1013,33 @@ public static class Launcher
     {
         IntPtr found = FindDashboardWindow();
         if (found == IntPtr.Zero) return false;
-        if (IsIconic(found)) ShowWindow(found, SW_RESTORE);
-        SetForegroundWindow(found);
+        ForceForeground(found);
         return true;
+    }
+
+    /// <summary>
+    /// Raise the dashboard window as soon as the browser has created it.
+    ///
+    /// Process.Start returns immediately; the window does not exist yet, so
+    /// there is nothing to raise at that point. Polling on a background thread
+    /// keeps the tray UI responsive. Explorer holds the foreground when the exe
+    /// is double-clicked from a folder, which is what put the window behind it.
+    /// </summary>
+    static void RaiseWhenReady()
+    {
+        Thread t = new Thread(delegate()
+        {
+            // ~6 s total: a cold browser start is slow, but waiting forever would
+            // mean stealing focus long after the user moved on to something else.
+            for (int i = 0; i < 40; i++)
+            {
+                Thread.Sleep(150);
+                IntPtr h = FindDashboardWindow();
+                if (h != IntPtr.Zero) { ForceForeground(h); return; }
+            }
+        });
+        t.IsBackground = true;
+        t.Start();
     }
 
     // ------------------------------------------------------------- browser
@@ -981,6 +1051,13 @@ public static class Launcher
     // which cannot render this page (CSS variables, flex gap, position sticky).
     static string FindBrowser()
     {
+        // The user's default browser comes first. The page is hosted by whatever
+        // browser we pick, and every link it opens lands in that same browser --
+        // so preferring Chrome here is what made links open in Chrome on a
+        // machine where the default was Edge.
+        string preferred = DefaultChromiumBrowser();
+        if (preferred != null) return preferred;
+
         string[] exes = new string[] { "chrome.exe", "msedge.exe" };
         foreach (string exe in exes)
         {
@@ -995,6 +1072,71 @@ public static class Launcher
             @"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
         };
         foreach (string g in guesses) if (File.Exists(g)) return g;
+        return null;
+    }
+
+    /// Chromium-based engines understand --app=. Firefox does not, so a Firefox
+    /// default falls through to the list above and keeps the chromeless window.
+    static readonly string[] ChromiumExes = new string[] {
+        "chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe",
+        "chromium.exe", "thorium.exe", "yandex.exe", "360chrome.exe"
+    };
+
+    /// <summary>
+    /// The default https handler, if it is Chromium-based.
+    /// Returns null for Firefox, a missing association, or anything unparsable.
+    /// </summary>
+    static string DefaultChromiumBrowser()
+    {
+        try
+        {
+            string progId = null;
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("ProgId");
+                    if (v != null) progId = v.ToString();
+                }
+            }
+            if (string.IsNullOrEmpty(progId)) return null;
+
+            string cmd = null;
+            using (RegistryKey k = Registry.ClassesRoot.OpenSubKey(
+                progId + @"\shell\open\command"))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("");
+                    if (v != null) cmd = v.ToString();
+                }
+            }
+            if (string.IsNullOrEmpty(cmd)) return null;
+
+            string exe = ExeFromCommand(cmd);
+            if (exe == null || !File.Exists(exe)) return null;
+
+            string name = Path.GetFileName(exe).ToLowerInvariant();
+            foreach (string ok in ChromiumExes) if (name == ok) return exe;
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// Pull the executable path out of a registry "open command" string, which
+    /// is usually quoted and always followed by argument placeholders like "%1".
+    static string ExeFromCommand(string cmd)
+    {
+        cmd = cmd.Trim();
+        if (cmd.StartsWith("\""))
+        {
+            int end = cmd.IndexOf('"', 1);
+            if (end > 1) return cmd.Substring(1, end - 1);
+            return null;
+        }
+        int sp = cmd.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        if (sp >= 0) return cmd.Substring(0, sp + 4);
         return null;
     }
 
@@ -1034,6 +1176,7 @@ public static class Launcher
                 // in the user's own browser window, and closing THAT would take
                 // their other tabs with it -- so the flag stays false there.
                 OwnAppWindow = true;
+                RaiseWhenReady();
                 return;
             }
             catch { /* fall through to the default handler */ }

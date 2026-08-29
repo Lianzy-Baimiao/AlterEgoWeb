@@ -172,14 +172,47 @@
       if (e.key === 'Escape') closeAll(null);
     });
 
-    doc.getElementById('btn-print').addEventListener('click', function () {
-      global.print();
-    });
     doc.getElementById('btn-xlsx').addEventListener('click', AE.exportXlsx);
-    doc.getElementById('btn-csv').addEventListener('click', AE.exportCsv);
+    wireExportMenu();
 
     wireTheme();
     wireRefresh();
+  }
+
+  // The caret menu next to 导出 Excel. Kept here rather than in export.js so all
+  // the header wiring stays in one place.
+  function wireExportMenu() {
+    var more = doc.getElementById('btn-export-more');
+    var menu = doc.getElementById('export-menu');
+    if (!more || !menu) return;
+
+    function setOpen(on) {
+      menu.hidden = !on;
+      more.setAttribute('aria-expanded', on ? 'true' : 'false');
+    }
+
+    more.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setOpen(menu.hidden);
+    });
+
+    doc.addEventListener('click', function (e) {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== more) setOpen(false);
+    });
+    doc.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') setOpen(false);
+    });
+
+    doc.getElementById('btn-csv').addEventListener('click', function () {
+      setOpen(false);
+      AE.exportCsv();
+    });
+    doc.getElementById('btn-print').addEventListener('click', function () {
+      // Close first: the menu is inside <header>, and an open menu would be
+      // painted into the printout.
+      setOpen(false);
+      global.print();
+    });
   }
 
   // ------------------------------------------------------------ theme switch

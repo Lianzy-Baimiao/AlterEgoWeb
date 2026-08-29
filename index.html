@@ -18,6 +18,11 @@
   ============================================================================
 -->
 <title>魔兽多角色看板</title>
+<!-- The launcher opens this page with --app=, and a Chromium app window paints
+     its title bar from theme-color. applyThemeColor() in render.js rewrites the
+     value on every theme/skin change; this initial one matches the default dark
+     skin so the title bar is right on the very first paint, before JS runs. -->
+<meta name="theme-color" content="#1b1e24">
 <link rel="stylesheet" href="app/style.css">
 </head>
 <body data-theme="dark">
@@ -54,9 +59,18 @@
 
     <button type="button" id="btn-vault">备份箱</button>
     <button type="button" id="btn-trends">周趋势</button>
-    <button type="button" id="btn-xlsx">导出 Excel</button>
-    <button type="button" id="btn-csv">导出 CSV</button>
-    <button type="button" id="btn-print">打印 / PDF</button>
+    <!-- Excel is what nearly everyone wants; CSV and 打印 sat in the header
+         costing two slots for the rare case. Split button: primary action stays
+         one click, the other two move behind the caret. -->
+    <span class="split" id="export-split">
+      <button type="button" id="btn-xlsx" title="导出为 Excel 工作簿（.xlsx）">导出 Excel</button>
+      <button type="button" id="btn-export-more" class="split-more" title="其它导出方式"
+              aria-haspopup="menu" aria-expanded="false">▾</button>
+      <div class="menu" id="export-menu" role="menu" hidden>
+        <button type="button" id="btn-csv" role="menuitem">导出 CSV</button>
+        <button type="button" id="btn-print" role="menuitem">打印 / PDF</button>
+      </div>
+    </span>
     <!-- Populated by AE.renderLayoutPicker(); stays hidden until at least one
          layout has been saved, so it costs nothing for people who never use it. -->
     <span class="pick" id="layout-pick-wrap" style="display:none">
