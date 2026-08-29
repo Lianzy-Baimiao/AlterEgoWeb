@@ -330,6 +330,29 @@
       (m.season && m.season.english ? '\n' + m.season.english : '') +
       '\n中文名是从宝库要求文案里还原的';
 
+    // Version label first and unconditionally. It used to be written by
+    // renderUpdateBanner(), which is called at the END of the warnings block --
+    // below an early return. So dismissing the 「注意」 banner took the version
+    // number away with it, and on a clean scan the update notice never appeared
+    // at all. It is the one thing every bug report needs, so it is now the one
+    // thing nothing can suppress.
+    var ver = doc.getElementById('version-info');
+    if (ver) {
+      var u = m.update || {};
+      ver.textContent = 'v' + (m.toolVersion || '?');
+      var tip = ['看板 v' + (m.toolVersion || '?')];
+      tip.push('AlterEgo 插件 ' + (m.addonVersion || '未知'));
+      tip.push('扫描于 ' + (m.scannedAtLocal || '?'));
+      if (u.checked && u.latestVersion) tip.push('最新发布 ' + u.latestVersion);
+      else if (u.error) tip.push('更新检查未完成：' + u.error);
+      ver.title = tip.join('\n');
+    }
+
+    renderWarnings(m);
+    renderUpdateBanner();
+  }
+
+  function renderWarnings(m) {
     var warn = [];
     m.sources.forEach(function (s) {
       if (s.parseError) warn.push(s.displayName + '：解析失败');
@@ -356,8 +379,6 @@
       save();
       box.style.display = 'none';
     };
-
-    renderUpdateBanner();
   }
 
   function signature(s) {
@@ -372,18 +393,11 @@
    * Deliberately silent when the check did not succeed: on a Chinese network
    * api.github.com is frequently unreachable, and "couldn't check for updates"
    * every single launch is noise, not information. The version number in the
-   * header is always shown, so nothing is hidden.
+   * header is written by renderTopBar regardless, so nothing is hidden.
    */
   function renderUpdateBanner() {
     var m = state.model;
     var u = m.update || {};
-    var ver = doc.getElementById('version-info');
-    if (ver) {
-      ver.textContent = 'v' + (m.toolVersion || '?');
-      ver.title = u.checked
-        ? ('最新发布版本 ' + u.latestVersion)
-        : (u.error ? ('更新检查未完成：' + u.error) : '');
-    }
 
     var box = doc.getElementById('update-banner');
     if (!box) return;
