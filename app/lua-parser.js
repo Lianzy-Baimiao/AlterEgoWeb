@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/lua-parser.js
+ * WowAltBoard - app/lua-parser.js
  *
  * A real tokenizer + recursive-descent parser for WoW SavedVariables Lua.
  *

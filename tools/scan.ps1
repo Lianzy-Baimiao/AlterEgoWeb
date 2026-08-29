@@ -1,5 +1,5 @@
 ﻿<#
-  AlterEgoWeb - scan.ps1
+  WowAltBoard - scan.ps1
   Discovers WoW installs, reads every AlterEgo.lua SavedVariables file, and emits
   data/data.js for the local dashboard.
 
@@ -27,8 +27,8 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $SCHEMA_VERSION = 1
-$TOOL_VERSION   = '1.5.0'
-$REPO           = 'Lianzy-Baimiao/AlterEgoWeb'
+$TOOL_VERSION   = '1.6.0'
+$REPO           = 'Lianzy-Baimiao/WowAltBoard'
 $AUTHOR         = '白描'
 
 # --------------------------------------------------------------------------
@@ -68,7 +68,7 @@ function Stop-Friendly {
 }
 
 Write-Host ''
-Write-Host "AlterEgoWeb scanner v$TOOL_VERSION"
+Write-Host "WowAltBoard scanner v$TOOL_VERSION"
 Write-Host ('-' * 62)
 
 foreach ($d in @($DataDir, $HistDir)) {
@@ -87,6 +87,7 @@ $Config = [pscustomobject]@{
     absorbDownloadedSettings = $true
     checkForUpdates          = $true
     collectBackups           = $true
+    readBagSync              = $true
     includeFlavors           = @('_retail_')
 }
 if (Test-Path -LiteralPath $ConfigPath) {
@@ -660,7 +661,7 @@ function Write-HistorySnapshot {
 
     $file = Join-Path $HistDir ("$WeekKey.js")
     $sb = New-Object System.Text.StringBuilder
-    [void]$sb.AppendLine('// AlterEgoWeb weekly snapshot. Generated -- do not edit.')
+    [void]$sb.AppendLine('// WowAltBoard weekly snapshot. Generated -- do not edit.')
     [void]$sb.AppendLine('window.AE_HISTORY = window.AE_HISTORY || [];')
     [void]$sb.AppendLine('window.AE_HISTORY.push({')
     [void]$sb.AppendLine("  week: $WeekKey,")
@@ -693,7 +694,7 @@ function Write-HistorySnapshot {
     }
 
     $mb = New-Object System.Text.StringBuilder
-    [void]$mb.AppendLine('// AlterEgoWeb history index. Metadata only -- the snapshots')
+    [void]$mb.AppendLine('// WowAltBoard history index. Metadata only -- the snapshots')
     [void]$mb.AppendLine('// themselves are loaded on demand when the trend view is opened.')
     [void]$mb.AppendLine('window.AE_MANIFEST = { history: [')
     foreach ($f in ($all | Sort-Object { [int64]$_.BaseName })) {
@@ -707,6 +708,63 @@ function Write-HistorySnapshot {
 
     $totalMb = (($all | Measure-Object Length -Sum).Sum) / 1MB
     Write-Step ('week {0}, {1} snapshots kept, {2:N1} MB total' -f $WeekKey, $all.Count, $totalMb)
+}
+
+# --------------------------------------------------------------------------
+# BagSync: professions
+# --------------------------------------------------------------------------
+# AlterEgo does not track professions -- there is no profession field anywhere in
+# its SavedVariables, and its source only mentions Professions for the crafted-
+# quality star icons. BagSync does: BagSyncDB[realm][character].professions holds
+# every skill line with its localized name and per-expansion skill levels, and
+# its per-character `guid` is the same Player-707-XXXXXXXX key AlterEgo uses, so
+# the two join without matching on name+realm.
+#
+# This is OPTIONAL by design. No BagSync means no file here, which means the
+# profession columns simply never exist -- the tool is still an AlterEgo
+# dashboard first. Set readBagSync=false in config.json to skip it outright.
+#
+# Emitted to its own data/bagsync.js rather than folded into data.js: these files
+# are 14-165 KB each (mostly bag/bank/mail contents we do not care about) and
+# keeping them out of data.js means a user without BagSync pays nothing.
+function Get-BagSyncSources {
+    param([Parameter(Mandatory)]$Roots)
+
+    $out     = New-Object System.Collections.ArrayList
+    $exclude = @($Config.excludeAccounts)
+
+    foreach ($root in $Roots) {
+        foreach ($flavor in @(Get-FlavorDirs -RootPath $root.path)) {
+            $acctRoot = Join-Path $flavor.FullName 'WTF\Account'
+            if (-not (Test-Path -LiteralPath $acctRoot)) { continue }
+            $acctDirs = @(Get-ChildItem -LiteralPath $acctRoot -Directory -ErrorAction SilentlyContinue |
+                          Where-Object { $_.Name -ne 'SavedVariables' })
+            foreach ($acct in $acctDirs) {
+                if ($exclude -contains $acct.Name) { continue }
+                $p = Join-Path $acct.FullName 'SavedVariables\BagSync.lua'
+                if (-not (Test-Path -LiteralPath $p)) { continue }
+
+                # Read-SavedVariable, not Read-SharedUtf8: same mid-write hazard
+                # as AlterEgo.lua, same .bak fallback worth having.
+                $res = Read-SavedVariable $p
+                if (-not $res) { Write-Warn "BagSync.lua unreadable: $($acct.Name)"; continue }
+
+                $item = Get-Item -LiteralPath $res.UsedPath
+                [void]$out.Add([pscustomobject]@{
+                    id         = Get-SafeId $acct.Name
+                    account    = $acct.Name
+                    path       = $p
+                    size       = $item.Length
+                    mtime      = [int64]([DateTimeOffset]$item.LastWriteTimeUtc).ToUnixTimeSeconds()
+                    mtimeLocal = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                    lua        = $res.Text
+                })
+                Write-Step ('{0,-16} {1,6:N0} KB  {2}' -f `
+                    $acct.Name, ($item.Length / 1KB), $item.LastWriteTime.ToString('MM-dd HH:mm'))
+            }
+        }
+    }
+    return $out
 }
 
 # --------------------------------------------------------------------------
@@ -786,7 +844,7 @@ function Get-UpdateInfo {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $api = "https://api.github.com/repos/$Repo/releases/latest"
         $r = Invoke-RestMethod -Uri $api -TimeoutSec 8 -UseBasicParsing `
-                 -Headers @{ 'User-Agent' = 'AlterEgoWeb'; 'Accept' = 'application/vnd.github+json' }
+                 -Headers @{ 'User-Agent' = 'WowAltBoard'; 'Accept' = 'application/vnd.github+json' }
         $result.checked = $true
         $result.latestVersion = [string]$r.tag_name
         if ($r.html_url) { $result.url = [string]$r.html_url }
@@ -847,6 +905,14 @@ try {
         if ($backups.Count -eq 0) { Write-Step 'none found' }
     }
 
+    $bagSync = New-Object System.Collections.ArrayList
+    if ($Config.readBagSync) {
+        Write-Host ''
+        Write-Host 'Looking for BagSync (professions)...'
+        $bagSync = Get-BagSyncSources -Roots $roots
+        if ($bagSync.Count -eq 0) { Write-Step 'not installed -- profession columns will be off' }
+    }
+
     Write-Host ''
     Write-Host 'Checking for updates...'
     $update = Get-UpdateInfo -Repo $REPO -CurrentVersion $TOOL_VERSION
@@ -900,6 +966,14 @@ try {
     }
     [void]$sb.AppendLine('  ],')
 
+    # Metadata only -- the payloads are in data/bagsync.js. `enabled` is what lets
+    # the page tell "BagSync is not installed" (offer the download) apart from
+    # "you switched it off in config.json" (say nothing).
+    [void]$sb.AppendLine('  bagSync: {')
+    [void]$sb.AppendLine("    enabled: $(if ($Config.readBagSync) { 'true' } else { 'false' }),")
+    [void]$sb.AppendLine("    accounts: $($bagSync.Count),")
+    [void]$sb.AppendLine('  },')
+
     [void]$sb.AppendLine('  addonTables: {')
     foreach ($k in ($addon.tables.Keys | Sort-Object)) {
         [void]$sb.AppendLine("    $(ConvertTo-JsString $k): $(ConvertTo-JsString $addon.tables[$k]),")
@@ -944,6 +1018,29 @@ try {
     if (-not (Test-Path -LiteralPath $settingsPath)) {
         Write-JsFile -Path $settingsPath -Content "window.AE_SETTINGS = null;`r`n"
     }
+
+    # ---- emit data/bagsync.js (professions; loaded eagerly, may be empty) ----
+    # Always written, even when empty, so index.html can load it unconditionally
+    # the way it already does for settings.js and manifest.js.
+    $gb = New-Object System.Text.StringBuilder
+    [void]$gb.AppendLine('// BagSync SavedVariables, read for the profession columns.')
+    [void]$gb.AppendLine('// Optional: empty when BagSync is not installed. Generated -- do not edit.')
+    [void]$gb.AppendLine('window.AE_BAGSYNC = [')
+    foreach ($g in $bagSync) {
+        [void]$gb.AppendLine('  {')
+        [void]$gb.AppendLine("    id: $(ConvertTo-JsString $g.id),")
+        [void]$gb.AppendLine("    account: $(ConvertTo-JsString $g.account),")
+        [void]$gb.AppendLine("    path: $(ConvertTo-JsString $g.path),")
+        [void]$gb.AppendLine("    size: $($g.size),")
+        [void]$gb.AppendLine("    mtime: $($g.mtime),")
+        [void]$gb.AppendLine("    mtimeLocal: $(ConvertTo-JsString $g.mtimeLocal),")
+        [void]$gb.AppendLine("    lua: $(ConvertTo-JsString $g.lua),")
+        [void]$gb.AppendLine('  },')
+    }
+    [void]$gb.AppendLine('];')
+    Write-JsFile -Path (Join-Path $DataDir 'bagsync.js') -Content $gb.ToString()
+    $gbSize = (Get-Item -LiteralPath (Join-Path $DataDir 'bagsync.js')).Length
+    Write-Step ('bagsync.js: {0} accounts, {1:N0} KB' -f $bagSync.Count, ($gbSize / 1KB))
 
     # ---- emit data/backups.js (lazy-loaded by the page) --------------------
     $bb = New-Object System.Text.StringBuilder

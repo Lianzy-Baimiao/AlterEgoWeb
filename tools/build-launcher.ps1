@@ -1,7 +1,7 @@
 ﻿<#
-  AlterEgoWeb - tools/build-launcher.ps1
+  WowAltBoard - tools/build-launcher.ps1
 
-  Compiles "AlterEgo看板.exe", a tiny GUI launcher, so the tool can be started by
+  Compiles "魔兽看板.exe", a tiny GUI launcher, so the tool can be started by
   double-clicking a normal-looking program instead of a .bat file.
 
   Why this works without installing anything: the C# compiler ships inside .NET
@@ -28,10 +28,10 @@ $ErrorActionPreference = 'Stop'
 $ToolsDir = $PSScriptRoot
 if (-not $ToolsDir) { $ToolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $BaseDir = Split-Path -Parent $ToolsDir
-$ExePath = Join-Path $BaseDir 'AlterEgo看板.exe'
+$ExePath = Join-Path $BaseDir '魔兽看板.exe'
 
 Write-Host ''
-Write-Host 'Building AlterEgoWeb launcher...'
+Write-Host 'Building WowAltBoard launcher...'
 
 # ---------------------------------------------------------------------------
 # Icon: a 32x32 PNG wrapped in an ICO container.
@@ -100,7 +100,7 @@ if (-not (Test-Path -LiteralPath $IconPath)) {
 # "newline in constant" on a perfectly valid string.
 # ---------------------------------------------------------------------------
 $T = @{
-    Title      = 'AlterEgo 本地看板'
+    Title      = '魔兽多角色看板'
     Scanning   = '正在扫描魔兽世界目录...'
     NoScript   = "找不到 tools\scan.ps1。`n请确认这个程序和 index.html、tools 文件夹在同一个目录里。"
     Footnote   = '想看完整的扫描过程，可以双击本文件夹里的 启动.bat。'
@@ -111,10 +111,10 @@ $T = @{
     TrayOpen   = '打开看板'
     TrayRescan = '立即重新扫描'
     TrayExit   = '退出'
-    TrayIdle   = 'AlterEgo 本地看板 - 正在监视游戏存档'
-    TrayBusy   = 'AlterEgo 本地看板 - 正在重新扫描...'
+    TrayIdle   = '魔兽多角色看板 - 正在监视游戏存档'
+    TrayBusy   = '魔兽多角色看板 - 正在重新扫描...'
     TrayDone   = '数据已更新，页面会在下次刷新时显示'
-    TrayNoWatch= 'AlterEgo 本地看板'
+    TrayNoWatch= '魔兽多角色看板'
     TraySetDir = '设置游戏目录...'
     TrayShortcut='创建桌面快捷方式'
     PickDir    = '选择魔兽世界的安装目录（包含 _retail_ 的那一层）'
@@ -122,7 +122,7 @@ $T = @{
     DirSaved   = '游戏目录已保存，正在重新扫描...'
     ShortcutOk = '桌面快捷方式已创建。'
     ShortcutBad= '创建快捷方式失败：'
-    PageTitle  = 'AlterEgo 本地看板'
+    PageTitle  = '魔兽多角色看板'
     TrayUpdate = '检查更新'
     UpdNewer   = '有新版本 {0}（当前 v{1}），点这里打开发布页'
     UpdCurrent = '已经是最新版本 v{0}'
@@ -284,6 +284,9 @@ public static class Launcher
     static string UpdateUrl;
     static System.Windows.Forms.Timer WindowWatch;
     static bool SawWindow;
+    // True once we have opened the dashboard in Chrome/Edge app mode, i.e. in a
+    // window that contains nothing but our page. Gates closing it on exit.
+    static bool OwnAppWindow;
     // "" = ask on first close, "tray" = stay resident, "exit" = quit with it.
     static string CloseBehaviour = "";
     static ToolStripMenuItem[] BehaveItems;
@@ -801,10 +804,26 @@ public static class Launcher
         if (CloseBehaviour == "exit") QuitApp();
     }
 
+    // Tray 退出 used to leave the dashboard window sitting there: the launcher
+    // process ended, but the window belongs to Chrome, not to us. "退出" on the
+    // only UI the program has should take that UI with it.
     static void QuitApp()
     {
+        // Stop the watchers first. Otherwise the window vanishing below looks
+        // exactly like the user closing it, and OnWindowWatchTick would pop the
+        // "keep it in the tray?" question on the way out.
+        if (WindowWatch != null) WindowWatch.Stop();
+        if (Poll != null) Poll.Stop();
+        if (Debounce != null) Debounce.Stop();
+
         IntPtr h = FindDashboardWindow();
-        if (h != IntPtr.Zero) SaveGeometry(h);
+        if (h != IntPtr.Zero)
+        {
+            SaveGeometry(h);
+            // PostMessage, not SendMessage: we are not waiting on another
+            // process's message loop to finish tearing a window down.
+            if (OwnAppWindow) PostMessage(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        }
         if (Tray != null) Tray.Visible = false;
         Application.Exit();
     }
@@ -909,10 +928,13 @@ public static class Launcher
     static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool IsIconic(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr param);
 
     const int SW_RESTORE = 9;
+    const uint WM_CLOSE = 0x0010;
 
     // Held for the process lifetime so it is not collected; a released mutex
     // would let a second instance through.
@@ -1007,6 +1029,11 @@ public static class Launcher
                 psi.Arguments = "--app=\"" + url + "\" " + GeometryArgs();
                 psi.UseShellExecute = false;
                 Process.Start(psi);
+                // Recorded so 退出 knows it may close that window: an --app= window
+                // holds nothing but our page. The fallback below may well be a tab
+                // in the user's own browser window, and closing THAT would take
+                // their other tabs with it -- so the flag stays false there.
+                OwnAppWindow = true;
                 return;
             }
             catch { /* fall through to the default handler */ }
@@ -1291,7 +1318,7 @@ public static class Launcher
         // Local\ rather than Global\: this is a per-user desktop tool, and a
         // Global name would collide between users on a shared machine.
         bool isFirst;
-        Single = new Mutex(true, "Local\\AlterEgoWeb.SingleInstance", out isFirst);
+        Single = new Mutex(true, "Local\\WowAltBoard.SingleInstance", out isFirst);
         if (!isFirst)
         {
             if (!FocusDashboard() && File.Exists(PageFile)) OpenDashboard();
@@ -1417,7 +1444,7 @@ if (Test-Path -LiteralPath $ExePath) {
     $kb = [math]::Round((Get-Item -LiteralPath $ExePath).Length / 1KB, 1)
     Write-Host "  built: $ExePath ($kb KB)"
     Write-Host ''
-    Write-Host 'Done. Double-click "AlterEgo看板.exe" to use it.' -ForegroundColor Green
+    Write-Host 'Done. Double-click "魔兽看板.exe" to use it.' -ForegroundColor Green
 } else {
     Write-Host '  build produced no file' -ForegroundColor Red
     exit 1

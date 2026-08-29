@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/main.js
+ * WowAltBoard - app/main.js
  *
  * Boot: check the capability probe, load settings, build the model, render.
  * Everything that can fail says so on the page rather than leaving a blank table.
@@ -48,7 +48,8 @@
     try {
       model = AE.buildModel(global.AE_DATA,
                             loaded.settings.learnedDungeonNames,
-                            loaded.settings.dungeonNameOverrides);
+                            loaded.settings.dungeonNameOverrides,
+                            global.AE_BAGSYNC);
     } catch (e) {
       fatal('数据解析失败', e.message);
       if (global.console) global.console.error(e);

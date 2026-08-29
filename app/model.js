@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/model.js
+ * WowAltBoard - app/model.js
  *
  * Turns the raw AlterEgoDB tables from every account into one flat list of
  * character rows plus the column sets the table should show.
@@ -461,6 +461,154 @@
     };
   }
 
+  // ---------------------------------------------------------- professions
+  // AlterEgo has NO profession data -- there is no such field anywhere in its
+  // SavedVariables, and its source only mentions Professions for the crafted-
+  // quality star icons. This comes from BagSync instead, which is optional; see
+  // labels.js for the primary/secondary split and why unlisted skill lines are
+  // dropped, and tools/scan.ps1 for how the file gets here.
+  //
+  // Shape on disk:
+  //   BagSyncDB[realm][characterName] = {
+  //     guid = "Player-707-XXXXXXXX",
+  //     professions = { [skillLineID] = {
+  //       name, recipeCount,
+  //       categories = { [catID] = { name, orderIndex,
+  //                                  skillLineCurrentLevel, skillLineMaxLevel } } } } }
+  //
+  // The level is NOT on the profession itself: in retail only the per-expansion
+  // child skill lines carry one, and orderIndex 1 is the newest expansion. Taking
+  // orderIndex 1 rather than a hardcoded expansion id means a new expansion needs
+  // no change here. Legacy lines (356 钓鱼) do have a top-level level, which is
+  // the fallback.
+  // Picking "the current expansion's number" out of `categories` is the whole
+  // difficulty. Two rules were tried against the real files and are WRONG:
+  //
+  //   * orderIndex 1 = newest. It is neither unique nor consistently newest.
+  //     烹饪 has six classic 之道 sub-lines all sitting at orderIndex 1 right next
+  //     to 至暗之夜料理; and for 炼金术, 卡兹阿加 is orderIndex 1 while 至暗之夜 is 2.
+  //   * treat every category as a skill line. Most of them are leaf
+  //     sub-categories (零件 / 爆炸物 / 炸弹 / 附录 I - 术语) with no skill level at
+  //     all. Coercing their missing level to 0 is how the first cut of this
+  //     rendered "工程学 0" for a character with 卡兹阿加结构图 68/100.
+  //
+  // What does work: category IDs are handed out in content order, so among the
+  // categories that actually carry a level, the largest ID is the newest
+  // expansion. Cross-checked against every record on this machine that also has
+  // BagSync's own top-level level -- 8 agreements, 0 disagreements. That
+  // top-level value is preferred when present, since it is BagSync's own answer;
+  // 26 records here do not have one, which is why the ID rule has to exist.
+  function mapProfession(id, p) {
+    var cats = AE.asMap(p.categories);
+    var segs = [];
+    Object.keys(cats).forEach(function (k) {
+      var c = cats[k];
+      if (!c || typeof c !== 'object') return;
+      // No level means a leaf sub-category, not an expansion skill line.
+      if (typeof c.skillLineMaxLevel !== 'number') return;
+      segs.push({
+        catId: Number(k),
+        name: str(c.name),
+        order: num(c.orderIndex, 999),
+        cur: num(c.skillLineCurrentLevel),
+        max: num(c.skillLineMaxLevel)
+      });
+    });
+    segs.sort(function (a, b) { return b.catId - a.catId; });   // newest first
+
+    var cur = null, max = null, segName = '';
+    if (typeof p.skillLineCurrentLevel === 'number') {
+      cur = num(p.skillLineCurrentLevel);
+      max = num(p.skillLineMaxLevel);
+      segName = segs.length ? segs[0].name : str(p.name);
+    } else if (segs.length) {
+      cur = segs[0].cur;
+      max = segs[0].max;
+      segName = segs[0].name;
+    }
+
+    return {
+      id: Number(id),
+      name: str(p.name),
+      recipes: num(p.recipeCount),
+      cur: cur,
+      max: max,
+      segName: segName,
+      segments: segs
+    };
+  }
+
+  /** BagSync payloads -> { byGuid: {guid: {primary:[], secondary:{}}}, ... }. */
+  function mapBagSync(bagSyncRaw) {
+    var out = { byGuid: {}, accounts: 0, characters: 0, parseErrors: [] };
+    var seenAt = {};   // guid -> mtime of the file it came from
+
+    // Newest file first, because one character can be recorded under two WoW
+    // accounts of the same Battle.net account and the two records are NOT
+    // equivalent: the older one predates the current expansion and so has no
+    // skill line for it at all. First write wins after this sort.
+    var payloads = AE.asArray(bagSyncRaw).slice().sort(function (a, b) {
+      return num(b && b.mtime) - num(a && a.mtime);
+    });
+
+    payloads.forEach(function (g) {
+      if (!g || !g.lua) return;
+      var db;
+      try {
+        db = AE.parseLuaGlobals(g.lua).globals.BagSyncDB;
+      } catch (e) {
+        out.parseErrors.push({
+          account: str(g.account, '?'),
+          message: String(e.message).split('\n')[0]
+        });
+        return;
+      }
+      if (!db || typeof db !== 'object') return;
+      out.accounts++;
+      var mtime = num(g.mtime);
+
+      Object.keys(db).forEach(function (realm) {
+        // BagSync keeps its own namespaces in the same table as the realms:
+        // options§, blacklist§, whitelist§, savedsearch§, warband§,
+        // forceDBReset§. The § suffix is the marker, so this needs no list.
+        if (/§$/.test(realm)) return;
+        var chars = db[realm];
+        if (!chars || typeof chars !== 'object') return;
+
+        Object.keys(chars).forEach(function (name) {
+          var c = chars[name];
+          if (!c || typeof c !== 'object' || !c.guid) return;
+          var guid = String(c.guid);
+          if (Object.prototype.hasOwnProperty.call(seenAt, guid) && seenAt[guid] >= mtime) return;
+
+          var profs = AE.asMap(c.professions);
+          var primary = [];
+          var secondary = {};
+          Object.keys(profs).forEach(function (id) {
+            var p = profs[id];
+            if (!p || typeof p !== 'object') return;
+            var rec = mapProfession(id, p);
+            if (L.isPrimaryProfession(id)) primary.push(rec);
+            else if (L.isSecondaryProfession(id)) secondary[rec.id] = rec;
+          });
+          if (!primary.length && !Object.keys(secondary).length) return;
+
+          // Sorted by skillLineID so a character's 专业1 is still 专业1 after the
+          // next scan. BagSync stores an unordered hash, and the game does not
+          // persist "first / second profession" anywhere either, so there is no
+          // real slot order to recover -- only a stable one to invent.
+          primary.sort(function (a, b) { return a.id - b.id; });
+
+          if (!Object.prototype.hasOwnProperty.call(seenAt, guid)) out.characters++;
+          seenAt[guid] = mtime;
+          out.byGuid[guid] = { primary: primary, secondary: secondary };
+        });
+      });
+    });
+
+    return out;
+  }
+
   // ------------------------------------------------------------ column sets
 
   function deriveColumns(characters, tables, activeSeason) {
@@ -566,13 +714,44 @@
     var currencyMeta = {};
     Object.keys(present).forEach(function (id) { currencyMeta[id] = present[id]; });
 
+    // --- Professions ------------------------------------------------------
+    // Two slot columns (专业1 / 专业2) rather than one column per profession:
+    // BagSync has no slot order to key off, and a column per profession would be
+    // 11 columns that are empty for almost every character.
+    //
+    // The slot count follows the data instead of being fixed at 2 -- no BagSync
+    // means 0 columns and the group disappears, and if a character somehow shows
+    // three primaries it gets a third column rather than silently losing one.
+    // Secondaries (烹饪 / 钓鱼) get a column each, but only when somebody has them.
+    var professionSlots = 0;
+    var professionNames = {};
+    var secondarySeen = {};
+    characters.forEach(function (ch) {
+      var pr = ch.professions;
+      if (!pr) return;
+      if (pr.primary.length > professionSlots) professionSlots = pr.primary.length;
+      pr.primary.forEach(function (p) { professionNames[p.id] = p.name; });
+      Object.keys(pr.secondary).forEach(function (id) {
+        secondarySeen[id] = true;
+        professionNames[id] = pr.secondary[id].name;
+      });
+    });
+    // labels.js order, not discovery order, so the columns do not shuffle when a
+    // different character happens to be scanned first.
+    var professionSecondaryIds = L.professionSecondaryIds.filter(function (id) {
+      return secondarySeen[id];
+    });
+
     return {
       dungeonIds: dungeonIds,
       raidColumns: raidColumns,
       currencyIds: currencyIds,
       delveCurrencyIds: delveCurrencyIds,
       currencyMeta: currencyMeta,
-      offSeasonCurrencies: offSeasonCurrencies
+      offSeasonCurrencies: offSeasonCurrencies,
+      professionSlots: professionSlots,
+      professionSecondaryIds: professionSecondaryIds,
+      professionNames: professionNames
     };
   }
 
@@ -793,11 +972,14 @@
    * @param {object} [learnedNames]  cached {challengeModeID: localizedName}
    * @returns {object} the view model
    */
-  AE.buildModel = function (raw, learnedNames, nameOverrides) {
+  AE.buildModel = function (raw, learnedNames, nameOverrides, bagSyncRaw) {
     if (!raw || !raw.sources) throw new Error('AE_DATA is missing or malformed');
 
     var tables = buildTables(raw.addonTables);
     var scannedAt = num(raw.scannedAt, Math.floor(Date.now() / 1000));
+    // Parsed up front, but a failure here must never take the dashboard down --
+    // professions are an optional extra bolted onto an AlterEgo dashboard.
+    var bagSync = mapBagSync(bagSyncRaw);
 
     var characters = [];
     var sources = [];
@@ -885,6 +1067,9 @@
       // Only a positive, different season counts as a mismatch. 0 / null means
       // "not recorded", which is common and not a problem.
       ch.seasonMismatch = !!ch.season && activeSeason > 0 && ch.season !== activeSeason;
+      // Joined on GUID, not name+realm: BagSync records the same
+      // Player-707-XXXXXXXX key the addon uses for global.characters.
+      ch.professions = bagSync.byGuid[ch.guid] || null;
     });
     sources.forEach(function (s) {
       s.seasonMismatch = s.seasons.length > 0 && s.seasons.indexOf(activeSeason) < 0;
@@ -925,6 +1110,16 @@
       weeklyReset: weeklyReset,
       gamePrefs: globalPrefs || { showRealms: true, showZeroRatedCharacters: true, hiddenCurrencies: [] },
       columns: columns,
+      // Everything the UI needs to explain the profession columns, including
+      // their absence: `enabled` false means the user switched BagSync reading
+      // off, accounts 0 with enabled true means it is not installed.
+      bagSync: {
+        enabled: (raw.bagSync || {}).enabled !== false,
+        filesFound: num((raw.bagSync || {}).accounts),
+        accountsParsed: bagSync.accounts,
+        characters: bagSync.characters,
+        parseErrors: bagSync.parseErrors
+      },
       dungeonNames: dungeonNames,
       dungeonShortNames: dungeonShortNames,
       raidShortNames: raidShortNames,

@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/export.js
+ * WowAltBoard - app/export.js
  *
  * Excel and CSV export of whatever the table is currently showing.
  *
@@ -330,6 +330,19 @@
     if (col.currencyId) {
       var c = ch.currencies.byId[col.currencyId];
       return c ? { v: c.quantity, num: true } : { v: '', num: false };
+    }
+
+    // Professions. The slot columns carry a name, so they export as text like
+    // "铭文 100"; the secondaries are a bare level and export as a number.
+    if (col.professionSlot != null) {
+      var ps = ch.professions && ch.professions.primary[col.professionSlot];
+      if (!ps) return { v: '', num: false };
+      return { v: ps.cur != null ? (ps.name + ' ' + ps.cur) : ps.name, num: false };
+    }
+
+    if (col.professionId) {
+      var sec = ch.professions && ch.professions.secondary[col.professionId];
+      return (sec && sec.cur != null) ? { v: sec.cur, num: true } : { v: '', num: false };
     }
 
     switch (col.id) {

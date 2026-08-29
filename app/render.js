@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/render.js
+ * WowAltBoard - app/render.js
  *
  * Builds the table DOM exactly once, then drives all show/hide through a single
  * generated <style> block. With ~16 rows x ~60 columns there are ~960 cells;

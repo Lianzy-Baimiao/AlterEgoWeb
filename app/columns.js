@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/columns.js
+ * WowAltBoard - app/columns.js
  *
  * The column registry. Every column is declared once here with an id, a group,
  * a sort value, and a renderer. render.js walks this list; the settings panel
@@ -22,6 +22,7 @@
     { id: 'delve',    label: '地下堡 / 藏宝图' },
     { id: 'raid',     label: '团队副本' },
     { id: 'currency', label: '纹章与货币' },
+    { id: 'prof',     label: '专业' },
     { id: 'prey',     label: '狩猎' },
     { id: 'links',    label: '外部主页' },
     { id: 'gold',     label: '金币' }
@@ -584,6 +585,107 @@
     });
   }
 
+  // ---------------------------------------------------- profession group
+  // Fed by BagSync, which is optional -- model.columns.professionSlots is 0 and
+  // professionSecondaryIds is empty when it is not installed, so this whole group
+  // simply produces no columns and render.js hides the band.
+  //
+  // The cell shows the CURRENT expansion's segment (卡兹阿加工艺图 100/100 reads as
+  // "铭文 100"), because that is the number that decides whether you can craft
+  // this tier. Every expansion's segment is in the tooltip.
+
+  /** "铭文 100 / 100" style tooltip block for one profession. */
+  function professionTitle(p) {
+    var lines = [p.name];
+    if (p.recipes) lines.push('已学配方　' + p.recipes + ' 个');
+    if (p.segments.length) {
+      lines.push('');
+      p.segments.forEach(function (s) {
+        lines.push(s.name + '　' + s.cur + ' / ' + s.max);
+      });
+    } else if (p.cur != null) {
+      lines.push('技能　' + p.cur + ' / ' + p.max);
+    }
+    lines.push('');
+    lines.push('来自 BagSync（AlterEgo 不记录专业）');
+    return lines.join('\n');
+  }
+
+  function paintProfession(td, p) {
+    td.appendChild(el('span', null, p.name));
+    if (p.cur != null) {
+      var full = p.max > 0 && p.cur >= p.max;
+      td.appendChild(el('span', 'sub', ' ' + p.cur));
+      if (full) td.className += ' full';
+      else if (p.cur > 1) td.className += ' partial';
+    }
+    td.title = professionTitle(p);
+  }
+
+  /** One of the two primary slots. `slot` is 0-based. */
+  function professionSlotColumn(slot) {
+    return {
+      id: 'prof:' + (slot + 1),
+      group: 'prof',
+      width: 96,
+      professionSlot: slot,
+      label: '专业 ' + (slot + 1),
+      headTitle: '第 ' + (slot + 1) + ' 个主专业，按 skillLineID 排序（游戏并没有把' +
+                 '“第一/第二专业”存进硬盘，所以这只是一个稳定的顺序，不是学习顺序）。' +
+                 '数字是当前资料片那一段的技能等级。',
+      // A name, so sorting groups everyone who has the same profession together --
+      // "我哪个号会附魔" is the question these columns exist to answer. Empty sorts
+      // last when descending, like the numeric columns' -1.
+      sort: function (ch) {
+        var p = ch.professions && ch.professions.primary[slot];
+        return p ? p.name : '';
+      },
+      render: function (td, ch) {
+        var p = ch.professions && ch.professions.primary[slot];
+        if (!p) return dash(td);
+        paintProfession(td, p);
+      }
+    };
+  }
+
+  /** 烹饪 / 钓鱼: one column each, only for the ones somebody actually has. */
+  function professionSecondaryColumn(id, name) {
+    return {
+      id: 'prof:sec:' + id,
+      group: 'prof',
+      width: 72,
+      align: 'right',
+      professionId: id,
+      label: name || ('#' + id),
+      headTitle: (name || ('#' + id)) + '\nskillLineID ' + id +
+                 '\n当前资料片那一段的技能等级',
+      sort: function (ch) {
+        var p = ch.professions && ch.professions.secondary[id];
+        return (p && p.cur != null) ? p.cur : -1;
+      },
+      render: function (td, ch) {
+        var p = ch.professions && ch.professions.secondary[id];
+        if (!p || p.cur == null) return dash(td);
+        td.appendChild(el('b', null, String(p.cur)));
+        if (p.max > 0) td.appendChild(el('span', 'sub', '/ ' + p.max));
+        if (p.max > 0 && p.cur >= p.max) td.className += ' full';
+        else if (p.cur > 1) td.className += ' partial';
+        td.title = professionTitle(p);
+      }
+    };
+  }
+
+  function professionColumns(model) {
+    var cols = [];
+    for (var i = 0; i < model.columns.professionSlots; i++) {
+      cols.push(professionSlotColumn(i));
+    }
+    model.columns.professionSecondaryIds.forEach(function (id) {
+      cols.push(professionSecondaryColumn(id, model.columns.professionNames[id]));
+    });
+    return cols;
+  }
+
   // --------------------------------------------------------------- link group
 
   function linkColumn(id, label, key, title) {
@@ -695,6 +797,7 @@
       .concat(delveColumns(model))
       .concat(raidColumns(model))
       .concat(currencyColumns(model))
+      .concat(professionColumns(model))
       .concat(preyColumns())
       .concat(linkColumns())
       .concat(goldColumns());

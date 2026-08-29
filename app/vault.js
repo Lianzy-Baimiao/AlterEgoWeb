@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/vault.js
+ * WowAltBoard - app/vault.js
  *
  * 备份箱: a place to keep the long import/export strings addons produce, outside
  * the game.

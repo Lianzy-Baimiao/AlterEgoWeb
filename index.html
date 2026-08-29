@@ -17,7 +17,7 @@
   mojibakes every Chinese character in the data.
   ============================================================================
 -->
-<title>AlterEgo 本地看板</title>
+<title>魔兽多角色看板</title>
 <link rel="stylesheet" href="app/style.css">
 </head>
 <body data-theme="dark">
@@ -30,7 +30,7 @@
 <div id="app">
 
   <header>
-    <h1>AlterEgo 本地看板</h1>
+    <h1>魔兽多角色看板</h1>
     <div class="meta">
       <span>扫描于 <b id="scan-time">-</b></span>
       <span id="season-info"></span>
@@ -38,7 +38,7 @@
     </div>
     <span class="spacer"></span>
 
-    <!-- Auto-refresh reloads the page; the launcher (AlterEgo看板.exe) watches
+    <!-- Auto-refresh reloads the page; the launcher (魔兽看板.exe) watches
          the SavedVariables files and re-runs the scan, so a /reload in game
          shows up here on the next tick. -->
     <label class="switch" id="autorefresh-wrap" title="每 30 秒重新载入一次页面。启动器会在游戏写盘后自动重扫。">
@@ -150,6 +150,10 @@ window.__AE_PROBE.storage = (function () {
 <script src="data/data.js" charset="utf-8"></script>
 <script src="data/settings.js" charset="utf-8"></script>
 <script src="data/manifest.js" charset="utf-8"></script>
+<!-- Optional: BagSync SavedVariables, the only source of profession data.
+     Empty (or absent) when BagSync is not installed -- the 专业 columns then
+     never get built. See tools/config.json -> readBagSync. -->
+<script src="data/bagsync.js" charset="utf-8"></script>
 
 <!-- Application, in dependency order. Classic scripts only. -->
 <script src="app/lua-parser.js" charset="utf-8"></script>

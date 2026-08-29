@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/labels.js
+ * WowAltBoard - app/labels.js
  *
  * Display labels and colors that are NOT present in the SavedVariables data.
  *
@@ -259,6 +259,46 @@
 
   L.preyDifficultyLabel = function (sym) {
     return L.preyDifficultyZh[sym] || String(sym || '').replace('PREY_DIFFICULTY_', '');
+  };
+
+  // ------------------------------------------------------------- professions
+  // Profession NAMES are not hardcoded: BagSync stores the localized name on
+  // every skill line, so the same rule as dungeon names applies -- use the data.
+  //
+  // What is NOT in the data is which skill lines are primary (you get two) and
+  // which are secondary (everyone can have them). Without that split there is no
+  // way to fill a 专业1 / 专业2 column, because BagSync keeps a flat hash keyed by
+  // skillLineID with no slot order in it.
+  //
+  // Anything not listed here is deliberately dropped rather than shown. The known
+  // case is 794 考古学: removed from retail in 11.0, but BagSync still carries the
+  // old record, and a permanently-1/800 考古学 column is pure noise. If Blizzard
+  // ever adds a profession, add its skillLineID to one of these two lists.
+  L.professionPrimaryIds = [
+    171, // 炼金术
+    164, // 锻造
+    333, // 附魔
+    202, // 工程学
+    182, // 草药学
+    773, // 铭文
+    755, // 珠宝加工
+    165, // 制皮
+    186, // 采矿
+    393, // 剥皮
+    197  // 裁缝
+  ];
+
+  L.professionSecondaryIds = [
+    185, // 烹饪
+    356  // 钓鱼
+  ];
+
+  L.isPrimaryProfession = function (id) {
+    return L.professionPrimaryIds.indexOf(Number(id)) >= 0;
+  };
+
+  L.isSecondaryProfession = function (id) {
+    return L.professionSecondaryIds.indexOf(Number(id)) >= 0;
   };
 
 })(typeof window !== 'undefined' ? window : globalThis);

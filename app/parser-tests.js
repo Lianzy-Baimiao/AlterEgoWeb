@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/parser-tests.js
+ * WowAltBoard - app/parser-tests.js
  *
  * Test cases for lua-parser.js. Runs in the browser via tests.html and in node.
  * Every case here came from something actually observed in the SavedVariables
@@ -158,7 +158,35 @@
 
     ['hex number literal',
       'X = {\n["a"] = 0xFF,\n}',
-      function (g) { return g.X.a === 255 || J(g.X); }]
+      function (g) { return g.X.a === 255 || J(g.X); }],
+
+    // skillLineIDs are large sparse integers. If they ever collapsed into an
+    // array the profession lookup would silently read the wrong entries.
+    ['BagSync profession table keeps sparse int keys as an object',
+      'BagSyncDB = {\n["白银之手"] = {\n["沈怡"] = {\n' +
+      '["guid"] = "Player-707-06692A3F",\n["professions"] = {\n' +
+      '[773] = {\n["name"] = "铭文",\n["recipeCount"] = 99,\n["categories"] = {\n' +
+      '[1912] = {\n["name"] = "卡兹阿加工艺图",\n["orderIndex"] = 1,\n' +
+      '["skillLineCurrentLevel"] = 100,\n["skillLineMaxLevel"] = 100,\n},\n},\n},\n},\n},\n},\n}',
+      function (g) {
+        var c = g.BagSyncDB['白银之手']['沈怡'];
+        var p = c.professions['773'];
+        return (!Array.isArray(c.professions) &&
+                !Array.isArray(p.categories) &&
+                p.name === '铭文' &&
+                p.categories['1912'].orderIndex === 1 &&
+                p.categories['1912'].skillLineCurrentLevel === 100) || J(g.BagSyncDB);
+      }],
+
+    // BagSync stores its own settings in the same table as the realms. Their
+    // trailing § is what model.js filters on, so it has to survive parsing.
+    ['BagSync pseudo-realm keys keep their § suffix',
+      'BagSyncDB = {\n["options§"] = {\n["enableBagSync"] = true,\n},\n' +
+      '["warband§"] = {\n},\n}',
+      function (g) {
+        var keys = Object.keys(g.BagSyncDB).sort();
+        return (keys.length === 2 && keys[0] === 'options§' && keys[1] === 'warband§') || J(keys);
+      }]
   ];
 
   /**

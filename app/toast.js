@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/toast.js
+ * WowAltBoard - app/toast.js
  *
  * Transient corner notifications. Used for the things that otherwise happen
  * invisibly: an export lands in the browser's download folder with no feedback

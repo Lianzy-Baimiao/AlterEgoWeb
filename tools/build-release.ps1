@@ -1,5 +1,5 @@
 ﻿<#
-  AlterEgoWeb - tools/build-release.ps1
+  WowAltBoard - tools/build-release.ps1
 
   Packs a distributable zip for a GitHub Release.
 
@@ -33,7 +33,7 @@ if (-not $m.Success) { throw 'could not read $TOOL_VERSION from tools\scan.ps1' 
 $version = $m.Groups[1].Value
 
 Write-Host ''
-Write-Host "Packing AlterEgoWeb v$version"
+Write-Host "Packing WowAltBoard v$version"
 Write-Host ('-' * 62)
 
 if (-not $SkipBuild) {
@@ -47,8 +47,8 @@ $exe = Get-ChildItem -LiteralPath $BaseDir -Filter '*.exe' -File -ErrorAction Si
        Select-Object -First 1
 if (-not $exe) { throw 'no launcher exe found; run tools\build-launcher.ps1 first' }
 
-$stage = Join-Path $env:TEMP ("AlterEgoWeb-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
-$pkgDir = Join-Path $stage 'AlterEgoWeb'
+$stage = Join-Path $env:TEMP ("WowAltBoard-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$pkgDir = Join-Path $stage 'WowAltBoard'
 New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
 
 $include = @(
@@ -76,7 +76,7 @@ New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
     "这个文件夹由启动器自动生成，可以随时整个删掉重扫。`r`n里面是你的角色数据，不要上传到公开仓库。`r`n",
     [System.Text.UTF8Encoding]::new($true))
 
-$zip = Join-Path $BaseDir ("AlterEgoWeb-v$version.zip")
+$zip = Join-Path $BaseDir ("WowAltBoard-v$version.zip")
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem

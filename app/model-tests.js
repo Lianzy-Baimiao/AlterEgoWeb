@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/model-tests.js
+ * WowAltBoard - app/model-tests.js
  *
  * Regression tests against the real scanned data. These guard the mistakes that
  * would be invisible in the UI -- a dungeon score landing in the wrong column
@@ -32,7 +32,7 @@
       return { pass: 0, fail: 0, skipped: true, results: [] };
     }
 
-    var m = AE.buildModel(global.AE_DATA);
+    var m = AE.buildModel(global.AE_DATA, null, null, global.AE_BAGSYNC);
 
     t('每个数据源都解析成功', function () {
       var bad = m.sources.filter(function (s) { return s.parseError; });
@@ -264,6 +264,117 @@
         return true;
       });
     }
+
+    // ---- professions (BagSync, optional) --------------------------------
+    // These stay green on a machine without BagSync by returning an explanation
+    // instead of failing -- the whole feature is meant to be absent-able.
+
+    t('没有 BagSync 时专业列一个都不生成', function () {
+      if (m.bagSync.characters > 0) return true;   // covered by the tests below
+      return (m.columns.professionSlots === 0 &&
+              m.columns.professionSecondaryIds.length === 0) ||
+             ('professionSlots=' + m.columns.professionSlots +
+              ' secondary=' + JSON.stringify(m.columns.professionSecondaryIds));
+    });
+
+    t('BagSync 的伪服务器命名空间没被当成服务器读进来', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      // options§ / blacklist§ / warband§ ... have no character tables, so if the
+      // § filter broke we would be reading junk objects as characters.
+      var bad = m.characters.filter(function (ch) {
+        return ch.professions && !ch.professions.primary && !ch.professions.secondary;
+      });
+      return bad.length === 0 || (bad.length + ' 个角色的专业结构不完整');
+    });
+
+    t('专业按 GUID join，不是按名字', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      var withProf = m.characters.filter(function (ch) { return ch.professions; });
+      if (!withProf.length) return '没有角色匹配上专业数据（GUID join 可能坏了）';
+      // Every matched character must have come from a GUID that looks like one.
+      var bad = withProf.filter(function (ch) { return !/^Player-\d+-[0-9A-Fa-f]+$/.test(ch.guid); });
+      return bad.length === 0 || ('可疑 GUID: ' + bad[0].guid);
+    });
+
+    t('专业等级取的是当前资料片那一段（分段按 catId 倒序）', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      var checked = 0;
+      for (var i = 0; i < m.characters.length; i++) {
+        var pr = m.characters[i].professions;
+        if (!pr) continue;
+        var all = pr.primary.concat(Object.keys(pr.secondary).map(function (k) { return pr.secondary[k]; }));
+        for (var j = 0; j < all.length; j++) {
+          var p = all[j];
+          if (!p.segments.length) continue;
+          checked++;
+          if (p.cur !== p.segments[0].cur || p.max !== p.segments[0].max) {
+            return p.name + ' 取到了 ' + p.cur + '/' + p.max +
+                   '，但最新一段是 ' + p.segments[0].name + ' ' +
+                   p.segments[0].cur + '/' + p.segments[0].max;
+          }
+          for (var k = 1; k < p.segments.length; k++) {
+            if (p.segments[k].catId > p.segments[k - 1].catId) {
+              return p.name + ' 的分段没按 catId 倒序排列';
+            }
+          }
+        }
+      }
+      return checked > 0 || '没有任何带分段的专业可验证';
+    });
+
+    // The leaf sub-categories (零件 / 爆炸物 / 附录 I - 术语) carry no skill level at
+    // all. Letting them in is how the first version showed a maxed engineer as
+    // "工程学 0": they sort to the front and their missing level coerces to 0.
+    t('专业分段里没有混进没有技能等级的子分类', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      for (var i = 0; i < m.characters.length; i++) {
+        var pr = m.characters[i].professions;
+        if (!pr) continue;
+        var all = pr.primary.concat(Object.keys(pr.secondary).map(function (k) { return pr.secondary[k]; }));
+        for (var j = 0; j < all.length; j++) {
+          var segs = all[j].segments;
+          for (var k = 0; k < segs.length; k++) {
+            if (!(segs[k].max > 0)) {
+              return all[j].name + ' 里混进了没有上限的分段：' + segs[k].name;
+            }
+          }
+        }
+      }
+      return true;
+    });
+
+    t('只有主专业进 slot 列，副专业和考古学不占 slot', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      for (var i = 0; i < m.characters.length; i++) {
+        var pr = m.characters[i].professions;
+        if (!pr) continue;
+        for (var j = 0; j < pr.primary.length; j++) {
+          if (!L.isPrimaryProfession(pr.primary[j].id)) {
+            return pr.primary[j].name + '(' + pr.primary[j].id + ') 不该出现在主专业里';
+          }
+        }
+        var ids = Object.keys(pr.secondary).map(Number);
+        for (var k = 0; k < ids.length; k++) {
+          if (!L.isSecondaryProfession(ids[k])) return ids[k] + ' 不该出现在副专业里';
+        }
+      }
+      return true;
+    });
+
+    t('副专业列只包含真的有人学过的', function () {
+      if (!m.bagSync.characters) return '本机没有 BagSync 数据，跳过';
+      var seen = {};
+      m.characters.forEach(function (ch) {
+        if (!ch.professions) return;
+        Object.keys(ch.professions.secondary).forEach(function (id) { seen[id] = true; });
+      });
+      var listed = m.columns.professionSecondaryIds;
+      for (var i = 0; i < listed.length; i++) {
+        if (!seen[listed[i]]) return listed[i] + ' 成了列，但没有角色学过它';
+      }
+      return listed.length === Object.keys(seen).length ||
+             ('列 ' + JSON.stringify(listed) + ' 与实际 ' + JSON.stringify(Object.keys(seen).map(Number)) + ' 不一致');
+    });
 
     return { pass: pass, fail: fail, skipped: skipped, results: results };
   };

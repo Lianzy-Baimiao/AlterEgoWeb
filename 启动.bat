@@ -1,6 +1,6 @@
 @echo off
 rem ===========================================================================
-rem  AlterEgoWeb launcher
+rem  WowAltBoard launcher
 rem
 rem  Contents are deliberately pure ASCII. The console codepage on this machine
 rem  is 936 (GB2312); Chinese text inside a .bat is decoded with that codepage

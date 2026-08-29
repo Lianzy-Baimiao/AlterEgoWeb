@@ -1,5 +1,5 @@
 {
-  "_comment": "AlterEgoWeb configuration. All fields are optional.",
+  "_comment": "WowAltBoard configuration. All fields are optional.",
 
   "_includeFlavors": "Which game folders to read. Retail only by default. Use [] for all of them, or e.g. [\"_retail_\", \"_classic_\"].",
   "includeFlavors": ["_retail_"],
@@ -26,5 +26,8 @@
   "onWindowClose": "exit",
 
   "_collectBackups": "Read MySlot export strings and the edit-mode cache into data/backups.js for the 备份箱 panel.",
-  "collectBackups": true
+  "collectBackups": true,
+
+  "_readBagSync": "AlterEgo does not track professions; BagSync does. When BagSync is installed its SavedVariables are read into data/bagsync.js and the dashboard grows 专业 columns. Set to false to skip it -- the columns then never appear.",
+  "readBagSync": true
 }

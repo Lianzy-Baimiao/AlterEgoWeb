@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/settings.js
+ * WowAltBoard - app/settings.js
  *
  * Settings live in two places on purpose:
  *
@@ -176,7 +176,7 @@
     var copy = JSON.parse(JSON.stringify(settings));
     copy.schemaVersion = SCHEMA;
     copy.savedAt = Math.floor(Date.now() / 1000);
-    return '// AlterEgoWeb settings. Place this file at data/settings.js.\n' +
+    return '// WowAltBoard settings. Place this file at data/settings.js.\n' +
            '// tools/scan.ps1 also picks it up automatically from your Downloads folder.\n' +
            'window.AE_SETTINGS = ' + JSON.stringify(copy, null, 2) + ';\n';
   };

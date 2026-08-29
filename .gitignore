@@ -8,6 +8,7 @@ data/
 # Build artifacts of tools/build-launcher.ps1.
 *.exe
 tools/launcher.ico
+WowAltBoard-v*.zip
 AlterEgoWeb-v*.zip
 
 # Editor / OS noise

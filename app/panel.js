@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/panel.js
+ * WowAltBoard - app/panel.js
  *
  * The settings drawer (left) and the per-character detail drawer (right).
  * All checkboxes are generated from the column registry in columns.js, so
@@ -370,6 +370,34 @@
       box.appendChild(sub);
       colSec.appendChild(box);
     });
+
+    // The 专业 group only exists when BagSync supplied data, so when it is missing
+    // there is nothing in this list to explain itself. Say so here rather than
+    // leaving people to wonder why a dashboard of every other stat has no
+    // professions -- that question already got asked.
+    var bs = m.bagSync || {};
+    var hasProf = m.columns.professionSlots > 0 || m.columns.professionSecondaryIds.length > 0;
+    if (!hasProf) {
+      var pn = el('p', 'note');
+      if (!bs.enabled) {
+        pn.textContent = '「专业」列已经在 tools/config.json 里关掉了（readBagSync: false）。' +
+                         '改回 true 并重新扫描就会回来。';
+      } else if (!bs.filesFound) {
+        pn.appendChild(doc.createTextNode(
+          '想看专业？AlterEgo 插件本身不记录专业数据，一个字段都没有。装上 BagSync 之后' +
+          '重新扫描，这里会多出「专业」一组列（专业 1 / 专业 2、烹饪、钓鱼）。BagSync：'));
+        var ba = el('a', null, 'wowinterface.com/downloads/info15351');
+        ba.href = 'https://www.wowinterface.com/downloads/info15351';
+        ba.target = '_blank';
+        ba.rel = 'noopener noreferrer';
+        pn.appendChild(ba);
+      } else {
+        pn.textContent = '读到了 BagSync 的存档，但里面还没有任何角色的专业记录。' +
+                         '装了 BagSync 之后登录一次角色，它才会记下来。';
+      }
+      colSec.appendChild(pn);
+    }
+
     panel.appendChild(colSec);
 
     // ---- appearance ------------------------------------------------------
@@ -497,8 +525,8 @@
       });
     }));
     btns.appendChild(button('导出 JSON', null, function () {
-      AE.downloadText('alteregoweb-settings.json', JSON.stringify(s, null, 2), 'application/json');
-      AE.toast({ title: '已导出 alteregoweb-settings.json', kind: 'good', ms: 3000 });
+      AE.downloadText('wowaltboard-settings.json', JSON.stringify(s, null, 2), 'application/json');
+      AE.toast({ title: '已导出 wowaltboard-settings.json', kind: 'good', ms: 3000 });
     }));
 
     var importBtn = button('导入 JSON', null, function () { fileInput.click(); });
@@ -562,7 +590,7 @@
       // Opening an https URL from a file:// page is allowed; fetching is not.
       var url = (up.url && up.url.indexOf('http') === 0)
         ? up.url
-        : ('https://github.com/' + (m.repo || 'Lianzy-Baimiao/AlterEgoWeb') + '/releases');
+        : ('https://github.com/' + (m.repo || 'Lianzy-Baimiao/WowAltBoard') + '/releases');
       global.open(url, '_blank', 'noopener');
       AE.toast({
         title: '已打开发布页',
@@ -572,14 +600,14 @@
       });
     }));
     upBtns.appendChild(button('复制仓库地址', 'mini', function () {
-      AE.copyWithToast('https://github.com/' + (m.repo || 'Lianzy-Baimiao/AlterEgoWeb'), null);
+      AE.copyWithToast('https://github.com/' + (m.repo || 'Lianzy-Baimiao/WowAltBoard'), null);
     }));
     upBox.appendChild(upBtns);
     cfg.appendChild(upBox);
 
     var about = el('p', 'note');
     about.appendChild(doc.createTextNode(
-      'AlterEgoWeb v' + (m.toolVersion || '?') + '　作者 ' + (m.author || '白描') + '　'));
+      'WowAltBoard v' + (m.toolVersion || '?') + '　作者 ' + (m.author || '白描') + '　'));
     if (m.repo) {
       var a = el('a', null, m.repo);
       a.href = 'https://github.com/' + m.repo;

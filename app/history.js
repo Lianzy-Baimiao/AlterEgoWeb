@@ -1,5 +1,5 @@
 /*
- * AlterEgoWeb - app/history.js
+ * WowAltBoard - app/history.js
  *
  * The weekly trend view. Snapshots are stored as raw Lua (so the same parser
  * serves both views) and are loaded ONLY when this view is first opened -- at
