@@ -5,17 +5,21 @@
  * tools\gen-bis.js 和 tools\gen-talents.js 预转换成 app/bis-data.js 与
  * app/talent-data.js，随发布包一起发 —— 用户不用另外下载，也不必装插件。
  *
- * 两份数据都是按需加载：装备表 ~170 KB，天赋表 ~500 KB，大多数人开表格是来看
- * 角色进度的，不该为这个面板付启动成本。和 data/backups.js 同一个套路。
+ * 三份数据都是按需加载：装备表 ~200 KB，天赋表 ~520 KB，天赋树 ~415 KB，大多数人
+ * 开表格是来看角色进度的，不该为这个面板付启动成本。和 data/backups.js 同一个套路。
  *
- * ⚠ 关于「天赋模拟」：天赋树的结构（节点坐标 / 连线 / 图标 / 名称）不在插件里。
- *   插件自己显示天赋时是调游戏运行时的 C_Traits API 现查的，网页没有这些 API。
- *   插件文件里能找到的只有 entryID + 点数，连节点叫什么都没有。
- *   所以：
- *     · 有 window.AE_TALENT_TREE  → 画出真正的天赋树，可点、可模拟；
- *     · 没有                      → 退化成「热门套路 + 点数分布 + 来源玩家」，
- *                                   并在界面上说清楚缺什么、怎么补。
- *   AE_TALENT_TREE 的格式见本文件末尾 TREE_FORMAT_DOC。
+ * 关于天赋树：树的结构（坐标 / 连线 / 中文名 / 点数上限）**不在插件里** —— 插件
+ * 自己显示天赋时是调游戏运行时的 C_Traits API 现查的，网页没有这些 API，插件文件
+ * 里能找到的只有 entryID + 点数。所以结构另外来一份：
+ *   · tools\fetch-talent-tree.js 从 raidbots 取结构、从暴雪 DB2 取中文名，
+ *     生成 app/talent-tree.js（window.AE_TALENT_TREE）；
+ *   · 有它    → 画出三棵树（职业 / 专精 / 英雄），高亮某一套天赋点了哪些节点；
+ *   · 没有它  → 退化成「热门套路 + 点数分布 + 来源玩家」，并在界面上说清楚怎么补。
+ * AE_TALENT_TREE 的格式见本文件末尾 TREE_FORMAT_DOC，权威定义在
+ * tools\verify-talent-tree.js（可执行的那种）。
+ *
+ * 天赋导出串（那串复制到游戏里的 base64）**做不到**：它要 treeHash 和
+ * serialVersion，两者都只有游戏运行时才有，raidbots 的结构里也没有。
  */
 (function (global) {
   'use strict';
@@ -35,7 +39,8 @@
     key: '',            // 'DEATHKNIGHT/BLOOD/Deathbringer'
     view: 'raid',       // 'raid' | 'mplus'
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
-    charKey: ''         // 对照哪个角色的实际装备，'' = 不对照
+    charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
+    build: -1           // 天赋树画哪一套，-1 = 该类别里用得最多的那套
   };
 
   var gearLoaded = false, gearLoading = false;
@@ -839,10 +844,16 @@
     talLoading = true;
     setSub('正在加载天赋数据…');
     loadDataFile('talent-data.js', 'AE_TALENTS', function (err) {
-      talLoading = false;
-      talLoaded = true;
       if (err && AE.toast) AE.toast(err, 'warn');
-      done();
+      // 树结构是另一个文件（app/talent-tree.js，约 415 KB）。它是**可选的**：
+      // 加载不到就退回「只有统计、没有树」的旧样子，功能不受影响。
+      // 所以这里不把它的失败当错误，也不弹提示。
+      if (global.AE_TALENT_TREE) { talLoading = false; talLoaded = true; done(); return; }
+      loadDataFile('talent-tree.js', 'AE_TALENT_TREE', function () {
+        talLoading = false;
+        talLoaded = true;
+        done();
+      });
     });
   }
 
@@ -929,35 +940,303 @@
 
   function renderTreeMissing() {
     var box = el('div', 'bis-warn');
-    box.appendChild(el('b', null, '天赋树画不出来 —— 缺的是「树的结构」，不是天赋本身'));
+    box.appendChild(el('b', null, '天赋树数据没加载到'));
     var p = el('p', null,
-      '插件里存的是「哪个 entryID 点了几点」，没有节点名称、图标、坐标和连线。'
-      + '插件自己在游戏里显示天赋时，是调游戏的 C_Traits 接口现查的，网页没有这些接口。'
-      + '所以下面能给出「谁在用哪套、每套多少点、英雄天赋怎么分布」，但画不出可点的天赋树。');
+      '发布包里本来带着 app/talent-tree.js（约 415 KB）。没读到它的话，'
+      + '要么文件被删了，要么你是从源码跑的但没生成它 —— 跑 tools\\fetch-talent-tree.js 就行。'
+      + '没有它，下面仍然能给出「谁在用哪套、每套多少点、英雄天赋怎么分布」，'
+      + '因为那些只需要插件那份数据；但画不出树。');
     box.appendChild(p);
     var p2 = el('p', null,
-      '补上一份天赋树数据（节点坐标 / 图标 / 名称 / 连线）就能画出来并支持模拟。'
-      + '把它放成 app/talent-tree.js，或者在设置里配一个远端地址。格式说明：');
+      '也可以自己做一份放成 app/talent-tree.js。它的格式就是生成器写出来的那个：');
     box.appendChild(p2);
     var pre = el('pre', 'fmt', TREE_FORMAT_DOC);
     box.appendChild(pre);
     return box;
   }
 
+
+
+  // ------------------------------------------------------------------ 画天赋树
+  //
+  // 坐标不能直接当像素用。上游的 posX/posY 最大公约数只有 10，且有
+  // “相差 10” 的近重复坐标（本机实测）。直接缩放会把两个节点叠在一起。
+  // 实测发现它本质上就是网格：职业树是严格的 600×600，专精树 600 为主，
+  // 英雄子树是 5×5。所以把不同坐标值按容差聚成列/行，再按网格摆 ——
+  // 容差从 50 到 250 都测过，同一格重叠始终是 0，最大 9 列 × 11 行。
+  var CELL_W = 74, CELL_H = 44, GRID_TOL = 100;
+
+  /** 不同坐标值 -> 列/行下标。相邻差超过 GRID_TOL 才算新一列。 */
+  function clusterIndex(vals) {
+    var uniq = [];
+    vals.forEach(function (v) { if (uniq.indexOf(v) < 0) uniq.push(v); });
+    uniq.sort(function (a, b) { return a - b; });
+    var map = {}, idx = 0, prev = null;
+    uniq.forEach(function (v) {
+      if (prev !== null && v - prev > GRID_TOL) idx++;
+      map[v] = idx;
+      prev = v;
+    });
+    return { map: map, count: idx + 1 };
+  }
+
+  // entryID -> nodeID。建一次就行。
+  var entryNodeMap = null;
+  function entryToNode(eid) {
+    if (!entryNodeMap) {
+      entryNodeMap = {};
+      var TR = tree();
+      if (TR && TR.nodes) {
+        Object.keys(TR.nodes).forEach(function (id) {
+          (TR.nodes[id][5] || []).forEach(function (e) { entryNodeMap[e[0]] = id; });
+        });
+      }
+    }
+    return entryNodeMap[eid];
+  }
+
+  /** {entryID: 点数} -> {nodeID: {rank, eid}}。choice 节点靠这个知道选了哪一边。 */
+  function nodeRanks(picked) {
+    var out = {};
+    Object.keys(picked).forEach(function (eid) {
+      var nid = entryToNode(Number(eid));
+      if (nid === undefined) return;
+      if (!out[nid]) out[nid] = { rank: 0, eid: Number(eid) };
+      out[nid].rank += picked[eid];
+    });
+    return out;
+  }
+
+  /** 这个类别里每套天赋被多少人用。 */
+  function buildUsage(td) {
+    var m = {};
+    (td.content[state.tcat] || []).forEach(function (enc) {
+      (enc.p || []).forEach(function (p) { m[p[0]] = (m[p[0]] || 0) + 1; });
+    });
+    return m;
+  }
+
+  /**
+   * 该画哪一套。state.build 在当前类别里真被人用过就用它，否则用最多人用的。
+   * 不持久化：套路编号是生成时的数组下标，重新生成数据后就变了，
+   * 存下来只会指向另一套天赋。这里的回退是自纠正的。
+   */
+  function pickBuild(td) {
+    var use = buildUsage(td);
+    var keys = Object.keys(use);
+    if (!keys.length) return -1;
+    if (state.build >= 0 && use[state.build]) return state.build;
+    keys.sort(function (a, b) { return use[b] - use[a]; });
+    return Number(keys[0]);
+  }
+
+  /** 这套天赋点的是哪个英雄子树。 */
+  function activeSubTree(sp, nr) {
+    var TR = tree();
+    var count = {};
+    (sp.heroNodes || []).forEach(function (id) {
+      var n = TR.nodes[id];
+      if (!n || !n[6] || !nr[id]) return;
+      count[n[6]] = (count[n[6]] || 0) + nr[id].rank;
+    });
+    var best = 0, bestN = 0;
+    Object.keys(count).forEach(function (sid) {
+      if (count[sid] > bestN) { bestN = count[sid]; best = Number(sid); }
+    });
+    return best;
+  }
+
+  function subTreeName(sid) {
+    var TR = tree();
+    var s = TR.subTrees[sid] || TR.subTrees[String(sid)];
+    return s ? (TR.names[s[0]] || '?') : '?';
+  }
+
+  /**
+   * 英雄天赋的英文名 -> 中文名。
+   *
+   * app/talent-data.js 的 heroes 全是英文（那份数据来自插件，插件存的就是英文），
+   * 而 app/talent-tree.js 的子树里既有暴雪 DB2 的中文名、也有英文名，
+   * 所以拿英文名当连接键。没加载树、或者对不上，就原样显示英文 —— 不猜。
+   */
+  var heroZhMap = null;
+  function heroName(en) {
+    if (!en) return '?';
+    if (!heroZhMap) {
+      heroZhMap = {};
+      var TR = tree();
+      if (TR && TR.subTrees) {
+        Object.keys(TR.subTrees).forEach(function (sid) {
+          var s = TR.subTrees[sid];
+          if (s && s[3] && TR.names[s[0]]) heroZhMap[s[3]] = TR.names[s[0]];
+        });
+      }
+    }
+    return heroZhMap[en] || en;
+  }
+
+  /** 节点上显示的名字：选了哪一边就显那一边。 */
+  function nodeLabel(n, hit) {
+    var TR = tree();
+    var ents = n[5] || [];
+    var e = null;
+    if (hit) {
+      for (var i = 0; i < ents.length; i++) if (ents[i][0] === hit.eid) e = ents[i];
+    }
+    if (!e) e = ents[0];
+    return e ? (TR.names[e[1]] || '') : '';
+  }
+
+  /**
+   * 画一棵（职业 / 专精 / 英雄）。
+   * ids 里不在本次要画的节点已经筛掉了，连线只在本棵内部画。
+   */
+  function renderTreeGrid(sp, ids, nr, title) {
+    var TR = tree();
+    var list = ids.filter(function (id) { return TR.nodes[id]; });
+    if (!list.length) return null;
+
+    var cx = clusterIndex(list.map(function (id) { return TR.nodes[id][0]; }));
+    var cy = clusterIndex(list.map(function (id) { return TR.nodes[id][1]; }));
+
+    var pts = 0;
+    list.forEach(function (id) { if (nr[id]) pts += nr[id].rank; });
+
+    var wrap = el('div', 'tree-grid');
+    var head = el('div', 'tree-grid-head');
+    head.appendChild(el('b', null, title));
+    head.appendChild(el('span', 'n', pts + ' 点'));
+    wrap.appendChild(head);
+
+    var canvas = el('div', 'tree-canvas');
+    canvas.style.width = (cx.count * CELL_W) + 'px';
+    canvas.style.height = (cy.count * CELL_H) + 'px';
+
+    var pos = {}, inSet = {};
+    list.forEach(function (id) {
+      var n = TR.nodes[id];
+      pos[id] = {
+        x: cx.map[n[0]] * CELL_W + CELL_W / 2,
+        y: cy.map[n[1]] * CELL_H + CELL_H / 2
+      };
+      inSet[id] = 1;
+    });
+
+    // 先连线，后节点 —— 线得在下面。用旋转的 <i> 而不是 SVG：
+    // 全库没有用过 SVG，测试用的 DOM 桩也没有 createElementNS。
+    Object.keys(sp.edges || {}).forEach(function (from) {
+      if (!inSet[from]) return;
+      sp.edges[from].forEach(function (to) {
+        if (!inSet[to]) return;
+        var a = pos[from], b = pos[to];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (!len) return;
+        var lit = nr[from] && nr[to];
+        var line = el('i', 'tree-edge' + (lit ? ' on' : ''));
+        line.style.left = a.x + 'px';
+        line.style.top = a.y + 'px';
+        line.style.width = len.toFixed(1) + 'px';
+        line.style.transform = 'rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(2) + 'deg)';
+        canvas.appendChild(line);
+      });
+    });
+
+    var freeSet = {};
+    (sp.free || []).forEach(function (id) { freeSet[id] = 1; });
+
+    list.forEach(function (id) {
+      var n = TR.nodes[id];
+      var hit = nr[id];
+      var maxR = n[2] || 1;
+      var type = TR.types[n[3]] || '?';
+      var cls = 'tnode' + (hit ? ' on' : '') + (type === 'choice' ? ' ch' : '');
+      var b = el('div', cls);
+      // 节点 ID 放进 DOM：一是排查问题时能直接看出画的是哪个节点，
+      // 二是测试靠它断言「同一个专精里三棵树的节点不重复」——
+      // 只数总数的话，把专精树错画成职业树是数不出来的（实测漏过一次）。
+      b.setAttribute('data-node', id);
+      b.style.left = (pos[id].x - CELL_W / 2 + 6) + 'px';
+      b.style.top = (pos[id].y - CELL_H / 2 + 6) + 'px';
+      b.appendChild(el('span', 'nm', nodeLabel(n, hit)));
+      if (maxR > 1) b.appendChild(el('span', 'r', (hit ? hit.rank : 0) + '/' + maxR));
+
+      var tip = [];
+      (n[5] || []).forEach(function (e) {
+        tip.push((hit && e[0] === hit.eid ? '▸ ' : '· ') + (TR.names[e[1]] || '?'));
+      });
+      if (type === 'choice') tip.push('（二选一）');
+      if (n[4]) tip.push('本树满 ' + n[4] + ' 点才能点');
+      if (freeSet[id]) tip.push('白给的节点（不占点数）');
+      tip.push(hit ? '已点 ' + hit.rank + '/' + maxR : '这套没点');
+      b.setAttribute('data-tip', tip.join('\n'));
+      canvas.appendChild(b);
+    });
+
+    wrap.appendChild(canvas);
+    return wrap;
+  }
+
   /** 有 AE_TALENT_TREE 时画真正的树。 */
   function renderTree(td) {
     var TR = tree();
-    var node = TR[td.specId] || TR[String(td.specId)];
-    if (!node) {
-      var p = el('p', 'note', '天赋树数据里没有 specID ' + td.specId + '。');
-      return p;
+    var sp = TR.specs[String(td.specId)] || TR.specs[td.specId];
+    if (!sp) {
+      return el('p', 'note', '天赋树数据里没有 specID ' + td.specId + '。');
     }
+
     var box = el('div', 'bis-tree');
+    var bi = pickBuild(td);
+    if (bi < 0) {
+      box.appendChild(el('p', 'note', '这个类别没有天赋记录，所以画不出具体一套。'));
+      return box;
+    }
+
+    var picked = decodeBuild(td, bi);
+    var nr = nodeRanks(picked);
+    var use = buildUsage(td);
+    var total = 0;
+    Object.keys(picked).forEach(function (k) { total += picked[k]; });
+    var sub = activeSubTree(sp, nr);
+
+    // 选套路。只列这个类别里真有人用的，按人数排。
+    var bar = el('div', 'tree-pick');
+    bar.appendChild(el('span', 'lb', '套路'));
+    Object.keys(use).sort(function (a, b) { return use[b] - use[a]; })
+      .slice(0, 8).forEach(function (k) {
+        var idx = Number(k);
+        var b = button('#' + idx + '·' + use[k] + '人', idx === bi ? 'on' : null, function () {
+          state.build = idx;
+          render();
+        });
+        b.setAttribute('data-tip', use[k] + ' 人用这一套，共 ' + buildPoints(td, idx) + ' 点');
+        bar.appendChild(b);
+      });
+    box.appendChild(bar);
+
+    var info = el('p', 'note',
+      '画的是套路 #' + bi + '（' + (use[bi] || 0) + ' 人用，共 ' + total + ' 点）。'
+      + '英雄天赋：' + (sub ? subTreeName(sub) : '这套没点') + '。'
+      + '高亮的是点了的节点，鼠标放上去看详情。');
+    box.appendChild(info);
+
+    var cols = el('div', 'tree-cols');
+    var heroIds = (sp.heroNodes || []).filter(function (id) {
+      var n = TR.nodes[id];
+      return n && (!sub || n[6] === sub);
+    });
+    [[sp.classNodes, '职业天赋'],
+     [sp.specNodes, '专精天赋'],
+     [heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')]
+    ].forEach(function (g) {
+      var grid = renderTreeGrid(sp, g[0] || [], nr, g[1]);
+      if (grid) cols.appendChild(grid);
+    });
+    box.appendChild(cols);
+
     box.appendChild(el('p', 'note',
-      '天赋树数据已加载（' + (node.nodes ? node.nodes.length : 0) + ' 个节点）。'
-      + '点节点可以加减点数，右上角能导出。'));
-    // 真正的画树 / 模拟在拿到数据格式后补 —— 现在先把入口和数据通道留好，
-    // 不假装画了一棵空树。
+      '节点上没有图标是故意的 —— 全部天赋图标要多带 2094 张图（约 4.6 MB，'
+      + '是现在整个包的三倍），而坐标 / 连线 / 中文名 / 点数不带图标也能看清楚。'));
     return box;
   }
 
@@ -971,7 +1250,7 @@
     list.forEach(function (enc) {
       (enc.p || []).forEach(function (p) {
         players++;
-        var hero = T.heroes[p[1]] || '?';
+        var hero = heroName(T.heroes[p[1]]);
         heroCount[hero] = (heroCount[hero] || 0) + 1;
         buildCount[p[0]] = (buildCount[p[0]] || 0) + 1;
       });
@@ -984,7 +1263,7 @@
     var chips = el('div', 'chips');
     Object.keys(heroCount).sort(function (a, b) { return heroCount[b] - heroCount[a]; })
       .forEach(function (hero) {
-        var c = el('span', 'chip');
+        var c = el('span', 'chip hero');
         c.appendChild(el('b', null, hero));
         c.appendChild(el('span', 'n', heroCount[hero] + ' 人　'
           + pct(heroCount[hero] / players * 100)));
@@ -1010,9 +1289,11 @@
       tbl.appendChild(tr);
     });
     b.appendChild(tbl);
-    b.appendChild(el('p', 'note',
-      '「套路」只能给编号 —— 没有天赋树数据的话，一套天赋只是一串 entryID，'
-      + '没法起名字，也没法画出来。'));
+    b.appendChild(el('p', 'note', tree()
+      ? '「套路」的编号是生成时的数组下标，没有官方名字；'
+        + '想看它长什么样，用上面天赋树里的套路按钮切过去。'
+      : '「套路」只能给编号 —— 没有天赋树数据的话，一套天赋只是一串 entryID，'
+        + '没法起名字，也没法画出来。'));
     wrap.appendChild(b);
     return wrap;
   }
@@ -1040,7 +1321,7 @@
         tr.appendChild(el('td', null, p[2] || '?'));
         tr.appendChild(el('td', null, T.servers[p[3]] || '?'));
         tr.appendChild(el('td', null, p[4] || '?'));
-        tr.appendChild(el('td', null, T.heroes[p[1]] || '?'));
+        tr.appendChild(el('td', null, heroName(T.heroes[p[1]])));
         tr.appendChild(el('td', null, '#' + p[0]));
         tr.appendChild(el('td', null, String(buildPoints(td, p[0]))));
         tbl.appendChild(tr);
@@ -1053,31 +1334,38 @@
 
   // --------------------------------------------------------- 天赋树数据格式
 
+  // 这是 tools\fetch-talent-tree.js 实际生成的格式，不是设想的格式。
+  // 字段顺序由数据自己带的 nodeFormat / entryFormat 声明，改结构要三处一起改：
+  // 生成器、tools\verify-talent-tree.js、本文件。
   var TREE_FORMAT_DOC = [
     '// app/talent-tree.js —— 赋值到一个全局变量，和包里其它数据文件一样',
     'window.AE_TALENT_TREE = {',
-    '  "250": {                       // 键 = specID（250 = 鲜血死骑）',
-    '    treeId: 1234,                // C_Traits 的 treeID',
-    '    treeHash: "a1b2c3...",       // 16 字节树哈希的十六进制，导出串要用',
-    '    serialVersion: 2,            // C_Traits.GetLoadoutSerializationVersion()',
-    '    nodes: [',
-    '      {',
-    '        id: 96167,               // nodeID',
-    '        x: 3, y: 1,              // 网格坐标（或像素坐标，两种都行）',
-    '        maxRanks: 1,',
-    '        type: "single",          // single | choice | passive',
-    '        sub: "class",            // class | spec | hero  —— 分左右/英雄子树',
-    '        reqPoints: 0,            // 解锁需要的本树点数',
-    '        next: [96168, 96170],    // 连到哪些 nodeID（画连线用）',
-    '        entries: [',
-    '          { id: 123456,          // entryID —— 和天赋数据里的对得上',
-    '            name: "心脏打击",     // 中文名（zhCN 客户端的串）',
-    '            icon: "spell_deathknight_heartstrike",',
-    '            spellId: 206930,',
-    '            desc: "..." }        // 可选',
-    '        ]',
-    '      }',
-    '    ]',
+    '  v: 1,',
+    '  nodeFormat: "[posX, posY, maxRanks, typeIdx, reqPoints, entries[], subTreeId, requiresNode]",',
+    '  entryFormat: "[entryId, nameIdx, iconIdx, spellId, maxRanks]",',
+    '  types: ["single", "choice", "tiered", "subtree"],   // typeIdx 查这里',
+    '  names: ["心脏打击", …],        // 中文名字典，节点里只存下标',
+    '  icons: ["spell_deathknight_heartstrike", …],       // 图标名字典（本包没带图）',
+    '',
+    '  // 节点是全局共享的一张表：同职业不同专精的节点坐标 / 点数 / 条目完全一样，',
+    '  // 存一份就够（本机实测 4613 次引用 → 2891 个不同节点）。',
+    '  nodes: {',
+    '    "96167": [3600, 1500, 1, 0, 0, [[123456, 12, 34, 206930, 1]], 0, 0]',
+    '  },',
+    '',
+    '  // 英雄子树：[中文名下标, atlas, [节点id…], 英文名]',
+    '  subTrees: { "33": [7, "talents-heroclass-…", [96170, …], "Deathbringer"] },',
+    '',
+    '  // 拓扑必须按专精存：同一个职业节点在不同专精下连到不同的下一个节点，',
+    '  // 白给（free）与否也不同 —— 本机实测有 133 个节点存在这种差异。',
+    '  specs: {',
+    '    "250": {                     // 键 = specID（250 = 鲜血死骑）',
+    '      treeId: 750, cls: "DEATHKNIGHT", specEn: "BLOOD",',
+    '      classNodes: [96167, …], specNodes: [], heroNodes: [], subNodes: [],',
+    '      subTreeIds: [33, 31],',
+    '      edges: { "96167": [96168, 96170] },   // 画连线用',
+    '      free: [96167]                          // 不占点数的节点',
+    '    }',
     '  }',
     '};'
   ].join('\n');

@@ -49,7 +49,7 @@ var SCHEMA = {
   types:       { type: 'arr', desc: '节点类型名表，节点里存的是下标' },
   names:       { type: 'arr', desc: '中文名字典，条目里存的是下标' },
   icons:       { type: 'arr', desc: '图标名字典，条目里存的是下标' },
-  subTrees:    { type: 'obj', desc: 'subTreeId → [名字下标, atlas, [节点id…]]' },
+  subTrees:    { type: 'obj', desc: 'subTreeId → [名字下标, atlas, [节点id…], 英文名]' },
   nodes:       { type: 'obj', desc: 'nodeId → 节点数组，全局共享一份' },
   specs:       { type: 'obj', desc: 'specId → 专精' }
 };
@@ -333,8 +333,8 @@ function verifyTree() {
   Object.keys(T.subTrees).forEach(function (sid) {
     var s = T.subTrees[sid];
     ck();
-    if (!Array.isArray(s) || s.length !== 3) {
-      fail('子树 ' + sid + ' 的长度是 ' + (s && s.length) + '，应该是 3');
+    if (!Array.isArray(s) || s.length !== 4) {
+      fail('子树 ' + sid + ' 的长度是 ' + (s && s.length) + '，应该是 4');
       return;
     }
     ck();
@@ -347,6 +347,12 @@ function verifyTree() {
       ck();
       if (!T.nodes[nid]) fail('子树 ' + sid + ' 引用不存在的节点 ' + nid);
     });
+    ck();
+    // 英文名是 talent-data.js 那 39 个英雄天赋名的连接键，丢了中文就显示不出来。
+    // 必须是纯 ASCII —— 如果这里出现中文，说明生成器把中文名写到了英文位。
+    if (typeof s[3] !== 'string' || !s[3] || /[^\x20-\x7e]/.test(s[3])) {
+      fail('子树 ' + sid + ' 的英文名不合法：' + s[3]);
+    }
   });
 
   // ---- 每个专精

@@ -251,7 +251,7 @@ function build(raw, nameMap) {
   }
 
   var nodes = {};        // nodeID → 节点数组
-  var subTrees = {};     // subTreeId → [中文名下标, atlas, [nodeID…]]
+  var subTrees = {};     // subTreeId → [中文名下标, atlas, [nodeID…], 英文名]
   var specs = {};
   var stat = {
     specs: 0, nodeRefs: 0, distinctNodes: 0, entries: 0,
@@ -343,10 +343,14 @@ function build(raw, nameMap) {
           ents.forEach(function (e) {
             if (!e.traitSubTreeId) return;
             if (!subTrees[e.traitSubTreeId]) {
+              // 第 4 个字段是英文名。留着是因为 app/talent-data.js 里的英雄天赋只有
+              // 英文名（那份数据来自插件，插件存的就是英文），面板得靠「英文名 →
+              // 子树」这一跳才能显示成中文。本机实测 39/39 对得上。
               subTrees[e.traitSubTreeId] = [
                 internName(nameMap.subs[String(e.traitSubTreeId)] || e.name || ''),
                 e.atlasMemberName || '',
-                (e.nodes || []).slice()
+                (e.nodes || []).slice(),
+                e.name || ''
               ];
             }
             if (spec.subTreeIds.indexOf(e.traitSubTreeId) < 0) {
