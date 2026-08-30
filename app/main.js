@@ -85,6 +85,7 @@
     try {
       AE.render(model, loaded.settings);
       AE.wireHeaderDrag();
+      AE.wireTips();
       AE.renderLayoutPicker();
       // Say so once, rather than letting a moved folder look like a data loss
       // that silently fixed itself.

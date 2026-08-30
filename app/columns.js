@@ -340,9 +340,10 @@
               } else if (type === L.VAULT_WORLD && slot.level) {
                 line += '　' + slot.level + ' 层';
               }
-              if (slot.exampleReward && slot.exampleReward.name) {
-                line += '　(' + slot.exampleReward.name + ')';
-              }
+              // exampleRewardLink is deliberately not shown anywhere. The game
+              // returns one sample per activity type (all three raid rows carry
+              // the identical item), and it is a preview of the item level, not
+              // a drop -- so it only ever added noise to the vault readout.
             } else {
               line += '　还需：' + AE.vaultRequirement(type, slot.threshold, slot.raidString);
             }

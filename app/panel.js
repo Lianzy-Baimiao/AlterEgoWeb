@@ -969,13 +969,6 @@
             } else if (ty === L.VAULT_WORLD && slot.level) {
               detail = slot.level + ' 层';
             }
-            if (slot.exampleReward && slot.exampleReward.name) {
-              var it = el('span', 'item-name', slot.exampleReward.name);
-              if (slot.exampleReward.color) it.style.color = slot.exampleReward.color;
-              line.appendChild(el('span', null, '　' + detail + '　'));
-              line.appendChild(it);
-              detail = '';
-            }
           } else {
             detail = AE.vaultRequirement(ty, slot.threshold, slot.raidString);
           }

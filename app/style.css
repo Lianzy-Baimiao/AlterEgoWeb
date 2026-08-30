@@ -651,7 +651,6 @@ table.mini-table td.overtime { color: var(--bad); }
   border-left: 2px solid var(--line);
 }
 .vault-slot.on { color: var(--fg); border-left-color: var(--good); }
-.item-name { font-weight: 600; }
 
 .boss-list { display: flex; flex-wrap: wrap; gap: 4px; }
 .boss {
@@ -934,6 +933,42 @@ body[data-theme="light"] .seg button.on { color: #fff; }
 .toast .t-body { color: var(--fg2); margin-top: 2px; word-break: break-all; }
 .toast .t-actions { display: flex; gap: 6px; margin-top: 7px; }
 .toast button { padding: 2px 8px; font-size: 11px; }
+
+/* --------------------------------------------------------------- tooltips */
+
+/* Replaces the native title="" bubble -- see app/tip.js for why. Fixed, not
+   absolute: coordinates come straight from clientX/clientY, so a scrolled
+   table does not need an offset correction. */
+#tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: none;
+  z-index: 95;
+  max-width: 420px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.5;
+  /* Long single-line tips (a decoded URL) must wrap rather than run off-screen. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  /* The box must never eat the hover it is describing. */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .09s ease;
+}
+#tip.in { opacity: 1; }
+#tip .tip-head {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 
 .update-box {
   border: 1px solid var(--line);
