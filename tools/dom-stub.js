@@ -30,6 +30,10 @@ var path = require('path');
 
 var ROOT = path.resolve(__dirname, '..');
 
+// 赋值这些属性时，浏览器会同步写出同名的 HTML 属性（反射属性）。
+// 只列 app/ 下真的会赋值的那些，不求全。
+var REFLECTED = ['alt', 'title', 'src', 'id', 'type', 'href', 'value', 'width', 'height'];
+
 function makeEl(tag) {
   var e = {
     tagName: String(tag).toUpperCase(),
@@ -94,6 +98,19 @@ function makeEl(tag) {
   Object.defineProperty(e, 'innerHTML', {
     get: function () { return ''; },
     set: function (v) { if (v === '') { e.children.length = 0; e._text = ''; } }
+  });
+  // 反射属性。浏览器里 img.alt = '' 会真的写出 alt="" 属性，
+  // 桩以前不会 —— 于是 getAttribute('alt') 返回 null，让我一度以为 621 个图标
+  // 全都缺 alt（其实代码里写的是 img.alt = ''，无障碍上正确的写法）。
+  // 桩和浏览器在这种地方不一致，测出来的东西就不能信。
+  REFLECTED.forEach(function (name) {
+    Object.defineProperty(e, name, {
+      get: function () {
+        var v = e.attrs[name];
+        return v == null ? '' : v;
+      },
+      set: function (v) { e.attrs[name] = String(v == null ? '' : v); }
+    });
   });
   return e;
 }

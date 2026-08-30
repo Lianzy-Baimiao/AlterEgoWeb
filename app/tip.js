@@ -12,10 +12,20 @@
  *     "not every hover shows one" complaint;
  *   - any DOM rebuild under the cursor kills it silently.
  *
- * So the text stays authored as title="" at every call site (31 of them, plus
- * the panel), and this module adopts it lazily on first hover: title is moved to
- * data-tip and removed from the node, which is what suppresses the native
- * bubble. The value also lands in aria-label so screen readers keep it.
+ * So the main table authors the text as a title property (48 call sites in
+ * columns.js / render.js), and this module adopts it lazily on first hover:
+ * title is moved to data-tip and removed from the node, which is what
+ * suppresses the native bubble. That path also mirrors the text into
+ * aria-label when the node has no accessible name yet.
+ *
+ * The BiS panel is different on purpose: it writes data-tip DIRECTLY (16 call
+ * sites in bis.js) and never sets title, so the native bubble never appears at
+ * all and there is nothing to adopt. That means the title -> aria-label mirror
+ * below never runs for panel nodes -- which is fine, because every panel node
+ * carrying data-tip has its own visible text, so the tooltip is supplementary
+ * detail rather than the element's accessible name. tools/run-tests.js asserts
+ * exactly that (26378 data-tip elements, 0 without visible text); if someone
+ * ever replaces a visible label with a tooltip-only one, that check fails.
  *
  * Delegated on document, so it survives every AE.rebuild() without rewiring.
  */

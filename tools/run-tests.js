@@ -114,14 +114,67 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               tgrids: 0, tnodes: 0, tnodeOn: 0, tedges: 0, tedgeOn: 0,
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
               trenders: 0, tdup: 0, tnoId: 0, tgeo: 0, tSpill: 0, tOverlap: 0, thero: 0, theroEn: 0,
-              tmaxCol: 0, tmaxRow: 0, tCluster: 0 };
+              tmaxCol: 0, tmaxRow: 0, tCluster: 0,
+              // 无障碍
+              a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
+              a11yCanvas: 0, a11yCanvasBad: 0 };
 var missingFiles = {};
 var body = doc.getElementById('bis-body');
+
+// 无障碍检查。这一组和渲染检查分开数，因为它们盯的是不同的东西：
+// 渲染检查问「画出来了吗」，这一组问「画出来的东西，看不见屏幕的人能不能用」。
+//
+// 之前这里一条都没有，而且我第一次量的时候被自己的桩骗了：
+// `img.alt = ''` 是**属性赋值**，桩当时不把属性映射到 attrs，于是 621 张图
+// 全被报成「没有 alt」。桩已经补上映射（见 dom-stub.js 的 REFLECT），
+// 这几条断言才有意义 —— 否则它们量的是桩，不是应用。
+function checkA11y(n, label) {
+  if (n.tagName === 'IMG') {
+    // 装备图标是装饰性的（旁边就是装备中文名），所以正确写法是 alt=""，
+    // 也就是「有这个属性、值为空」。缺属性和 alt="" 是两件事：
+    // 缺属性时读屏软件会去念文件名。
+    if (n.attrs.alt == null) {
+      stats.a11yImg++;
+      if (stats.a11yImg < 4) problems.push(label + ' <img> 没有 alt 属性：' + (n.attrs.src || '?'));
+    }
+  }
+  if (n.tagName === 'BUTTON') {
+    stats.a11yBtn++;
+    if (!n.textContent && !n.attrs['aria-label']) {
+      stats.a11yBtnBad++;
+      if (stats.a11yBtnBad < 4) problems.push(label + ' <button> 既没文字也没 aria-label');
+    }
+  }
+  // data-tip 是补充信息，不是元素的名字 —— 所以带 data-tip 的元素自己必须有
+  // 可见文字。实测 2386/2386 都有，写成硬断言把这一点钉住：
+  // 哪天有人把某处的可见文字换成「只有 tooltip」，读屏用户就什么都读不到。
+  if (n.attrs['data-tip'] != null) {
+    stats.a11yTip++;
+    if (!n.textContent && !n.attrs['aria-label']) {
+      stats.a11yTipBad++;
+      if (stats.a11yTipBad < 4) {
+        problems.push(label + ' 带 data-tip 但自己没有可见文字：' + n.attrs['data-tip'].split('\n')[0]);
+      }
+    }
+  }
+  // 天赋树画布是一堆绝对定位的 div 拼出来的图。没有 role 和说明的话，
+  // 读屏软件只会念到一串互不相干的天赋名，读不出「这是一棵树、点了多少」。
+  if (n.classList && n.classList.contains('tree-canvas')) {
+    stats.a11yCanvas++;
+    if (n.attrs.role !== 'group' || !n.attrs['aria-label']) {
+      stats.a11yCanvasBad++;
+      if (stats.a11yCanvasBad < 4) {
+        problems.push(label + ' 天赋树画布没有 role=group + aria-label');
+      }
+    }
+  }
+}
 
 function checkRender(label) {
   stats.renders++;
   var sawItem = false;
   walk(body, function (n) {
+    checkA11y(n, label);
     if (n.classList && n.classList.contains('item')) sawItem = true;
     if (n.tagName === 'IMG') {
       stats.imgs++;
@@ -194,6 +247,7 @@ function checkTalents(label) {
   stats.trenders++;
   var nodes = 0, grids = 0, seen = {}, dup = 0, canvases = [];
   walk(body, function (n) {
+    checkA11y(n, label);
     if (!n.classList) return;
     if (n.classList.contains('tree-canvas')) canvases.push(n);
     if (n.classList.contains('tree-grid')) { grids++; stats.tgrids++; }
@@ -457,6 +511,36 @@ console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精�
   + '，最大 ' + stats.tmaxCol + ' 列 × ' + stats.tmaxRow + ' 行，聚类越界 '
   + stats.tCluster + '）');
 
+// ---- 无障碍
+// 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。
+// 加这一组的起因是：我先量出「621 个 <img> 全都没有 alt」，差点当成 bug 去改 ——
+// 实际是**桩不反射属性**（app 里写的是 img.alt = ''，属性写法，桩只认 setAttribute）。
+// 修好桩之后才看出真实情况：alt 全都有，缺的是天赋树画布的 role 和说明。
+if (stats.a11yImg > 0) {
+  problems.push(stats.a11yImg + ' 个 <img> 没有 alt 属性（装饰图也要写 alt=""，'
+    + '否则读屏软件会念文件名）');
+}
+if (stats.a11yBtnBad > 0) {
+  problems.push(stats.a11yBtnBad + ' 个 <button> 既没有可见文字也没有 aria-label');
+}
+if (stats.a11yTipBad > 0) {
+  problems.push(stats.a11yTipBad + ' 个元素只有 data-tip、没有可见文字'
+    + '（tooltip 是补充说明，不能当成元素的名字）');
+}
+if (stats.a11yCanvasBad > 0) {
+  problems.push(stats.a11yCanvasBad + ' 个天赋树画布没有 role=group + aria-label');
+}
+// 数量下界：断言本身有没有跑到。全是 0 也可能是「一个都没数到」。
+if (stats.a11yTip < 2000) problems.push('只数到 ' + stats.a11yTip + ' 个 data-tip 元素，无障碍检查没跑起来');
+if (stats.a11yBtn < 200) problems.push('只数到 ' + stats.a11yBtn + ' 个 <button>，无障碍检查没跑起来');
+if (stats.a11yCanvas < 100) problems.push('只数到 ' + stats.a11yCanvas + ' 个天赋树画布，无障碍检查没跑起来');
+
+console.log(pad('无障碍') + (stats.a11yImg + stats.a11yBtnBad + stats.a11yTipBad
+    + stats.a11yCanvasBad ? '有问题' : '通过')
+  + '（' + stats.imgs + ' 个图标全有 alt，' + stats.a11yBtn + ' 个按钮全有名字，'
+  + stats.a11yTip + ' 个 data-tip 元素全有可见文字，'
+  + stats.a11yCanvas + ' 个天赋树画布全有 role=group + 说明）');
+
 // ----------------------------------------------------------------------- 格式校验
 // 两个校验器分别是 app/bis-data.js 和 app/talent-tree.js 的格式定义（可执行的那种）。
 // 在这里连带跑一遍，免得它们自己烂掉都没人知道 —— 它们的价值全在「换数据源时能拦住
@@ -504,6 +588,6 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 两项格式校验'
+  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

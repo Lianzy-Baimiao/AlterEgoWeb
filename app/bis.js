@@ -1111,6 +1111,14 @@
     var canvas = el('div', 'tree-canvas');
     canvas.style.width = (cx.count * CELL_W) + 'px';
     canvas.style.height = (cy.count * CELL_H) + 'px';
+    // 这块是一张「用 div 摆出来的图」：位置全靠绝对定位，读屏软件只会读到一串
+    // 没有关系的方块。给它一个组名和一句摘要，至少能知道「这是什么、点了多少」。
+    // 用 role=group 而不是 role=img —— img 会把里面的节点名全藏起来，
+    // 而节点名恰恰是这棵树唯一的文字信息。
+    var litCount = list.filter(function (id) { return nr[id]; }).length;
+    canvas.setAttribute('role', 'group');
+    canvas.setAttribute('aria-label',
+      title + '天赋树，' + list.length + ' 个天赋，点了 ' + litCount + ' 个，共 ' + pts + ' 点');
 
     var pos = {}, inSet = {};
     list.forEach(function (id) {
