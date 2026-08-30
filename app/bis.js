@@ -1117,8 +1117,10 @@
     // 而节点名恰恰是这棵树唯一的文字信息。
     var litCount = list.filter(function (id) { return nr[id]; }).length;
     canvas.setAttribute('role', 'group');
+    // title 本身已经是「职业天赋」/「专精天赋」/「英雄天赋：萨莱因」，
+    // 后面再接「天赋树」会念成「职业天赋天赋树」—— 实际读出来才发现的。
     canvas.setAttribute('aria-label',
-      title + '天赋树，' + list.length + ' 个天赋，点了 ' + litCount + ' 个，共 ' + pts + ' 点');
+      title + '，共 ' + list.length + ' 个天赋，点了 ' + litCount + ' 个，合计 ' + pts + ' 点');
 
     var pos = {}, inSet = {};
     list.forEach(function (id) {

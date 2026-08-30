@@ -574,6 +574,40 @@ VERIFIERS.forEach(function (v) {
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
 
+// ------------------------------------------------------------------- 打包一致性
+// tools/ 是被**整个目录递归复制**进发布包的，.gitignore 管不到它。
+// 所以任何依赖测试脚手架（run-tests.js / dom-stub.js）的工具，都必须写进
+// build-release.ps1 的 $dropFromPkg，否则用户解开 zip 会拿到一个跑不起来的脚本。
+// 这一条以前靠我记着，记漏过 —— 现在让它自己查。
+(function () {
+  var HARNESS = ['run-tests.js', 'dom-stub.js'];
+  var ps = path.join(ROOT, 'tools', 'build-release.ps1');
+  if (!fs.existsSync(ps)) { console.log(pad('打包一致性') + '跳过（没有 build-release.ps1）'); return; }
+  var txt = fs.readFileSync(ps, 'utf8');
+  var blk = /\$dropFromPkg\s*=\s*@\(([\s\S]*?)\)/.exec(txt);
+  if (!blk) { problems.push('build-release.ps1 里找不到 $dropFromPkg，打包一致性检查没跑起来'); return; }
+  var listed = {};
+  (blk[1].match(/'tools\\([^']+)'/g) || []).forEach(function (s) {
+    listed[/'tools\\([^']+)'/.exec(s)[1]] = 1;
+  });
+  var need = [], miss = [];
+  fs.readdirSync(path.join(ROOT, 'tools')).forEach(function (f) {
+    if (!/\.js$/.test(f)) return;
+    var src = fs.readFileSync(path.join(ROOT, 'tools', f), 'utf8');
+    var uses = HARNESS.some(function (h) { return h !== f && src.indexOf(h) >= 0; });
+    if (!uses && HARNESS.indexOf(f) < 0) return;
+    need.push(f);
+    if (!listed[f]) miss.push(f);
+  });
+  if (need.length < 2) problems.push('只找到 ' + need.length + ' 个依赖脚手架的工具，打包一致性检查没跑起来');
+  miss.forEach(function (f) {
+    problems.push('tools/' + f + ' 依赖测试脚手架，但没写进 build-release.ps1 的 $dropFromPkg，会被打进发布包');
+  });
+  console.log(pad('打包一致性') + (miss.length
+      ? miss.length + ' 个工具会被误打包（共 ' + need.length + ' 个依赖脚手架）'
+      : '通过（' + need.length + ' 个依赖脚手架的工具全在 $dropFromPkg 里）'));
+})();
+
 // ----------------------------------------------------------------------- 汇总
 
 console.log('');
@@ -588,6 +622,6 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验'
+  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);
