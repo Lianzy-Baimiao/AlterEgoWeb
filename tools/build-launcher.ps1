@@ -1059,23 +1059,49 @@ public static class Launcher
 
     /// The dashboard window handle, or IntPtr.Zero.
     static IntPtr FindDashboardWindow()
-    {        IntPtr found = IntPtr.Zero;
+    {
+        // Two passes' worth of information in one sweep: an exact title match is
+        // the app-mode window (its title is just the page <title>), while a
+        // "<title> - Microsoft Edge" style prefix match is the same page sitting
+        // in an ordinary tab, which is what the no---app= fallback produces.
+        IntPtr exact = IntPtr.Zero;
+        IntPtr prefixed = IntPtr.Zero;
+
         EnumWindows(delegate(IntPtr hWnd, IntPtr param)
         {
             if (!IsWindowVisible(hWnd)) return true;
-            System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
             if (GetWindowText(hWnd, sb, sb.Capacity) == 0) return true;
             string title = sb.ToString();
-            // Chrome/Edge app-mode windows are titled with the page's <title>.
-            if (title.IndexOf(T_PAGETITLE, StringComparison.Ordinal) >= 0)
+
+            // MUST be a prefix, not a substring anywhere in the title.
+            //
+            // This repo's GitHub page is titled
+            //   "GitHub - Lianzy-Baimiao/WowAltBoard: 魔兽多角色看板：..."
+            // because the page title carries the repo DESCRIPTION, which opens
+            // with the product name. A substring test matched that window, so
+            // with the project page open in a tab the launcher decided the
+            // dashboard was already up: it focused the GitHub window and never
+            // opened the board, and the geometry watcher then saved GitHub's
+            // window rect as the board's remembered position.
+            if (!title.StartsWith(T_PAGETITLE, StringComparison.Ordinal)) return true;
+
+            if (title.Length == T_PAGETITLE.Length)
             {
-                found = hWnd;
-                return false;
+                exact = hWnd;
+                return false;                 // app-mode window: nothing beats it
+            }
+            // Only a real separator counts, so a hypothetical page titled
+            // "魔兽多角色看板攻略" on some site cannot pass as ours.
+            if (title.Length > T_PAGETITLE.Length + 2 &&
+                title.Substring(T_PAGETITLE.Length, 3) == " - " && prefixed == IntPtr.Zero)
+            {
+                prefixed = hWnd;
             }
             return true;
         }, IntPtr.Zero);
 
-        return found;
+        return exact != IntPtr.Zero ? exact : prefixed;
     }
 
     /// Focus an already-open dashboard window. Returns false if there is none.
