@@ -143,6 +143,24 @@
     return q == null ? null : q;
   }
 
+  /**
+   * 轨道码 → 「英雄 6/6」。轨道码 = (轨道下标+1)*10 + 升级等级，0 = 解不出来。
+   *
+   * 这个字段是 tools\gen-bis.js 从 BisData 的 bonusIDs 解出来的：插件存 bonusIDs
+   * 只为了在游戏里拼 |Hitem: 链接让 tooltip 显示对的装等，网页没这个机制，所以
+   * 生成器把它解成轨道 + 等级再存，比原样存那串数字省，而且是能直接显示的东西。
+   * 3963 行里 3601 行解得出（90.9%），解不出的多是旧赛季物品和套装坯子。
+   */
+  function trackLabel(code) {
+    var B = bis();
+    if (!code || !B || !B.tracks) return '';
+    var idx = Math.floor(code / 10) - 1;
+    var lv = code % 10;
+    var t = B.tracks[idx];
+    if (!t) return '';
+    return (t[1] || t[0]) + ' ' + lv + '/6';
+  }
+
   /** 按 itemId 出一个 <img>，没有图标数据就返回 null。size 是显示边长。 */
   function iconImg(itemId, size, fallbackName) {
     var name = itemIcon(itemId) || fallbackName || '';
@@ -577,10 +595,11 @@
     return wrap;
   }
 
-  // 部位条目：[itemId, ilvl, 使用率, 来源下标, 可升级上限?]
+  // 部位条目：[itemId, ilvl, 使用率, 来源下标, 可升级上限, 轨道码]
+  // 后两位可能被生成器省掉（末尾的 0 会被去掉），但不会跳着省。
   function renderItem(r, isTop, mine) {
     var B = bis();
-    var itemId = r[0], ilvl = r[1], usage = r[2], srcIdx = r[3], mx = r[4];
+    var itemId = r[0], ilvl = r[1], usage = r[2], srcIdx = r[3], mx = r[4], trk = r[5];
     var it = B.items[itemId] || {};
     var src = B.srcs[srcIdx] || [];
     var srcText = src[0] || '', cat = src[1] || '', boss = src[2] || '';
@@ -611,6 +630,14 @@
     var sub = el('span', 'sub2');
     sub.textContent = String(ilvl) + (mx && mx > ilvl ? '→' + mx : '');
     main.appendChild(sub);
+
+    var tl = trackLabel(trk);
+    if (tl) {
+      var tb = el('span', 'tag trk', tl);
+      tb.setAttribute('data-tip', '升级轨道，从装备的 bonusID 解出来的\n'
+        + '（' + tl + ' = 这条轨道的第 ' + (trk % 10) + ' 级，满级 6 级）');
+      main.appendChild(tb);
+    }
 
     if (it.st) {
       var sp = el('span', 'stats');

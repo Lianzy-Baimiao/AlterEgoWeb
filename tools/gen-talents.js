@@ -247,8 +247,9 @@ var body = header + '\nwindow.AE_TALENTS = ' + JSON.stringify(payload) + ';\n';
 var outPath = path.join(BASE, 'app', 'talent-data.js');
 fs.writeFileSync(outPath, body, 'utf8');
 
-console.log('源文件        ' + (text.length / 1024).toFixed(1) + ' KB');
-console.log('输出          app/talent-data.js  ' + (body.length / 1024).toFixed(1) + ' KB');
+// Buffer.byteLength，不是 .length —— 中文一个字符占 3 字节，按字符数报会少算一大截。
+console.log('源文件        ' + (Buffer.byteLength(text, 'utf8') / 1024).toFixed(1) + ' KB');
+console.log('输出          app/talent-data.js  ' + (Buffer.byteLength(body, 'utf8') / 1024).toFixed(1) + ' KB');
 console.log('专精          ' + stat.specs);
 console.log('天赋套数      ' + stat.builds + '（含基准 ' + stat.specs + ' 套）');
 console.log('数字          ' + stat.rawNums + ' → ' + stat.encNums +

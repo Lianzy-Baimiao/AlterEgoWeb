@@ -33,6 +33,20 @@
       results.push({ name: name, ok: ok, detail: detail });
     }
 
+    /** 把 40 专精 × 两套视角 × 每个部位的每一行都走一遍。fn(row, where)。 */
+    function eachRow(B, fn) {
+      Object.keys(B.specs).forEach(function (key) {
+        ['raid', 'mplus'].forEach(function (view) {
+          var slots = B.specs[key][view] || {};
+          Object.keys(slots).forEach(function (slot) {
+            slots[slot].forEach(function (row) {
+              fn(row, key + '/' + view + '/' + slot);
+            });
+          });
+        });
+      });
+    }
+
     var B = global.AE_BIS;
     if (!B) {
       return { pass: 0, fail: 0, skipped: true, results: [] };
@@ -416,6 +430,64 @@
       });
       if (miss.length) return miss.length + ' 件没有品质，例如 ' + miss[0];
       return bad.length === 0 || '品质越界：' + bad.slice(0, 3).join(', ');
+    });
+
+    // ------------------------------------------------------------ 升级轨道
+    // 行的第 6 位是轨道码 = (轨道下标+1)*10 + 升级等级，由 tools\gen-bis.js 从
+    // BisData 的 bonusIDs 解出来。轨道名是从两处 shipped zhCN locale 抄的。
+
+    t('升级轨道：轨道表结构正确（英文名 / 中文名 / 赛季号）', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      if (!B.tracks || !B.tracks.length) return '没有 tracks 表';
+      var bad = [];
+      B.tracks.forEach(function (t2, i) {
+        if (!Array.isArray(t2) || t2.length !== 3) { bad.push('#' + i + ' 长度 ' + (t2 || []).length); return; }
+        if (!/^[A-Za-z]+$/.test(t2[0])) bad.push('#' + i + ' 英文名 ' + t2[0]);
+        if (!t2[1] || !L.hasCJK(t2[1])) bad.push('#' + i + ' 中文名 ' + t2[1]);
+        if (!(t2[2] > 0)) bad.push('#' + i + ' 赛季 ' + t2[2]);
+      });
+      return bad.length === 0 || bad.slice(0, 3).join('; ');
+    });
+
+    t('升级轨道：每行的轨道码都能解开，等级在 1..6', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      var bad = [];
+      eachRow(B, function (row, where) {
+        var code = row[5];
+        if (!code) return;                  // 0 / 缺省 = 解不出轨道，允许
+        var idx = Math.floor(code / 10) - 1;
+        var lv = code % 10;
+        if (!B.tracks[idx]) bad.push(where + ' 轨道下标 ' + idx);
+        else if (!(lv >= 1 && lv <= 6)) bad.push(where + ' 等级 ' + lv);
+      });
+      return bad.length === 0 || bad.length + ' 处异常，例如 ' + bad[0];
+    });
+
+    t('升级轨道：能解出轨道的行占大多数', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      // 本机实测 3601/3963 = 90.9%。解不出的多是上赛季物品和套装坯子。
+      // 门槛定在 80%：真掉下去说明 AlterEgo 的轨道表没跟上新赛季，那正是要知道的事。
+      var total = 0, ok = 0;
+      eachRow(B, function (row) { total++; if (row[5]) ok++; });
+      if (!total) return '一行都没有';
+      var r = ok / total;
+      return r >= 0.8 || '只有 ' + ok + '/' + total + ' 行（' + (r * 100).toFixed(1) + '%）能解出轨道';
+    });
+
+    t('升级轨道：mx（可升级上限）不小于当前装等', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      // 行格式改成固定位置之后 mx 缺省写 0（不再是 undefined）。0 表示没有上限信息。
+      var bad = [];
+      eachRow(B, function (row, where) {
+        var ilvl = row[1], mx = row[4];
+        if (mx == null || mx === 0) return;
+        if (mx < ilvl) bad.push(where + ' ' + ilvl + ' → ' + mx);
+      });
+      return bad.length === 0 || bad.length + ' 处 mx 小于装等，例如 ' + bad[0];
     });
 
     t('图标数据：品质不是清一色的 4', function () {

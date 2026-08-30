@@ -1211,6 +1211,17 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   border: 1px solid var(--line);
   color: var(--fg2);
 }
+/* 升级轨道（「英雄 6/6」）。故意比来源标签淡一档：它是补充信息，
+   不该跟来源分类抢注意力。 */
+.item .tag.trk {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--fg3);
+  white-space: nowrap;
+}
 
 /* ---- 宝石 / 附魔 / 消耗品 */
 .bis-extras { margin-top: 12px; }

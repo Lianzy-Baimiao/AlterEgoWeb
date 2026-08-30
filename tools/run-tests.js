@@ -103,7 +103,7 @@ function walk(node, fn) {
 var B = g.AE_BIS;
 var specKeys = Object.keys(B.specs);
 var problems = [];
-var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0 };
+var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0 };
 var missingFiles = {};
 var body = doc.getElementById('bis-body');
 
@@ -123,6 +123,15 @@ function checkRender(label) {
       if (!fs.existsSync(path.join(ROOT, src))) missingFiles[src] = 1;
     }
     if (n.classList && n.classList.contains('ph')) stats.ph++;
+    // 轨道徽章。数据里有轨道码不等于画出来了 —— 这一条盯的是渲染。
+    if (n.classList && n.classList.contains('trk')) {
+      stats.trk++;
+      // 形如「英雄 6/6」：中文轨道名 + 空格 + 等级/6
+      if (!/^\S+ [1-6]\/6$/.test(n.textContent)) {
+        stats.trkBad++;
+        if (stats.trkBad < 4) problems.push(label + ' 轨道徽章文字不对：' + n.textContent);
+      }
+    }
   });
   if (!sawItem) problems.push(label + ' 一件装备都没画出来');
 }
@@ -171,9 +180,16 @@ if (haveIcon.length !== gearIds.length) {
 if (haveFile.length !== gearIds.length) {
   problems.push('装备图标文件覆盖 ' + haveFile.length + '/' + gearIds.length + '，不是全覆盖');
 }
+// 轨道徽章：数据里有 3601 行能解出轨道，但「数据对」不等于「画出来了」。
+// 80 次渲染只画每个专精的前几件，所以这里不按 3601 算，只要求量级对。
+if (stats.trk < 500) problems.push('轨道徽章只画了 ' + stats.trk + ' 个，太少');
+if (stats.trkBad > 0) {
+  problems.push(stats.trkBad + ' 个轨道徽章文字不合格式，例如 ' + stats.trkSample);
+}
 
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
-  + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph + '）');
+  + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
+  + '，轨道徽章 ' + stats.trk + '）');
 
 // ----------------------------------------------------------------------- 汇总
 

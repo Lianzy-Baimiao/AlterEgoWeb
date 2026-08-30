@@ -115,6 +115,133 @@ function harvestLocale() {
   return { slots: slotNames, stats: statNames };
 }
 
+// ------------------------------------------------------- 升级轨道（「英雄 6/6」那种）
+//
+// BisData 里 3963 行装备全部带 bonusIDs，但那串数字在插件里**只有一个用途**：
+// 拼游戏内的 `|Hitem:...` 链接，让游戏自己的 tooltip 显示正确装等。网页没有这个
+// 机制，而装等本来就已经在行里（ilvl / mx）。所以原样存那 19 KB 是白花的。
+//
+// 有价值的是把它**解开**：AlterEgo 自带一张赛季轨道表（Data/UpgradeTracks.lua，
+// 作者注明抄自 raidbots 的 bonuses.json），形如
+//   {name = "Hero", bonusIDs = {12841, ..., 12846}}
+// 数组下标就是升级等级 1..6。拿它去撞 BisData 的 bonusIDs，本机实测 3601/3963 行
+// 能解出「英雄 6/6」这种标签，而且**没有一行同时命中两个轨道**，不存在歧义。
+//
+// 为什么不能从装等推：实测单看装等有 3 个值对应两种轨道（308 / 318 / 321），
+// 连 (装等, 来源分类) 都还有 5/24 组歧义（321/raid 是 Hero 6/6 ×528 vs Myth 2/6 ×10）。
+// 推不出来，只能存。存「轨道下标 + 等级」压成一个小整数，比存原始 bonusIDs 省。
+//
+// 中文名同样不许手写。两处**互相独立**的 shipped zhCN locale 完全一致：
+//   EllesmereUILocales/zhCN.lua       L["Hero"] = "英雄"
+//   ItemInfoOverlay/Locales/zhCN.lua  L["color.itemLevel.itemUpgrade.hero"] = "英雄"
+// 两边都读，不一致就停 —— 一致才敢用。
+//（ItemInfoOverlay/Utils.lua 的代码注释里把 Myth 写成「史诗」，那是注释不是 locale；
+//  两个 locale 都写「神话」，所以按 locale。）
+function harvestTracks() {
+  // luaPath = ...\AddOns\GearInsight\core\BisData.lua → 上三层是 AddOns
+  var addonsDir = path.dirname(path.dirname(path.dirname(luaPath)));
+  var trackPath = path.join(addonsDir, 'AlterEgo', 'Data', 'UpgradeTracks.lua');
+  var euiPath   = path.join(addonsDir, 'EllesmereUILocales', 'zhCN.lua');
+  var iioPath   = path.join(addonsDir, 'ItemInfoOverlay', 'Locales', 'zhCN.lua');
+
+  var txt;
+  try { txt = fs.readFileSync(trackPath, 'utf8'); }
+  catch (e) { return { err: '读不到 ' + trackPath }; }
+
+  // 按 seasonID 分段，段内再抳 {name = "X", bonusIDs = {a, b, ...}}
+  var tracks = [];
+  var seasonRe = /seasonID\s*=\s*(\d+)([\s\S]*?)(?=seasonID\s*=\s*\d+|$)/g;
+  var sm;
+  while ((sm = seasonRe.exec(txt))) {
+    var season = Number(sm[1]);
+    var body = sm[2];
+    var tr = /\{\s*name\s*=\s*"([A-Za-z]+)"\s*,\s*bonusIDs\s*=\s*\{([\d,\s]+)\}/g;
+    var tm;
+    while ((tm = tr.exec(body))) {
+      var ids = tm[2].split(',').map(function (x) { return Number(x.trim()); })
+                     .filter(function (x) { return x > 0; });
+      if (ids.length) tracks.push({ en: tm[1], season: season, ids: ids });
+    }
+  }
+  if (!tracks.length) return { err: 'UpgradeTracks.lua 里没解析出任何轨道' };
+
+  function readL(p, keyOf) {
+    var s;
+    try { s = fs.readFileSync(p, 'utf8'); } catch (e) { return null; }
+    var out = {};
+    var re = /L\["([^"]+)"\]\s*=\s*"([^"]*)"/g, m;
+    while ((m = re.exec(s))) {
+      var k = keyOf(m[1]);
+      if (k) out[k] = m[2];
+    }
+    return out;
+  }
+  var eui = readL(euiPath, function (k) {
+    return /^(Adventurer|Veteran|Champion|Hero|Myth|Explorer)$/.test(k) ? k : null;
+  });
+  var iio = readL(iioPath, function (k) {
+    var m = /^color\.itemLevel\.itemUpgrade\.([a-z]+)$/.exec(k);
+    if (!m) return null;
+    var map = { veteran: 'Veteran', champion: 'Champion', hero: 'Hero', myth: 'Myth' };
+    return map[m[1]] || null;
+  });
+  if (!eui) return { err: '读不到 ' + euiPath };
+  if (!iio) return { err: '读不到 ' + iioPath };
+
+  var cn = {}, disagree = [];
+  Object.keys(eui).forEach(function (k) { cn[k] = eui[k]; });
+  Object.keys(iio).forEach(function (k) {
+    if (cn[k] && cn[k] !== iio[k]) disagree.push(k + ': ' + cn[k] + ' vs ' + iio[k]);
+    else cn[k] = iio[k];
+  });
+  if (disagree.length) return { err: '两个 locale 的轨道中文名不一致：' + disagree.join('; ') };
+
+  var noCn = [];
+  tracks.forEach(function (t) {
+    if (!cn[t.en] && noCn.indexOf(t.en) < 0) noCn.push(t.en);
+  });
+  if (noCn.length) return { err: '这些轨道没有中文名：' + noCn.join(', ') };
+
+  // 轨道池 + bonusID 索引。同一个 bonusID 不该属于两个轨道，撞了就停。
+  var pool = [], byBonus = {}, dup = [];
+  tracks.forEach(function (t) {
+    var idx = pool.length;
+    pool.push([t.en, cn[t.en], t.season]);
+    t.ids.forEach(function (id, i) {
+      if (byBonus[id]) dup.push(String(id));
+      byBonus[id] = (idx + 1) * 10 + (i + 1);   // 下标 1 起，等级 1..6
+    });
+  });
+  if (dup.length) return { err: '同一个 bonusID 属于多个轨道：' + dup.join(', ') };
+
+  return { pool: pool, byBonus: byBonus };
+}
+
+var tracksInfo = harvestTracks();
+if (tracksInfo.err) {
+  console.error('升级轨道表没抄成：' + tracksInfo.err);
+  console.error('轨道名（勇士 / 英雄 / 神话…）不允许手写，见 app/labels.js 头部的规矩。');
+  console.error('需要这三个文件：AlterEgo/Data/UpgradeTracks.lua、');
+  console.error('              EllesmereUILocales/zhCN.lua、ItemInfoOverlay/Locales/zhCN.lua');
+  process.exit(1);
+}
+var trackStats = { withBonus: 0, decoded: 0, multi: 0 };
+
+/** bonusIDs 数组 → 轨道码（(下标+1)*10 + 等级），解不出来返回 0。 */
+function trackCode(bonusIDs) {
+  var ids = AE.asArray(bonusIDs || []);
+  if (!ids.length) return 0;
+  trackStats.withBonus++;
+  var hit = 0, n = 0;
+  ids.forEach(function (id) {
+    var c = tracksInfo.byBonus[Number(id)];
+    if (c) { hit = c; n++; }
+  });
+  if (n > 1) trackStats.multi++;
+  if (hit) trackStats.decoded++;
+  return hit;
+}
+
 var locale = harvestLocale();
 if (!locale || Object.keys(locale.slots).length < 16 || Object.keys(locale.stats).length < 8) {
   console.error('没能从插件的 locales/zhCN.lua + core/GearReader.lua 抄全部位名/属性名。');
@@ -195,7 +322,9 @@ function intern(it, where) {
   return id;
 }
 
-// 部位条目：[itemId, ilvl, 使用率, 来源下标, 可升级上限?]
+// 部位条目：[itemId, ilvl, 使用率, 来源下标, 可升级上限, 轨道码]
+// 后两位可以省，但**不能跳着省** —— 有轨道码时 mx 必须占住位置（没有就写 0），
+// 否则 r[4] 到底是 mx 还是轨道码就得靠数组长度猜，那种格式迟早出错。
 function convertSlots(bySlot, where) {
   var out = {};
   var slots = AE.asMap(bySlot || {});
@@ -206,8 +335,10 @@ function convertSlots(bySlot, where) {
       intern(it, where);
       var row = [it.itemId, it.ilvl != null ? it.ilvl : 0,
                  it.usagePct != null ? Math.round(it.usagePct * 10) / 10 : 0,
-                 internSource(it)];
-      if (it.mx != null) row.push(it.mx);
+                 internSource(it),
+                 it.mx != null ? it.mx : 0,
+                 trackCode(it.bonusIDs)];
+      while (row.length > 4 && row[row.length - 1] === 0) row.pop();
       return row;
     });
   });
@@ -296,6 +427,8 @@ var payload = {
   specRawToCN: specRawCN,
   items: pool,
   srcs: srcs,
+  tracks: tracksInfo.pool,
+  tracks: tracksInfo.pool,
   specs: outSpecs,
   consumables: outConsum
 };
@@ -330,11 +463,17 @@ Object.keys(outSpecs).forEach(function (k) {
     });
   });
 });
-console.log('源文件      ' + (text.length / 1024).toFixed(1) + ' KB');
-console.log('输出        app/bis-data.js  ' + (out.length / 1024).toFixed(1) + ' KB');
+// 用字节数而不是 out.length —— 后者是字符数，中文一个字符 3 字节，报出来的
+// 「KB」会小掉一成多（实测 196.3 KB 的文件报成 181.4 KB）。
+console.log('源文件      ' + (Buffer.byteLength(text, 'utf8') / 1024).toFixed(1) + ' KB');
+console.log('输出        app/bis-data.js  ' + (Buffer.byteLength(out, 'utf8') / 1024).toFixed(1) + ' KB');
 console.log('专精        ' + specKeys.length);
 console.log('装备池      ' + nItems + ' 件（去重后）');
 console.log('来源组合    ' + srcs.length + ' 种（去重后）');
 console.log('部位条目    ' + nSlots + ' 个部位 / ' + nRows + ' 行');
 console.log('消耗品      ' + outConsum.length);
+console.log('升级轨道    ' + tracksInfo.pool.length + ' 条，解出 ' + trackStats.decoded +
+            '/' + trackStats.withBonus + ' 行（' +
+            (trackStats.withBonus ? (trackStats.decoded / trackStats.withBonus * 100).toFixed(1) : '0') +
+            '%），一行命中多个轨道 ' + trackStats.multi + ' 次');
 console.log('数据日期    ' + (meta.updatedAt || '?') + '   赛季 ' + (outSpecs[specKeys[0]] || {}).zone);
