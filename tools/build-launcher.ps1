@@ -127,6 +127,11 @@ $T = @{
     UpdNewer   = '有新版本 {0}（当前 v{1}），点这里打开发布页'
     UpdCurrent = '已经是最新版本 v{0}'
     UpdFailed  = '检查更新失败，可能是网络不通。稍后再试。'
+    UpdTitle    = '检查更新'
+    UpdChecking = '正在联网检查更新...'
+    UpdNewerAsk = "发现新版本 {0}`n`n你现在用的是 {1}。`n`n要打开发布页去下载吗？"
+    UpdNoNew    = "已经是最新版本 {0}，不用更新。"
+    UpdFailAsk  = "没能连上 GitHub，所以查不到有没有新版本。`n`nGitHub 在国内经常访问不到，这多半是网络问题，不是程序坏了。`n`n技术细节：{0}`n`n要打开发布页自己看一眼吗？（同样需要能访问 GitHub）"
     CloseAsk   = "看板窗口已经关闭。`n`n要让程序继续留在托盘里（监视存档、自动重扫）吗？`n`n是 = 留在托盘　　否 = 一起退出"
     CloseTitle = '关闭看板之后'
     CloseRemem = '这个选择会记住，以后可以在托盘菜单的「关闭时行为」里改。'
@@ -202,6 +207,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -240,6 +246,11 @@ public static class Launcher
     const string T_UPDNEWER   = @@UPDNEWER@@;
     const string T_UPDCURRENT = @@UPDCURRENT@@;
     const string T_UPDFAILED  = @@UPDFAILED@@;
+    const string T_UPDTITLE   = @@UPDTITLE@@;
+    const string T_UPDCHECKING= @@UPDCHECKING@@;
+    const string T_UPDNEWERASK= @@UPDNEWERASK@@;
+    const string T_UPDNONEW   = @@UPDNONEW@@;
+    const string T_UPDFAILASK = @@UPDFAILASK@@;
     const string T_CLOSEASK   = @@CLOSEASK@@;
     const string T_CLOSETITLE = @@CLOSETITLE@@;
     const string T_CLOSEREMEM = @@CLOSEREMEM@@;
@@ -313,7 +324,9 @@ public static class Launcher
 
     class Splash : Form
     {
-        public Splash()
+        public Splash() : this(T_SCANNING) { }
+
+        public Splash(string message)
         {
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
@@ -332,7 +345,7 @@ public static class Launcher
             title.Height = 44;
 
             Label sub = new Label();
-            sub.Text = T_SCANNING;
+            sub.Text = message;
             sub.ForeColor = Color.FromArgb(152, 162, 179);
             sub.Font = new Font(T_FONT, 9F);
             sub.AutoSize = false;
@@ -845,48 +858,99 @@ public static class Launcher
 
     // -------------------------------------------------------------- update
 
-    // The page cannot do this itself: file:// blocks fetch and XHR outright. The
-    // scan already asks the GitHub API, so a manual check is just a rescan plus
-    // reading back what it wrote.
+    const string REPO = "Lianzy-Baimiao/WowAltBoard";
+
+    /// <summary>
+    /// Ask GitHub for the latest release tag. Returns "" and sets `err` on failure.
+    ///
+    /// Done here rather than by re-running the scan: the scan walks the whole WoW
+    /// folder and takes the better part of a minute, which is why clicking
+    /// 检查更新 used to look like it did nothing at all. This is one HTTPS request.
+    /// </summary>
+    static string FetchLatestTag(out string err, out string pageUrl)
+    {
+        err = ""; pageUrl = "";
+        try
+        {
+            // .NET Framework defaults to TLS 1.0, which GitHub refuses outright.
+            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(
+                "https://api.github.com/repos/" + REPO + "/releases/latest");
+            req.UserAgent = "WowAltBoard";           // GitHub rejects requests without one
+            req.Accept = "application/vnd.github+json";
+            req.Timeout = 8000;
+            req.ReadWriteTimeout = 8000;
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+            {
+                string json = sr.ReadToEnd();
+                pageUrl = Grab(json, "html_url");
+                return Grab(json, "tag_name");
+            }
+        }
+        catch (Exception ex) { err = ex.Message; return ""; }
+    }
+
+    /// The version this copy actually is, taken from the last scan's output.
+    static string InstalledVersion()
+    {
+        try
+        {
+            string js = File.ReadAllText(Path.Combine(BaseDir, "data\\data.js"), Encoding.UTF8);
+            string v = Grab(js, "toolVersion");
+            if (!string.IsNullOrEmpty(v)) return "v" + v.TrimStart('v', 'V');
+        }
+        catch { }
+        return "";
+    }
+
+    /// <summary>
+    /// Manual update check from the tray menu.
+    ///
+    /// Two things were wrong before: it ran a FULL rescan (tens of seconds) with
+    /// no indication anything was happening, and it reported through a balloon
+    /// tip -- which Windows 10/11 routinely swallows entirely (Focus Assist, or
+    /// notifications turned off for the app). Between the two, the honest user
+    /// experience was "I clicked it and nothing ever happened".
+    ///
+    /// Now: a splash appears immediately, the check is one HTTPS call, and the
+    /// answer is a dialog the user cannot miss.
+    /// </summary>
     static void CheckUpdate()
     {
-        string output;
-        if (!RunScan(out output))
+        string latest, err, pageUrl;
+        Splash sp = new Splash(T_UPDCHECKING);
+        sp.Show();
+        Application.DoEvents();                  // paint it before we block
+        try { latest = FetchLatestTag(out err, out pageUrl); }
+        finally { sp.Close(); sp.Dispose(); }
+
+        string current = InstalledVersion();
+        if (!string.IsNullOrEmpty(pageUrl)) UpdateUrl = pageUrl;
+        string fallbackUrl = "https://github.com/" + REPO + "/releases";
+
+        if (string.IsNullOrEmpty(latest))
         {
-            Tray.BalloonTipTitle = T_TITLE;
-            Tray.BalloonTipText = T_UPDFAILED;
-            Tray.ShowBalloonTip(3000);
+            if (MessageBox.Show(string.Format(T_UPDFAILASK, err), T_UPDTITLE,
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+            {
+                OpenUrl(string.IsNullOrEmpty(UpdateUrl) ? fallbackUrl : UpdateUrl);
+            }
             return;
         }
 
-        string dataFile = Path.Combine(BaseDir, "data\\data.js");
-        string latest = "", current = "", url = "", err = "";
-        try
+        if (!string.IsNullOrEmpty(current) && IsNewer(latest, current))
         {
-            string js = File.ReadAllText(dataFile, Encoding.UTF8);
-            latest  = Grab(js, "latestVersion");
-            current = Grab(js, "currentVersion");
-            url     = Grab(js, "url");
-            err     = Grab(js, "error");
+            if (MessageBox.Show(string.Format(T_UPDNEWERASK, latest, current), T_UPDTITLE,
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+            {
+                OpenUrl(string.IsNullOrEmpty(UpdateUrl) ? fallbackUrl : UpdateUrl);
+            }
+            return;
         }
-        catch { }
 
-        if (!string.IsNullOrEmpty(url)) UpdateUrl = url;
-
-        Tray.BalloonTipTitle = T_TITLE;
-        if (string.IsNullOrEmpty(latest))
-        {
-            Tray.BalloonTipText = T_UPDFAILED + (string.IsNullOrEmpty(err) ? "" : ("\n" + err));
-        }
-        else if (IsNewer(latest, current))
-        {
-            Tray.BalloonTipText = string.Format(T_UPDNEWER, latest, current);
-        }
-        else
-        {
-            Tray.BalloonTipText = string.Format(T_UPDCURRENT, current);
-        }
-        Tray.ShowBalloonTip(5000);
+        MessageBox.Show(string.Format(T_UPDNONEW, latest), T_UPDTITLE,
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // Narrow read of one string field out of the generated data.js. Not a JSON

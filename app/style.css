@@ -327,6 +327,11 @@ table#grid {
 }
 .pick:hover::after { color: var(--accent); }
 
+/* In a panel header the picker replaces the .sub2 spacer, so it has to do that
+   job too -- otherwise 关闭 slides left to sit against it. align-self because
+   .panel-head aligns on the baseline, which a styled <select> does not share. */
+.panel-head .pick { margin-right: auto; align-self: center; }
+
 /* ---- header drag-to-reorder (app/drag.js) --------------------------------
    grab rather than pointer on the band row: it has nothing to sort, so the only
    thing a press does there is move the group. The column row keeps pointer,
