@@ -73,6 +73,94 @@
     return L.classColors[String(classFile || '').toUpperCase()] || '#B9C4D4';
   };
 
+  // -------------------------------------------------------------- class zhCN
+  // classFile -> zhCN. Same rule as L.dungeonZh / L.raidZh: every row below was
+  // copied out of this machine's own AlterEgo SavedVariables, where each
+  // character carries ch.info.class = {id, file, name} with the client's own
+  // localized name. Nothing here was typed from memory.
+  //
+  // Only 9 of 13 are present because those are the classes this account has
+  // characters of -- there is no localized class table anywhere on disk (I
+  // searched all 7895 SavedVariables files and the whole AddOns folder). The
+  // remaining 4 fall back to the English token on purpose, and get filled in
+  // automatically the first time a character of that class is scanned; see
+  // learnedClassNames in settings.js.
+  L.classZh = {
+    DEATHKNIGHT: '死亡骑士',
+    DEMONHUNTER: '恶魔猎手',
+    DRUID:       '德鲁伊',
+    HUNTER:      '猎人',
+    PALADIN:     '圣骑士',
+    PRIEST:      '牧师',
+    SHAMAN:      '萨满祭司',
+    WARLOCK:     '术士',
+    WARRIOR:     '战士'
+    // EVOKER / MAGE / MONK / ROGUE: no verified string on this machine.
+  };
+
+  /**
+   * classFile -> display label. learned is the harvested cache from settings,
+   * which wins over the built-in table (it comes from the running client).
+   */
+  L.classLabel = function (classFile, learned) {
+    var key = String(classFile || '').toUpperCase();
+    if (!key) return '';
+    if (learned && typeof learned[key] === 'string' && L.hasCJK(learned[key])) {
+      return learned[key];
+    }
+    return L.classZh[key] || key;
+  };
+
+  // --------------------------------------------------------------- spec zhCN
+  // Keyed by specID, and deliberately EMPTY by default.
+  //
+  // Spec names come from GearInsight's own BisData.specRawToCN, harvested into
+  // app/bis-data.js by tools/gen-bis.js. That table is keyed by the raw spec
+  // name alone, which makes it wrong in two ways I measured rather than guessed:
+  //
+  //   · FROST is one key for two different specs, so 死亡骑士/冰霜 comes out as
+  //     「冰法」 -- a mage's name on a death knight;
+  //   · PRESERVATION and DISCIPLINE have no row at all, so they show in English.
+  //
+  // I will not paper over that by typing the three names from memory -- that is
+  // exactly the mistake the header note above warns about. Put the client's own
+  // strings here (设置 → 其他, or edit data/settings.js) and they win.
+  L.specZh = {
+    // 251: '…',  // 死亡骑士 冰霜  (BisData says 冰法, which is a mage)
+    // 256: '…',  // 牧师 (DISCIPLINE)
+    // 1468: '…'  // 唤魔师 (PRESERVATION)
+  };
+
+  // specID -> the addon string that must NOT be shown for it.
+  //
+  // BisData.specRawToCN['FROST'] = '冰法', and both the death knight and the
+  // mage spec are raw-named FROST, so the DK inherits the mage's name. Showing
+  // 「冰法」 on a death knight is not a rough translation, it is a different
+  // class's spec -- so the English token is the better of the two available
+  // answers until someone supplies the real string.
+  L.specZhRejected = {
+    251: '冰法'     // 死亡骑士/FROST
+  };
+
+  /**
+   * specID + the addon-supplied zhCN -> what to show.
+   * Order: user override > built-in table > addon zhCN (unless rejected) > raw.
+   *
+   * @param {number|string} specId
+   * @param {string} [addonCn]  zhCN from bis-data.js (GearInsight's own table)
+   * @param {object} [override] {specID: '中文名'} from settings
+   * @param {string} [raw]      raw English token, used when nothing else fits
+   */
+  L.specLabel = function (specId, addonCn, override, raw) {
+    var ov = override && override[specId];
+    if (typeof ov === 'string' && ov) return ov;
+    if (L.specZh[specId]) return L.specZh[specId];
+    if (addonCn && L.specZhRejected[specId] !== addonCn && L.hasCJK(addonCn)) {
+      return addonCn;
+    }
+    return raw || addonCn || '';
+  };
+
   // ----------------------------------------------------- item quality colors
   // Indexed by itemQuality / the N in a |cnIQN: link prefix.
   L.qualityColors = {

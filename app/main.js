@@ -81,6 +81,18 @@
         learnedChanged = true;
       }
     });
+    // Localized class names, for the 毕业装备 panel's class picker. labels.js
+    // ships the 9 this account could verify; there is no localized class table
+    // anywhere on disk, so the other 4 arrive here the first time a character of
+    // that class is scanned.
+    if (!loaded.settings.learnedClassNames) loaded.settings.learnedClassNames = {};
+    model.characters.forEach(function (ch) {
+      if (!ch.classFile || !ch.className) return;
+      if (loaded.settings.learnedClassNames[ch.classFile] !== ch.className) {
+        loaded.settings.learnedClassNames[ch.classFile] = ch.className;
+        learnedChanged = true;
+      }
+    });
 
     try {
       AE.render(model, loaded.settings);
@@ -114,7 +126,8 @@
     { id: 'panel',  onClose: null },
     { id: 'drawer', onClose: null },
     { id: 'trend',  onClose: null },
-    { id: 'vault',  onClose: null }
+    { id: 'vault',  onClose: null },
+    { id: 'bis',    onClose: null }
   ];
 
   function closeAll(except) {
@@ -169,9 +182,11 @@
     doc.getElementById('drawer-close').addEventListener('click', function () { closeAll(null); });
     doc.getElementById('trend-close').addEventListener('click', function () { closeAll(null); });
     doc.getElementById('vault-close').addEventListener('click', function () { closeAll(null); });
+    doc.getElementById('bis-close').addEventListener('click', function () { closeAll(null); });
 
     doc.getElementById('btn-trends').addEventListener('click', function () { AE.openTrends(); });
     doc.getElementById('btn-vault').addEventListener('click', function () { AE.openVault(); });
+    doc.getElementById('btn-bis').addEventListener('click', function () { AE.openBis(); });
     doc.getElementById('trend-metric').addEventListener('change', AE.rerenderTrends);
 
     // Click anywhere outside an open panel closes it. The backdrop covers the

@@ -33,6 +33,10 @@
 <div id="model-summary" class="summary">运行中…</div>
 <ul class="results" id="model-results"></ul>
 
+<h2>毕业装备 / 天赋数据</h2>
+<div id="bis-summary" class="summary">运行中…</div>
+<ul class="results" id="bis-results"></ul>
+
 <h2>真实存档解析</h2>
 <div id="live"></div>
 
@@ -45,6 +49,12 @@
 <script src="app/layouts.js" charset="utf-8"></script>
 <script src="app/model-tests.js" charset="utf-8"></script>
 <script src="app/export.js" charset="utf-8"></script>
+<script src="app/bis.js" charset="utf-8"></script>
+<script src="app/bis-tests.js" charset="utf-8"></script>
+<!-- 两份参照表。天赋表在正式页面里是懒加载的，测试页要显式载入 ——
+     否则那几个测试会「跳过」，而跳过在统计里跟通过长得一样。 -->
+<script src="app/bis-data.js" charset="utf-8"></script>
+<script src="app/talent-data.js" charset="utf-8"></script>
 <script src="data/data.js" charset="utf-8"></script>
 <script src="data/bagsync.js" charset="utf-8"></script>
 <script>
@@ -87,6 +97,19 @@
       : mr.pass + ' 项通过，' + mr.fail + ' 项失败';
   }
   list(document.getElementById('model-results'), mr.results);
+
+  var br = window.AE.runBisTests ? window.AE.runBisTests() : null;
+  var bsum = document.getElementById('bis-summary');
+  if (!br) {
+    bsum.className = 'summary';
+    bsum.textContent = 'bis-tests.js 没加载。';
+  } else {
+    bsum.className = 'summary ' + (br.fail === 0 ? 'ok' : 'bad');
+    bsum.textContent = br.fail === 0
+      ? '全部 ' + br.pass + ' 项毕业装备测试通过'
+      : br.pass + ' 项通过，' + br.fail + ' 项失败';
+    list(document.getElementById('bis-results'), br.results);
+  }
 
   // Live check against the real scanned data, when present.
   var live = document.getElementById('live');

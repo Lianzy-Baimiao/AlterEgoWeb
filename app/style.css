@@ -459,7 +459,7 @@ footer .spacer { flex: 1; }
 }
 #backdrop.on { opacity: 1; pointer-events: auto; }
 
-#panel, #drawer, #trend, #vault {
+#panel, #drawer, #trend, #vault, #bis {
   position: fixed;
   top: 0;
   bottom: 0;
@@ -473,7 +473,7 @@ footer .spacer { flex: 1; }
 }
 #panel { left: 0; transform: translateX(-101%); }
 #panel.open { transform: none; }
-#drawer, #trend, #vault {
+#drawer, #trend, #vault, #bis {
   right: 0;
   left: auto;
   width: 560px;
@@ -483,7 +483,7 @@ footer .spacer { flex: 1; }
 }
 #trend { width: min(900px, 92vw); }
 #vault { width: min(760px, 94vw); }
-#drawer.open, #trend.open, #vault.open { transform: none; }
+#drawer.open, #trend.open, #vault.open, #bis.open { transform: none; }
 
 #trend-body { overflow: auto; padding: 10px 14px 40px; flex: 1; }
 table.trend th:first-child, table.trend td:first-child {
@@ -676,7 +676,8 @@ table.mini-table td.overtime { color: var(--bad); }
 /* -------------------------------------------------------------------- print */
 
 @media print {
-  header button, #panel, #drawer, #warnings { display: none !important; }
+  header button, #panel, #drawer, #trend, #vault, #bis,
+  #warnings { display: none !important; }
   #grid-wrap { overflow: visible; max-height: none; contain: none; }
   #grid thead th { position: static; }
   #grid th.sticky-col, #grid td.sticky-col { position: static; }
@@ -984,3 +985,274 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   margin-top: 3px;
   word-break: break-all;
 }
+
+/* ---------------------------------------------------------------- 毕业装备面板
+
+   这个面板比其它抽屉宽（纵向长方形，一列部位从上往下排），所以它自己一档宽度。 */
+#bis { width: min(680px, 96vw); }
+#bis-body { overflow-y: auto; padding: 10px 14px 40px; flex: 1; }
+
+#bis-body .bis-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin: -4px 0 8px;
+}
+#bis-body .bis-tabs button.tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--fg2);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+#bis-body .bis-tabs button.tab:hover { color: var(--fg); background: var(--bg3); }
+#bis-body .bis-tabs button.tab.on {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- 职业 / 专精选择 */
+.bis-pick { margin-bottom: 8px; }
+.bis-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+.bis-row button {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  cursor: pointer;
+  color: var(--fg2);
+}
+.bis-row button:hover { background: var(--bg3); }
+/* 职业按钮的描边/文字色由 JS 按职业色设置，这里只管形状。 */
+.bis-row button.cls { font-weight: 600; }
+.bis-row button.spec.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0f1319;
+  font-weight: 600;
+}
+
+/* ---- 视角切换 + 对照角色 */
+.bis-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.bis-bar .seg { display: inline-flex; }
+.bis-bar .seg button {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--fg2);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bis-bar .seg button:first-child { border-radius: 3px 0 0 3px; }
+.bis-bar .seg button:last-child { border-radius: 0 3px 3px 0; border-left: 0; }
+.bis-bar .seg button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0f1319;
+  font-weight: 600;
+}
+.bis-bar .pick { display: inline-flex; align-items: center; gap: 5px; }
+.bis-bar .pick label { color: var(--fg2); font-size: 11.5px; }
+
+/* ---- 专精概要 */
+.bis-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 7px 9px;
+  margin-bottom: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.bis-meta .mcell { display: inline-flex; align-items: baseline; gap: 5px; }
+.bis-meta .mcell label { color: var(--fg2); font-size: 11px; }
+.bis-meta .mcell b { font-size: 12.5px; }
+
+/* ---- 属性目标条 */
+.bis-stats { margin-bottom: 10px; }
+.bis-bars { display: flex; flex-direction: column; gap: 3px; }
+.bar-row { display: flex; align-items: center; gap: 7px; font-size: 11.5px; }
+.bar-row label { width: 34px; color: var(--fg2); flex: none; }
+.bar-row .track {
+  flex: 1;
+  height: 9px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+  position: relative;
+}
+.bar-row .track .fill { height: 100%; opacity: .75; }
+.bar-row .n { width: 46px; text-align: right; color: var(--fg2); flex: none; }
+
+/* ---- 部位列表（纵向长方形的主体） */
+.bis-slots { display: flex; flex-direction: column; gap: 7px; }
+.slot {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: hidden;
+}
+/* 「我身上这件」挂在 slot-head 里的 span 上，不是 .slot 本身 —— 写成 .slot.mine
+   是个永远匹配不上的死规则，已经改掉。 */
+.slot-head .mine {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg2);
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slot-head .mine.ok { color: var(--good); }
+.slot-head .mine.empty { color: var(--fg3); font-style: italic; }
+.slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--line);
+}
+.slot-head b { font-size: 12px; }
+.slot-head .sub { color: var(--fg2); font-size: 11px; }
+.slot-head .tag {
+  margin-left: auto;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--fg2);
+}
+.slot-head .tag.ok { color: var(--good); border-color: var(--good); }
+.slot-head .tag.no { color: var(--warn); border-color: var(--warn); }
+
+/* ---- 单件装备 */
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--line);
+}
+.item:first-child { border-top: 0; }
+.item.have { background: var(--reward); }
+/* 使用率最高的那一件。左边一道竖线，不改底色 —— 底色留给 .have，
+   两个同时命中时才看得出区别。 */
+.item.top { box-shadow: inset 2px 0 0 var(--accent); }
+.item.top .im .n { font-weight: 600; }
+.item .icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+}
+/* 没有图标数据时的占位块：底色 = 来源分类色，中间一个字。 */
+.item .icon.ph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f1319;
+}
+.item .im { flex: 1; min-width: 0; }
+.item .im .n {
+  display: block;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item .im .sub2 { display: block; color: var(--fg2); font-size: 11px; }
+.item .im .stats { color: var(--fg3); font-size: 10.5px; }
+.item .usage { flex: none; width: 92px; }
+.item .usage .track {
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.item .usage .track .fill { height: 100%; background: var(--accent); opacity: .7; }
+.item .usage .n { display: block; font-size: 10.5px; color: var(--fg2); text-align: right; }
+/* 「使用」= 主动使用类饰品，和部位标签共用 .tag 的外形。 */
+.item .tag.use {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--fg2);
+}
+
+/* ---- 宝石 / 附魔 / 消耗品 */
+.bis-extras { margin-top: 12px; }
+.ench-row { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; padding: 2px 0; }
+.ench-row label { width: 48px; color: var(--fg2); flex: none; }
+.ench-row .ench { flex: 1; }
+.ench-row .n { color: var(--fg2); }
+
+/* ---- 天赋页 */
+.bis-warn {
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.bis-warn b { color: var(--warn); }
+.bis-warn pre.fmt {
+  margin: 6px 0 0;
+  padding: 7px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-x: auto;
+  color: var(--fg2);
+}
+.bis-bstats { margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 11px;
+}
+.chip .n { color: var(--fg2); }
+table.bis-tbl { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+table.bis-tbl th, table.bis-tbl td {
+  text-align: left;
+  padding: 3px 7px;
+  border-bottom: 1px solid var(--line);
+}
+table.bis-tbl th { color: var(--fg2); font-weight: 600; }
+.bis-encs { margin-top: 10px; }
+.bis-tree { margin-top: 10px; }
+.bis-sum { margin: 0 0 7px; font-size: 12px; }
+.bis-sum .warn { color: var(--warn); font-weight: 600; }
+.bis-foot { margin-top: 14px; color: var(--fg3); font-size: 11px; line-height: 1.6; }

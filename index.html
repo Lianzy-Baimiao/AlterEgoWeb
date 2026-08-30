@@ -63,6 +63,7 @@
 
     <button type="button" id="btn-vault">备份箱</button>
     <button type="button" id="btn-trends">周趋势</button>
+    <button type="button" id="btn-bis" title="各专精毕业装备与热门天赋（数据在包里，不用联网）">毕业装备</button>
     <!-- Excel is what nearly everyone wants; CSV and 打印 sat in the header
          costing two slots for the rare case. Split button: primary action stays
          one click, the other two move behind the caret. -->
@@ -159,6 +160,15 @@
   <div id="vault-body"></div>
 </aside>
 
+<aside id="bis">
+  <div class="panel-head">
+    <h2>毕业装备</h2>
+    <span class="sub2" id="bis-sub"></span>
+    <button type="button" id="bis-close">关闭</button>
+  </div>
+  <div id="bis-body"></div>
+</aside>
+
 <!-- Capability probe: turns every browser assumption into a runtime fact. -->
 <script>
 window.__AE_PROBE = {};
@@ -195,6 +205,9 @@ window.__AE_PROBE.storage = (function () {
 <script src="app/layouts.js" charset="utf-8"></script>
 <script src="app/history.js" charset="utf-8"></script>
 <script src="app/vault.js" charset="utf-8"></script>
+<!-- app/bis-data.js 和 app/talent-data.js 不在这里：加起来 ~670 KB，只有点开
+     「毕业装备」才按需加载（见 app/bis.js 的 loadDataFile）。 -->
+<script src="app/bis.js" charset="utf-8"></script>
 <script src="app/export.js" charset="utf-8"></script>
 <script src="app/main.js" charset="utf-8"></script>
 

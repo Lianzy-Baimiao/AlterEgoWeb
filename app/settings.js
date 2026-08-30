@@ -116,8 +116,40 @@
       // headers fell back to English after every reset.
       learnedRaidNames: {},
 
+      // Learned localized class names, harvested from ch.info.class.name. Only 9
+      // of 13 classes ship built-in (labels.js explains why), so this is what
+      // fills in the rest as you scan characters of those classes.
+      learnedClassNames: {},
+
+      // User corrections to spec labels, keyed by specID. GearInsight's own
+      // table calls 死亡骑士/冰霜 "冰法" and has no row for PRESERVATION or
+      // DISCIPLINE; these win over it. See L.specZh in labels.js.
+      specNameOverrides: {},
+
       // User corrections to dungeon labels.
-      dungeonNameOverrides: {}
+      dungeonNameOverrides: {},
+
+      // 毕业装备 / 天赋面板: last selection, so reopening lands where you left.
+      bisTab: 'gear',                // 'gear' | 'talents'
+      bisSpec: '',                   // 'DEATHKNIGHT/BLOOD/Deathbringer'
+      bisView: 'raid',               // 'raid' | 'mplus'
+      bisTalentCat: 'raid',          // 'raid' | 'mplusHigh' | 'mplusFarm'
+      bisChar: '',                   // which character's gear to compare against
+
+      // Optional data sources for the 毕业装备 panel. Both are empty by default:
+      // everything the panel needs to work ships inside the release, and an
+      // empty setting means "never touch the network".
+      //
+      // remoteDataUrl: a base URL holding replacement copies of bis-data.js /
+      //   talent-data.js / talent-tree.js / item-icons.js. Files found there win
+      //   over the bundled ones, which is how a new season's data (or the talent
+      //   tree, which cannot be extracted from the addon at all) gets in without
+      //   shipping a new release. They are loaded with <script src>, not fetch():
+      //   file:// pages cannot fetch, so each file must assign to its global.
+      // iconBaseUrl: a base URL for <name>.jpg icon images. Without it the panel
+      //   draws colored placeholders instead of icons.
+      remoteDataUrl: '',
+      iconBaseUrl: ''
     };
   }
 

@@ -625,6 +625,31 @@
       function (v) { s.links.realmForm = v; AE.rebuild(); }));
     panel.appendChild(links);
 
+    // ---- 毕业装备 / 天赋数据源 --------------------------------------------
+    // 包里已经带了装备表和天赋表，这两个地址是「换一份更新的」用的，平时留空。
+    // 用 <script src> 加载而不是 fetch()：file:// 下 fetch 会被拦，整个项目都走
+    // 这个路子（见 index.html 顶部注释）。所以远端文件必须是 js，内容形如
+    // window.AE_BIS = {...};
+    var bisSec = section('bis-data', '毕业装备数据源');
+    bisSec.appendChild(el('p', 'note',
+      '装备表和天赋表已经在安装包里，平时不用填这两栏。' +
+      '换赛季、或者你自己架了一份更新的数据时，在这里填目录地址，' +
+      '面板会优先读远端，读不到再退回包里的那份。'));
+    bisSec.appendChild(el('p', 'note',
+      '地址填到目录一层（不带文件名），下面这些文件名是固定的：' +
+      'bis-data.js（装备）、talent-data.js（天赋套路）、' +
+      'talent-tree.js（天赋树结构，能画出树来就靠它）、' +
+      'item-icons.js（itemId → 图标名）。'));
+    bisSec.appendChild(textField('数据目录地址', s.remoteDataUrl, '留空 = 只用包里的',
+      function (v) { s.remoteDataUrl = v.trim(); }));
+    bisSec.appendChild(textField('图标地址前缀', s.iconBaseUrl, '留空 = 不显示图标',
+      function (v) { s.iconBaseUrl = v.trim(); }));
+    bisSec.appendChild(el('p', 'note',
+      '图标前缀 + 图标名 + .jpg 就是一张图的地址。' +
+      '插件的装备数据里只有 itemId，没有图标名 —— 所以装备图标还需要上面那份 ' +
+      'item-icons.js；消耗品和附魔本来就带图标名，配好前缀就能显示。'));
+    panel.appendChild(bisSec);
+
     // ---- dungeon names ---------------------------------------------------
     var needFix = m.columns.dungeonIds.filter(function (id) {
       return L.dungeonNeedsTranslation(id, s.dungeonNameOverrides, m.dungeonNames);
