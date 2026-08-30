@@ -217,6 +217,25 @@ function scanWtf(wtf) {
   return found;
 }
 
+// ------------------------------------------------------------------ 对外接口
+// 被 require 时只给函数，不跑命令行。CommonJS 的模块体本身就是个函数，
+// 所以这里的顶层 return 是合法的。
+module.exports = {
+  decode: decode,
+  checkSemantics: checkSemantics,
+  loadOrder: loadOrder,
+  loadTree: loadTree,
+  scanWtf: scanWtf,
+  toBits: toBits,
+  fromBits: fromBits,
+  DEFAULT_WTF: DEFAULT_WTF,
+  setLayout: function (nest, rankBits) {
+    if (typeof nest === 'boolean') LAYOUT_NEST = nest;
+    if (rankBits) RANK_BITS = rankBits;
+  }
+};
+if (require.main !== module) return;
+
 // ------------------------------------------------------------------ 命令行
 var argv = process.argv.slice(2);
 function flag(name, def) {
