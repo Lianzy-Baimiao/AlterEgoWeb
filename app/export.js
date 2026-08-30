@@ -372,7 +372,9 @@
           num: false
         };
       }
-      case 'mpRuns':     return ch.mp.runsThisWeek.total ? { v: ch.mp.runsThisWeek.total, num: true } : { v: '', num: false };
+      // The number the cell shows, which is the Mythic+ count -- exporting
+      // .total instead would put a 5 in the spreadsheet next to a 4 on screen.
+      case 'mpRuns':     return ch.mp.runsThisWeek.total ? { v: ch.mp.runsThisWeek.mythicPlus, num: true } : { v: '', num: false };
 
       case 'delveTier':  return ch.delves.maxTier ? { v: ch.delves.maxTier, num: true } : { v: '', num: false };
       case 'delvePoints':return ch.delves.points ? { v: ch.delves.points, num: true } : { v: '', num: false };

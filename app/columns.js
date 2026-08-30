@@ -232,13 +232,29 @@
         }
       },
       {
-        id: 'mpRuns', group: 'mplus', label: '本周完成', width: 78, align: 'center',
-        sort: function (ch) { return ch.mp.runsThisWeek.total; },
+        id: 'mpRuns', group: 'mplus', label: '本周完成', width: 76, align: 'center',
+        // Sorted by the number actually shown. Sorting by .total would order the
+        // rows by a number the cell does not display, which looks like a bug.
+        // No data at all sinks below a real 0.
+        sort: function (ch) {
+          var r = ch.mp.runsThisWeek;
+          return r.total ? r.mythicPlus : -1;
+        },
         render: function (td, ch) {
           var r = ch.mp.runsThisWeek;
-          if (!r.total) return dash(td);
-          td.textContent = r.mythicPlus + ' / ' + r.mythic + ' / ' + r.heroic;
-          td.title = '大秘境 ' + r.mythicPlus + '，史诗 ' + r.mythic + '，英雄 ' + r.heroic;
+          if (!r.total) {
+            dash(td);
+            td.title = '本周未登录该角色，或已过周重置';
+            return;
+          }
+          // Only the Mythic+ count: 史诗 / 英雄 are the non-keystone difficulties,
+          // they answer a different question, and "7 / 0 / 0" made two numbers
+          // that are almost always 0 cost as much width as the one that matters.
+          // Both still live in the tooltip.
+          td.textContent = String(r.mythicPlus);
+          if (!r.mythicPlus) td.className += ' empty';
+          td.title = '大秘境 ' + r.mythicPlus + '，史诗 ' + r.mythic + '，英雄 ' + r.heroic +
+                     '\n合计 ' + r.total + ' 本';
         }
       }
     ];
@@ -384,7 +400,10 @@
         }
       },
       {
-        id: 'mapBag', group: 'delve', label: '藏宝图 持有', width: 84, align: 'center',
+        // 宝图, not 藏宝图: the group band already says 地下堡 / 藏宝图, so the
+        // full word was three columns of repetition. Narrower too -- 84 was
+        // sized for the longer label.
+        id: 'mapBag', group: 'delve', label: '宝图 持有', width: 80, align: 'center',
         sort: function (ch) { return ch.treasureMap ? ch.treasureMap.bagCount : -1; },
         render: function (td, ch) {
           var m = ch.treasureMap;
@@ -395,7 +414,7 @@
         }
       },
       {
-        id: 'mapUsed', group: 'delve', label: '藏宝图 本周', width: 84, align: 'center',
+        id: 'mapUsed', group: 'delve', label: '宝图 本周', width: 80, align: 'center',
         sort: function (ch) { return ch.treasureMap ? (ch.treasureMap.used ? 1 : 0) : -1; },
         render: function (td, ch) {
           var m = ch.treasureMap;
@@ -412,7 +431,7 @@
         }
       },
       {
-        id: 'mapBuff', group: 'delve', label: '藏宝图 在身', width: 84, align: 'center',
+        id: 'mapBuff', group: 'delve', label: '宝图 在身', width: 80, align: 'center',
         defaultHidden: true,
         sort: function (ch) { return ch.treasureMap ? (ch.treasureMap.hasBuff ? 1 : 0) : -1; },
         render: function (td, ch) {
@@ -526,10 +545,13 @@
     return {
       id: 'cur:' + id,
       group: group,
-      width: 78,
+      // Wide enough for the worst real case, "575(205/300)": 3 bold digits at
+      // 12px plus 9 small ones at 10px is ~75px of content, and a clipped
+      // number reads as a WRONG number rather than as a narrow cell.
+      width: 96,
       align: 'right',
       currencyId: id,
-      label: function () { return shortCurrencyName(meta ? meta.name : ('#' + id)); },
+      label: function () { return L.currencyShort(id, meta ? meta.name : ''); },
       headTitle: function () {
         return (meta ? meta.name : '#' + id) + '\ncurrencyID ' + id;
       },
@@ -545,8 +567,19 @@
         var lines = [c.name];
 
         if (cap && ctx.settings.currencyShowCap) {
-          td.appendChild(el('b', null, group3(cap.have)));
-          td.appendChild(el('span', 'sub', '/ ' + group3(cap.max)));
+          // Crests cap the TOTAL EARNED, not the stack you are holding, so the
+          // capped pair on its own hid the number you actually spend:
+          // 冒险者迷雾纹章 reads 205/300 while 665 sit in the bag. Show 现有 first,
+          // then the capped pair -- but only when they differ, since "5(5/5)"
+          // would be three ways of saying the same thing.
+          if (cap.have !== c.quantity) {
+            td.appendChild(el('b', null, group3(c.quantity)));
+            td.appendChild(el('span', 'sub',
+                               '(' + group3(cap.have) + '/' + group3(cap.max) + ')'));
+          } else {
+            td.appendChild(el('b', null, group3(cap.have)));
+            td.appendChild(el('span', 'sub', '/ ' + group3(cap.max)));
+          }
           if (cap.remaining === 0) td.className += ' full';
           else if (cap.have > 0) td.className += ' partial';
         } else {
@@ -569,15 +602,6 @@
         td.title = lines.join('\n');
       }
     };
-  }
-
-  // "冒险者迷雾纹章" -> "冒险者" : the suffix is the same across a whole tier and
-  // wastes width in a 60-column table. Full name stays in the tooltip.
-  function shortCurrencyName(name) {
-    return String(name || '')
-      .replace(/(纹章|法力涌流|火花尘|虚空核心|法力熔剂|奇梦|觉醒|绸缎|精华)$/, '')
-      .replace(/^(迷雾|曙光|黎明之光|光耀|晦暗)/, '')
-      || name;
   }
 
   function currencyColumns(model) {

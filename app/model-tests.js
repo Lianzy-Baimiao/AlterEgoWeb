@@ -123,6 +123,162 @@
       return true;
     });
 
+    t('表头没有一个超过 5 个字', function () {
+      // The actual requirement, checked against EVERY column rather than just the
+      // currencies: a 9-character header (未被污染的法力水晶) either stretches its
+      // column or gets clipped to an ellipsis, and a clipped number reads as a
+      // wrong number. A new season adding a long name should fail here rather
+      // than quietly widening the table.
+      //
+      // Counted in CJK characters: an ASCII space is roughly a third of a
+      // Chinese glyph, so 宝图 持有 counts as 4.5 and passes.
+      // Real defaults, not a hand-made stub: the dungeon headers read
+      // settings.headerMode, and a stub would test a mode nobody runs.
+      var ctx = { model: m, settings: AE.loadSettings() };
+      var cols = AE.buildColumns(m);
+      var over = [], checked = 0;
+      cols.forEach(function (c) {
+        var label;
+        try {
+          label = typeof c.label === 'function' ? c.label(ctx) : c.label;
+        } catch (e) { return; }          // needs live DOM state, not our business
+        if (label == null || label === '') return;
+        checked++;
+        var width = 0;
+        String(label).split('').forEach(function (chr) {
+          width += /[\u3000-\u9fff\uff00-\uffef]/.test(chr) ? 1 : 0.5;
+        });
+        if (width > 5) over.push('"' + label + '" (' + width + '字, ' + c.id + ')');
+      });
+      if (over.length) {
+        return '这些表头超过 5 个字，货币的在 L.currencyShortZh 里补一条，其它的直接改 label: ' +
+               over.join(', ');
+      }
+      return checked > 20 ? true : '只检查到 ' + checked + ' 个表头，守门测试没真正生效';
+    });
+
+    t('货币表头缩写：不会缩成空字符串', function () {
+      // The rule this replaces stripped a prefix AFTER stripping the suffix, so
+      // 光耀火花尘 -> 光耀 -> "" and it silently fell back to the full name. That
+      // is why three headers stayed long.
+      var ids = m.columns.currencyIds.concat(m.columns.delveCurrencyIds);
+      var bad = [];
+      ids.forEach(function (id) {
+        var meta = m.columns.currencyMeta[id];
+        var name = meta ? meta.name : '';
+        var short = L.currencyShort(id, name);
+        if (!short) bad.push('id ' + id + ' (' + name + ')');
+      });
+      return bad.length === 0 || '缩写成了空: ' + bad.join(', ');
+    });
+
+    t('货币表头缩写：指定的几个走覆盖表', function () {
+      // Keyed by currencyID, not by name: 3418 and 3513 are different currencies
+      // from different seasons that share the name 晦暗虚空核心.
+      var cases = [[3513, 'R币'], [3418, 'R币'], [3028, '钥匙'],
+                   [3310, '钥匙碎片'], [3356, '法力水晶']];
+      for (var i = 0; i < cases.length; i++) {
+        var got = L.currencyShort(cases[i][0], '不该被用到的名字');
+        if (got !== cases[i][1]) {
+          return 'id ' + cases[i][0] + ' 缩写成了 ' + got + '，预期 ' + cases[i][1];
+        }
+      }
+      return true;
+    });
+
+    t('货币表头缩写：苏生那两个保留全名', function () {
+      // 苏生奇梦 / 苏生觉醒 are the only two currencies ending in 奇梦 / 觉醒, and
+      // stripping those suffixes collapsed BOTH to 苏生 -- two identical headers.
+      // Both sit at 4 characters, so the full name fits and is unambiguous.
+      var cases = [[2796, '苏生奇梦'], [2912, '苏生觉醒']];
+      for (var i = 0; i < cases.length; i++) {
+        var meta = m.columns.currencyMeta[cases[i][0]];
+        if (!meta) continue;                 // not on this account, fine
+        if (meta.name !== cases[i][1]) {
+          return 'id ' + cases[i][0] + ' 游戏里的名字变成了 ' + meta.name + '，测试的预期要更新';
+        }
+        var got = L.currencyShort(cases[i][0], meta.name);
+        if (got !== cases[i][1]) {
+          return 'id ' + cases[i][0] + ' 缩写成了 ' + got + '，应该保留全名 ' + cases[i][1];
+        }
+      }
+      return true;
+    });
+
+    t('货币表头缩写：认不出的货币退回原名而不是空', function () {
+      if (L.currencyShort(999999, '某种没见过的货币') !== '某种没见过的货币') {
+        return '没有原样返回: ' + L.currencyShort(999999, '某种没见过的货币');
+      }
+      if (L.currencyShort(999999, '') !== '') return '空名字应该原样返回空';
+      return true;
+    });
+
+    t('本周完成格里只有大秘境本数，史诗和英雄留在提示里', function () {
+      // 史诗 / 英雄 are the non-keystone difficulties. They are almost always 0 and
+      // answered a different question than the column asks, so the cell shows one
+      // number and the tooltip keeps all three.
+      var col = AE.buildColumns(m).filter(function (c) { return c.id === 'mpRuns'; })[0];
+      if (!col) return '找不到 mpRuns 列';
+      var checked = 0, bad = [];
+      m.characters.forEach(function (ch) {
+        var r = ch.mp.runsThisWeek;
+        if (!r.total) return;
+        var td = { textContent: '', className: '', title: '', appendChild: function () {} };
+        col.render(td, ch, { model: m, settings: null });
+        checked++;
+        if (td.textContent !== String(r.mythicPlus)) {
+          bad.push(ch.name + ' 格里是 "' + td.textContent + '"，预期 "' + r.mythicPlus + '"');
+        }
+        // The two dropped numbers must still be reachable.
+        if (td.title.indexOf('史诗 ' + r.mythic) < 0 || td.title.indexOf('英雄 ' + r.heroic) < 0) {
+          bad.push(ch.name + ' 提示里缺了史诗或英雄: ' + td.title.replace(/\n/g, ' / '));
+        }
+      });
+      if (bad.length) return bad.join('; ');
+      return checked > 0 ? true : '本周没有任何角色跑过本，无法验证';
+    });
+
+    t('本周完成的排序值就是格里显示的那个数', function () {
+      // It used to sort by .total, which ordered the rows by a number the cell
+      // does not show: 黑龙叔叔 shows 4 (M+) but totalled 5 with one 史诗 run.
+      var col = AE.buildColumns(m).filter(function (c) { return c.id === 'mpRuns'; })[0];
+      if (!col) return '找不到 mpRuns 列';
+      var checked = 0;
+      for (var i = 0; i < m.characters.length; i++) {
+        var ch = m.characters[i], r = ch.mp.runsThisWeek;
+        var got = col.sort(ch);
+        if (!r.total) {
+          if (got !== -1) return ch.name + ' 没有数据时排序值是 ' + got + '，预期 -1';
+          continue;
+        }
+        if (got !== r.mythicPlus) {
+          return ch.name + ' 排序值是 ' + got + '，预期大秘境本数 ' + r.mythicPlus;
+        }
+        checked++;
+      }
+      return checked > 0 ? true : '本周没有任何角色跑过本，无法验证';
+    });
+
+    t('纹章上限算的是累计获得，不是当前持有', function () {
+      // The reason the cell shows 现有(已获取/上限): on this machine 冒险者迷雾纹章
+      // holds far more than its own cap, because the cap limits totalEarned.
+      var found = 0, wrong = [];
+      m.characters.forEach(function (ch) {
+        Object.keys(ch.currencies.byId).forEach(function (id) {
+          var c = ch.currencies.byId[id];
+          if (!c.useTotalEarnedForMaxQty || !c.maxQuantity) return;
+          found++;
+          // quantity above the cap is legitimate and is exactly the case the
+          // old display made look like a bug.
+          if (c.totalEarned > c.maxQuantity) {
+            wrong.push(c.name + ' 累计 ' + c.totalEarned + ' > 上限 ' + c.maxQuantity);
+          }
+        });
+      });
+      if (wrong.length) return '累计获得超过了上限: ' + wrong.join('; ');
+      return found > 0 ? true : '没有任何按累计计上限的货币，无法验证';
+    });
+
     t('团本列只含真正的团本，地下城锁定被分开', function () {
       // GetSavedInstanceInfo also returns heroic/mythic dungeon and timewalking
       // lockouts; without the isRaid split they pollute the raid columns.

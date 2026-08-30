@@ -185,6 +185,58 @@
     delveMap:  '藏宝图'
   };
 
+  // -------------------------------------------------------- currency headers
+  /**
+   * Column header for a currency: short enough for a 96px column.
+   *
+   * Two layers, same shape as the dungeon names:
+   *   1. L.currencyShortZh, keyed by currencyID, for the ones the generic rule
+   *      cannot get right. Every value here is a substring of the game's own
+   *      localized name, or a deliberate mark (R币) -- never a translation.
+   *   2. strip the shared category suffix, which is what actually distinguishes
+   *      these names: 冒险者迷雾纹章 / 老兵迷雾纹章 differ only in the prefix.
+   *
+   * There used to be a second `.replace()` stripping the LEADING season word
+   * (迷雾 / 曙光 / 晦暗 …). It was dead code with a bug: on the three names where
+   * it fired at all it consumed everything the first rule had left, the result
+   * was empty, and `|| name` handed back the FULL name -- which is why
+   * 光耀火花尘, 晦暗虚空核心 and 黎明之光法力熔剂 were the long headers.
+   * Verified against the real scan: 3 hits, 0 useful results.
+   *
+   * 奇梦 and 觉醒 are deliberately NOT in the suffix list. They match exactly two
+   * currencies -- 苏生奇梦 (2796) and 苏生觉醒 (2912) -- and stripping them left both
+   * headers reading 苏生, i.e. two different columns with the same name. Both are
+   * 4 characters as-is, so the full name is under the cap AND unambiguous.
+   * 觉醒纹章 names are unaffected: the strip is a single replace, so
+   * 雏龙的觉醒纹章 loses 纹章 and stops there.
+   */
+  L.currencyShortZh = {
+    // 地下堡 group. 修复的宝匣钥匙 is the usable key, 宝匣钥匙碎片 the shards you
+    // combine into one, so the pair has to stay distinguishable.
+    3028: '钥匙',
+    3310: '钥匙碎片',
+    3356: '法力水晶',
+    // Both of these are literally named 晦暗虚空核心 by the game -- 3513 is the
+    // season 18 one, 3418 the season 17 one, and the addon marks both
+    // currencyType 'bonusroll'. Same mark for both: they are the same thing in
+    // different seasons, and the off-season column is hidden by default anyway.
+    3418: 'R币',
+    3513: 'R币',
+    // Dragonflight tiers are 雏龙的/幼龙的/魔龙的/守护巨龙的 + 酣梦纹章. Only the
+    // 守护巨龙 pair is still over 5 characters after the suffix strip, so only
+    // that pair is listed; the other three sit at exactly 5 and are left alone.
+    // A generic "drop 的" rule was tried and rejected -- it also rewrote any
+    // unknown name containing 的 (某种没见过的货币 -> 某种货币).
+    2709: '守护酣梦',
+    2812: '守护觉醒'
+  };
+
+  L.currencyShort = function (id, name) {
+    if (L.currencyShortZh[id]) return L.currencyShortZh[id];
+    var s = String(name || '');
+    return s.replace(/(纹章|法力涌流|火花尘|虚空核心|法力熔剂|绸缎|精华)$/, '') || s;
+  };
+
   // ------------------------------------------------------------------- prey
   L.preyDifficultyZh = {
     PREY_DIFFICULTY_NORMAL:    '普通',
