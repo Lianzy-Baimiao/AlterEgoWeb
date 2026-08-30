@@ -5,12 +5,15 @@
  *
  *     node tools\run-tests.js
  *
- * 跑三件事：
+ * 跑五件事：
  *   1. app/parser-tests.js  解析器
  *   2. app/model-tests.js   数据模型（要 data/data.js，没有就跳过并说明）
  *   3. app/bis-tests.js     毕业装备数据
  *   4. 渲染检查             把每个专精每种视图都真画一遍，检查图标进没进 DOM
- *   5. 数据格式             跑 tools\verify-bis-data.js，验 app/bis-data.js 的格式
+ *   5. 数据格式             跑两个校验器：
+ *                             tools\verify-bis-data.js    验 app/bis-data.js
+ *                             tools\verify-talent-tree.js 验 app/talent-tree.js
+ *                             （后者顺带交叉验证 app/talent-data.js）
  *
  * 第 4、5 项是命令行独有的 —— 浏览器里没法检查 app/icons/ 下的文件在不在，
  * 也没法跑另一个 Node 脚本。
@@ -210,29 +213,37 @@ console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问�
   + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots + '）');
 
 // ----------------------------------------------------------------------- 格式校验
-// tools/verify-bis-data.js 是 app/bis-data.js 的格式定义（可执行的那种）。
-// 在这里连带跑一遍，免得它自己烂掉都没人知道 —— 它的价值全在「换数据源时能拦住
+// 两个校验器分别是 app/bis-data.js 和 app/talent-tree.js 的格式定义（可执行的那种）。
+// 在这里连带跑一遍，免得它们自己烂掉都没人知道 —— 它们的价值全在「换数据源时能拦住
 // 不合格的新生成器」，那意味着平时必须一直是绿的。
-var schemaOk = true, schemaLine = '';
-(function () {
+//
+// 数据文件不在就跳过，但**跳过要说出来**（打「跳过」而不是「通过」）——
+// 一个没跑的检查报成通过，就是我在别处反复踩过的「空测试」。
+var VERIFIERS = [
+  { label: '数据格式', script: 'verify-bis-data.js', data: 'bis-data.js' },
+  { label: '天赋树格式', script: 'verify-talent-tree.js', data: 'talent-tree.js' }
+];
+VERIFIERS.forEach(function (v) {
+  if (!fs.existsSync(path.join(ROOT, 'app', v.data))) {
+    console.log(pad(v.label) + '跳过（没有 app/' + v.data + '）');
+    return;
+  }
   var cp = require('child_process');
-  var r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'verify-bis-data.js')],
+  var r = cp.spawnSync(process.execPath, [path.join(ROOT, 'tools', v.script)],
     { encoding: 'utf8' });
   var out = String(r.stdout || '') + String(r.stderr || '');
   var m = /检查项\s+(\d+)/.exec(out);
-  schemaOk = r.status === 0;
-  schemaLine = schemaOk
-    ? '通过（' + (m ? m[1] : '?') + ' 项检查）'
-    : '不合格式';
-  if (!schemaOk) {
-    out.split(/\r?\n/).forEach(function (ln) {
-      if (/^\s+·/.test(ln)) problems.push('格式：' + ln.replace(/^\s+·\s*/, ''));
-    });
-    if (!problems.length) problems.push('格式校验失败（退出码 ' + r.status + '）');
+  if (r.status === 0) {
+    console.log(pad(v.label) + '通过（' + (m ? m[1] : '?') + ' 项检查）');
+    return;
   }
-})();
-console.log(pad('数据格式') + schemaLine);
+  console.log(pad(v.label) + '不合格式');
+  var found = 0;
+  out.split(/\r?\n/).forEach(function (ln) {
+    if (/^\s+·/.test(ln)) { problems.push(v.label + '：' + ln.replace(/^\s+·\s*/, '')); found++; }
+  });
+  if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
+});
 
 // ----------------------------------------------------------------------- 汇总
 
@@ -248,6 +259,6 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 渲染检查 + 数据格式校验'
+  ? '全部通过：' + total.pass + ' 项测试 + 渲染检查 + 两项格式校验'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

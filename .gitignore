@@ -16,6 +16,12 @@ AlterEgoWeb-v*.zip
 # 靠记性不如靠这条规则。
 _*
 
+# 天赋树的上游原始文件缓存（raidbots talents.json 3.1 MB + 暴雪 DB2 两张表 10.6 MB）。
+# tools/fetch-talent-tree.js 下到这里，只为了避免反复下载；产出物 app/talent-tree.js
+# 才是要提交的东西。14 MB 的上游数据不该进仓库。
+# 注意和 tools/.icon-cache.json 的区别：那个是**连接后的结果**（几十 KB），要提交。
+tools/.talent-raw/
+
 # Editor / OS noise
 .vscode/
 .idea/
