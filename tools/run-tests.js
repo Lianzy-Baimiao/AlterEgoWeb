@@ -105,7 +105,7 @@ function walk(node, fn) {
 var B = g.AE_BIS;
 var specKeys = Object.keys(B.specs);
 var problems = [];
-var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0 };
+var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0 };
 var missingFiles = {};
 var body = doc.getElementById('bis-body');
 
@@ -132,6 +132,15 @@ function checkRender(label) {
       if (!/^\S+ [1-6]\/6$/.test(n.textContent)) {
         stats.trkBad++;
         if (stats.trkBad < 4) problems.push(label + ' 轨道徽章文字不对：' + n.textContent);
+      }
+    }
+    // 覆盖率徽章。每个部位组都该有一个，形如「记录 95.9%」。
+    if (n.classList && n.classList.contains('slot-head')) stats.slots++;
+    if (n.classList && n.classList.contains('cov')) {
+      stats.cov++;
+      if (!/^记录 \d+(\.\d)?%$/.test(n.textContent)) {
+        stats.covBad++;
+        if (stats.covBad < 4) problems.push(label + ' 覆盖率徽章文字不对：' + n.textContent);
       }
     }
   });
@@ -188,10 +197,17 @@ if (stats.trk < 500) problems.push('轨道徽章只画了 ' + stats.trk + ' 个�
 if (stats.trkBad > 0) {
   problems.push(stats.trkBad + ' 个轨道徽章文字不合格式，例如 ' + stats.trkSample);
 }
+// 覆盖率徽章：每个部位组一个，不多不少。写成相等而不是「> 0」——
+// 「至少有一个」那种断言在只有一个部位画出来的时候也能过。
+if (stats.cov !== stats.slots) {
+  problems.push('覆盖率徽章 ' + stats.cov + ' 个，部位组 ' + stats.slots + ' 个，不一一对应');
+}
+if (stats.covBad > 0) problems.push(stats.covBad + ' 个覆盖率徽章文字不合格式');
+if (stats.slots < 1000) problems.push('只画了 ' + stats.slots + ' 个部位组，太少');
 
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
-  + '，轨道徽章 ' + stats.trk + '）');
+  + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots + '）');
 
 // ----------------------------------------------------------------------- 格式校验
 // tools/verify-bis-data.js 是 app/bis-data.js 的格式定义（可执行的那种）。

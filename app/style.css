@@ -1142,6 +1142,9 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 }
 .slot-head .tag.ok { color: var(--good); border-color: var(--good); }
 .slot-head .tag.no { color: var(--warn); border-color: var(--warn); }
+/* 覆盖率徽章紧跟在部位名后面，所以要去掉上面那条 margin-left: auto ——
+   两个元素都写 auto 的话剩余空间会被平分，「我身上这件」就不再贴右了。 */
+.slot-head .tag.cov { margin-left: 0; font-size: 10px; }
 
 /* ---- 单件装备 */
 .item {

@@ -566,6 +566,25 @@
 
     var head = el('div', 'slot-head');
     head.appendChild(el('b', null, B.slotNames[slotId] || ('部位 ' + slotId)));
+
+    // 覆盖率 = 这个部位列出来的几件的使用率之和。
+    //
+    // 为什么要显示它：数据里**没有任何样本量字段**（原始 Lua 就没有，不是转换时丢的），
+    // 所以「81%」背后是 5 个人还是 500 个人，谁也不知道。退一步至少能说清另一件事 ——
+    // 列表是被截断的。本机实测 1264 个部位组里，使用率之和的中位数只有 72.9%，
+    // 有 206 组不到 50%。也就是说很多部位「剩下一半人穿的是什么」根本没在数据里。
+    // 不显示的话，用户看到三件候选很容易以为那就是全部。
+    var sum = 0;
+    rows.forEach(function (r) { sum += (typeof r[2] === 'number' ? r[2] : 0); });
+    sum = Math.round(sum * 10) / 10;
+    var cov = el('span', 'tag cov' + (sum < 50 ? ' no' : ''), '记录 ' + pct(sum));
+    cov.setAttribute('data-tip',
+      '这 ' + rows.length + ' 件加起来占顶尖玩家的 ' + pct(sum) + '。'
+      + (sum < 99.5 ? '\n剩下的 ' + pct(Math.round((100 - sum) * 10) / 10)
+                      + ' 穿的是什么，数据里没有。' : '')
+      + '\n另外：这份数据不带样本量，所以百分比背后是几个人也查不到。');
+    head.appendChild(cov);
+
     if (mine) {
       var m = el('span', 'mine' + (hit ? ' ok' : ''));
       m.appendChild(doc.createTextNode(hit ? '✓ ' : '· '));
