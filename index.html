@@ -18,6 +18,10 @@
   ============================================================================
 -->
 <title>魔兽多角色看板</title>
+<!-- Chromium uses the page favicon as the --app= window's own icon, which is
+     what the taskbar button and the title bar show. Without one, that window
+     falls back to a generic browser icon. -->
+<link rel="icon" type="image/svg+xml" href="app/icon.svg">
 <!-- The launcher opens this page with --app=, and a Chromium app window paints
      its title bar from theme-color. applyThemeColor() in render.js rewrites the
      value on every theme/skin change; this initial one matches the default dark

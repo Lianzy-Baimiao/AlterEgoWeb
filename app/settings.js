@@ -71,8 +71,11 @@
       layouts: [],
       activeLayout: '',
       // Authoring choice for the NEXT saved layout, not a property of any
-      // existing one -- each layout carries its own scope.
-      layoutSaveAll: false,
+      // existing one -- each layout carries its own scope. Defaults to on: a
+      // "layout" people save is almost always the whole view they had set up,
+      // and a preset that silently drops the filters and skin it was saved with
+      // is the more surprising of the two behaviours.
+      layoutSaveAll: true,
 
       // Which settings tab was open last. See PANEL_TABS in panel.js.
       panelTab: 'filter',

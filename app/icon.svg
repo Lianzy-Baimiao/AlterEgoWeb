@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Same design as the launcher exe icon (tools/build-launcher.ps1 draws this
+       with GDI+), so the taskbar shows one consistent mark whether you look at
+       the program or at its window. -->
+  <rect x="2" y="2" width="60" height="60" rx="8" fill="#1b1e24"/>
+  <rect x="3.5" y="3.5" width="57" height="57" rx="6.5" fill="none" stroke="#4aa3ff" stroke-width="3"/>
+  <rect x="14" y="40" width="10" height="12" fill="#46c46d"/>
+  <rect x="27" y="30" width="10" height="22" fill="#46c46d"/>
+  <rect x="40" y="20" width="10" height="32" fill="#e5a13a"/>
+</svg>
