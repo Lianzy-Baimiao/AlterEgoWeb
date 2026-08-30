@@ -490,6 +490,31 @@
       return bad.length === 0 || bad.length + ' 处 mx 小于装等，例如 ' + bad[0];
     });
 
+    t('来源分类：每个用到的分类都有中文标签', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      // 插件自己的 sourceCategories 只列了 5 个，而数据里实际用到 7 个 ——
+      // tier（292 行）和 quest（5 行）没有标签，徽章会直接显示英文。
+      // 生成器现在从这些行自己的 source 文本补齐；这条测试盯着补齐有没有生效。
+      var used = {};
+      (B.srcs || []).forEach(function (s) { if (s[1]) used[s[1]] = 1; });
+      var miss = Object.keys(used).filter(function (c) { return !B.sourceCategories[c]; });
+      return miss.length === 0 || '这些分类会显示英文：' + miss.join(', ');
+    });
+
+    t('来源分类：标签是中文，且不长于 6 个字', function () {
+      var B = global.AE_BIS;
+      if (!B) return '装备数据未加载，跳过';
+      // 徽章是定宽行里的一格，标签太长会把使用率进度条挤掉。
+      var bad = [];
+      Object.keys(B.sourceCategories || {}).forEach(function (c) {
+        var v = B.sourceCategories[c];
+        if (!/[\u4e00-\u9fa5]/.test(v)) bad.push(c + '=' + v + '（没有中文）');
+        else if (v.length > 6) bad.push(c + '=' + v + '（' + v.length + ' 字）');
+      });
+      return bad.length === 0 || bad.join('; ');
+    });
+
     t('图标数据：品质不是清一色的 4', function () {
       var Q = global.AE_ITEM_QUALITY;
       if (!Q) return '图标数据未加载，跳过';

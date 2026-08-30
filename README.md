@@ -86,8 +86,8 @@ WebBrowser 控件是 IE11 内核，渲染不了这个页面（CSS 变量、flex 
 * 标题栏右侧始终显示看板版本号（鼠标悬停还能看到插件版本、扫描时间、最新发布版本）——
   报问题时先把这个发过来
 
-`tests.html` 是离线自测页，131 项解析器、数据回归与毕业装备测试，出问题时先看它。
-命令行也能跑，还多一项浏览器里做不到的检查（图标文件在不在）：
+`tests.html` 是离线自测页，133 项解析器、数据回归与毕业装备测试，出问题时先看它。
+命令行也能跑，还多两项浏览器里做不到的检查（图标文件在不在、装备数据格式合不合）：
 
 ```
 node tools\run-tests.js
@@ -329,6 +329,25 @@ zamimg（走代理）。跑完 `node tools\run-tests.js`，渲染检查会告诉
 （`window.AE_BIS = {...}`），不能是 JSON —— `file://` 下 `fetch()` 不可用，
 `<script src>` 是唯一能跑的加载方式，这一点 `index.html` 顶部已经记着了。
 
+### 换数据源：面板只认格式，不认来源
+
+装备数据现在来自 GearInsight，但它有几个说不清的地方（见下面「数据质量」）。
+将来可能换成别的来源，所以中间那层格式是有定义的、且机器能验：
+
+```
+node tools\verify-bis-data.js
+node tools\verify-bis-data.js --data path\to\bis-data.js
+```
+
+`tools/verify-bis-data.js` **本身就是那份格式说明** —— 顶部的 `SCHEMA` /
+`SPEC_SCHEMA` / 行格式注释是可执行的文档，不会像另写一份 .md 那样跟代码脱节。
+2016 项检查，涵盖字段在不在、类型对不对、下标越不越界、可选位有没有跳着省。
+**换来源时只需要换生成器**：新生成器的输出能过这个校验，面板就能直接用。
+
+它和 `app/bis-tests.js` 的分工是有意分开的：这里管**格式**（换数据源时最容易踩的坑），
+`bis-tests.js` 管**内容合理性**（40 个专精、使用率不超 100、图标覆盖率）。两边有重叠，
+重叠处坏了会被抓两次，比漏掉好。`node tools\run-tests.js` 会把两样都跑掉。
+
 ### 专精中文名有两处是插件的数据错了
 
 GearInsight 的 `specRawToCN` 是**只按专精英文名**建表的，于是：
@@ -463,7 +482,8 @@ WowAltBoard/
 │   ├─ gen-talents.js      PopularTalents.lua → app/talent-data.js
 │   ├─ fetch-icons.js      查 itemId 的图标名和品质、下图标到 app/icons/（要联网）
 │   ├─ blp.js              游戏自带 .blp 图标 → png（零依赖，备用图标来源）
-│   ├─ run-tests.js        命令行跑全部测试 + 渲染检查（不用开浏览器）
+│   ├─ run-tests.js        命令行跑全部测试 + 渲染检查 + 数据格式校验（不用开浏览器）
+│   ├─ verify-bis-data.js  校验 bis-data.js 的格式；这个文件本身就是那份格式说明
 │   ├─ dom-stub.js         run-tests.js 用的 DOM 桩
 │   ├─ build-launcher.ps1  编译 exe（中文文案都在脚本顶上的 $T 表里）
 │   ├─ build-release.ps1   打发布 zip

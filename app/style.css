@@ -1202,26 +1202,30 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 }
 .item .usage .track .fill { height: 100%; background: var(--accent); opacity: .7; }
 .item .usage .n { display: block; font-size: 10.5px; color: var(--fg2); text-align: right; }
-/* 「使用」= 主动使用类饰品，和部位标签共用 .tag 的外形。 */
-.item .tag.use {
+/* 来源徽章（团本 / 钥石 / 套装转换…）的底样式。
+ *
+ * 这条以前是**漏的**：只写了 .tag.use 和 .tag.trk，没写 .item .tag 本身。
+ * .slot-head .tag 是另一个祖先，管不到这里，所以来源徽章的 border-width 是 0，
+ * 而 bis.js 里 badge.style.borderColor = catColor(cat) 只设了颜色 ——
+ * 等于给一条不存在的边框上色，徽章一直是裸文字。
+ *
+ * flex/white-space 也必须在这里：来源标签最长的是「奇点声望任务」6 个字，
+ * 不写 flex: none 它会被压缩，不写 nowrap 它会折行把整行撑高。
+ */
+.item .tag {
   flex: none;
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 8px;
   border: 1px solid var(--line);
   color: var(--fg2);
-}
-/* 升级轨道（「英雄 6/6」）。故意比来源标签淡一档：它是补充信息，
-   不该跟来源分类抢注意力。 */
-.item .tag.trk {
-  flex: none;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  color: var(--fg3);
   white-space: nowrap;
 }
+/* 「使用」= 主动使用类饰品，和来源徽章一个外形，只是文字固定。 */
+.item .tag.use { color: var(--fg2); }
+/* 升级轨道（「英雄 6/6」）。故意比来源标签淡一档：它是补充信息，
+   不该跟来源分类抢注意力。 */
+.item .tag.trk { color: var(--fg3); }
 
 /* ---- 宝石 / 附魔 / 消耗品 */
 .bis-extras { margin-top: 12px; }

@@ -10,8 +10,10 @@
  *   2. app/model-tests.js   数据模型（要 data/data.js，没有就跳过并说明）
  *   3. app/bis-tests.js     毕业装备数据
  *   4. 渲染检查             把每个专精每种视图都真画一遍，检查图标进没进 DOM
+ *   5. 数据格式             跑 tools\verify-bis-data.js，验 app/bis-data.js 的格式
  *
- * 第 4 项是命令行独有的 —— 浏览器里没法检查 app/icons/ 下的文件在不在。
+ * 第 4、5 项是命令行独有的 —— 浏览器里没法检查 app/icons/ 下的文件在不在，
+ * 也没法跑另一个 Node 脚本。
  *
  * 退出码非 0 = 有失败。
  *
@@ -191,6 +193,31 @@ console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问�
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
   + '，轨道徽章 ' + stats.trk + '）');
 
+// ----------------------------------------------------------------------- 格式校验
+// tools/verify-bis-data.js 是 app/bis-data.js 的格式定义（可执行的那种）。
+// 在这里连带跑一遍，免得它自己烂掉都没人知道 —— 它的价值全在「换数据源时能拦住
+// 不合格的新生成器」，那意味着平时必须一直是绿的。
+var schemaOk = true, schemaLine = '';
+(function () {
+  var cp = require('child_process');
+  var r = cp.spawnSync(process.execPath,
+    [path.join(ROOT, 'tools', 'verify-bis-data.js')],
+    { encoding: 'utf8' });
+  var out = String(r.stdout || '') + String(r.stderr || '');
+  var m = /检查项\s+(\d+)/.exec(out);
+  schemaOk = r.status === 0;
+  schemaLine = schemaOk
+    ? '通过（' + (m ? m[1] : '?') + ' 项检查）'
+    : '不合格式';
+  if (!schemaOk) {
+    out.split(/\r?\n/).forEach(function (ln) {
+      if (/^\s+·/.test(ln)) problems.push('格式：' + ln.replace(/^\s+·\s*/, ''));
+    });
+    if (!problems.length) problems.push('格式校验失败（退出码 ' + r.status + '）');
+  }
+})();
+console.log(pad('数据格式') + schemaLine);
+
 // ----------------------------------------------------------------------- 汇总
 
 console.log('');
@@ -199,12 +226,12 @@ if (failures.length) {
   failures.forEach(function (f) { console.log('  · ' + f); });
 }
 if (problems.length) {
-  console.log('渲染问题：');
+  console.log('渲染 / 格式问题：');
   problems.slice(0, 20).forEach(function (p) { console.log('  · ' + p); });
 }
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 渲染检查'
-  : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染问题');
+  ? '全部通过：' + total.pass + ' 项测试 + 渲染检查 + 数据格式校验'
+  : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

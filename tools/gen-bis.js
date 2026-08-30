@@ -414,6 +414,34 @@ var outConsum = consum.map(function (c) {
   };
 });
 
+// -------------------------------------------- 补齐缺失的来源分类中文名
+//
+// 插件 meta 里的 sourceCategories 只有 5 个键（raid / mplus / crafted / world / other），
+// 但实际数据里的 sourceCategory 有 7 种 —— **少了 `tier` 和 `quest`**，
+// 这两类合计 297 行（套装 292 + 任务 5），面板上会把徽章画成英文 `tier` / `quest`。
+// 这是上游的漏洞，不是转换丢的。
+//
+// 中文名不许手写。找短标签的路也走不通：`Quest` → 「任务」在 5 个 locale 里都有，
+// 但「套装」只在 Syndicator 一处（`KEYWORD_SET`），而 EllesmereUI 里
+// `L["Set"] = "设置"` —— 同一个英文词在另一个语境是完全不同的意思。
+// 靠通用词查表迟早出事。
+//
+// 所以改成从**数据自己的 `source` 文本**取：每个缺失分类下的所有行如果 `source`
+// 完全一致，就用那个词（`tier` → 「套装转换」，`quest` → 「奇点声望任务」）。
+// 不一致就不猜，留英文，并在下面的报告里说出来。
+var catSources = Object.create(null);
+srcs.forEach(function (row) {
+  var cat = row[1], text = row[0];
+  if (!cat || srcCats[cat] || !text) return;
+  (catSources[cat] || (catSources[cat] = [])).push(text);
+});
+var catFilled = [], catUnsure = [];
+Object.keys(catSources).forEach(function (cat) {
+  var uniq = catSources[cat].filter(function (v, i, a) { return a.indexOf(v) === i; });
+  if (uniq.length === 1) { srcCats[cat] = uniq[0]; catFilled.push(cat + '→' + uniq[0]); }
+  else catUnsure.push(cat + '（' + uniq.length + ' 种说法）');
+});
+
 // ------------------------------------------------------------------ 输出
 var payload = {
   bisVersion: meta.version || '',
@@ -472,6 +500,9 @@ console.log('装备池      ' + nItems + ' 件（去重后）');
 console.log('来源组合    ' + srcs.length + ' 种（去重后）');
 console.log('部位条目    ' + nSlots + ' 个部位 / ' + nRows + ' 行');
 console.log('消耗品      ' + outConsum.length);
+console.log('来源分类    ' + Object.keys(srcCats).length + ' 种' +
+            (catFilled.length ? '（插件表里缺、从 source 文本补上的：' + catFilled.join('、') + '）' : '') +
+            (catUnsure.length ? '（补不了，会显示英文：' + catUnsure.join('、') + '）' : ''));
 console.log('升级轨道    ' + tracksInfo.pool.length + ' 条，解出 ' + trackStats.decoded +
             '/' + trackStats.withBonus + ' 行（' +
             (trackStats.withBonus ? (trackStats.decoded / trackStats.withBonus * 100).toFixed(1) : '0') +

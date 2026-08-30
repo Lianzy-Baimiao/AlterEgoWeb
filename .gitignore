@@ -11,6 +11,11 @@ tools/launcher.ico
 WowAltBoard-v*.zip
 AlterEgoWeb-v*.zip
 
+# 临时脚本 / 临时文本（_gen_*.js、_msg.txt、_scan.json 那类）。
+# 规矩是「跑完即删」，但我自己在 74a849a 里就手滑把 _msg.txt 提交进去了 ——
+# 靠记性不如靠这条规则。
+_*
+
 # Editor / OS noise
 .vscode/
 .idea/
