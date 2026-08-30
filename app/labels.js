@@ -18,7 +18,7 @@
  *   - equipment slot names
  *   - group / vault-row / currency-kind headings
  *
- * DUNGEON NAMES ARE *NOT* HARDCODED HERE, ON PURPOSE.
+ * DUNGEON / RAID NAMES: harvested from the game first, table below as backstop.
  *   mythicplus.dungeons only persists challengeModeID, and the addon resolves
  *   names at runtime via C_ChallengeMode.GetMapUIInfo without ever saving them.
  *   But the localized name IS recoverable from the data: dungeon lockouts in
@@ -26,11 +26,24 @@
  *   joins to savedInstances[].instanceID. model.js harvests that mapping, and
  *   settings.js caches it so a name stays known after the lockout expires.
  *
- *   I originally hand-wrote a zhCN table here and it was measurably wrong -- I
- *   had "塞泰里斯神庙" where the client actually says "塞塔里斯神庙". Harvesting
- *   from the game's own strings removes that whole class of error, so the guess
- *   table is gone. Resolution order is:
- *       user override > harvested/cached zhCN > addon enUS name > abbr > #id
+ *   Harvesting alone is NOT enough, and this is the bug the tables below fix.
+ *   A harvested name only exists while a lockout or keystone exists. After a
+ *   weekly reset there are neither, so the only thing standing between the user
+ *   and an all-English header row is the cache in settings -- and that cache is
+ *   localStorage, which is keyed by folder path, shared by every file:// page,
+ *   and lost whenever the folder is moved or the browser is cleared. Raids had
+ *   no cache at all, so raid headers went back to English on every reset.
+ *
+ *   So: harvest first (always correct, always current), fall back to these
+ *   tables (correct for the seasons shipped with this build), fall back to
+ *   English last. Resolution order is:
+ *       user override > harvested/cached zhCN > table below > addon enUS > abbr > #id
+ *
+ *   EVERY name in both tables below was copied out of this machine's own
+ *   SavedVariables -- the game's strings, not my translation. That is the same
+ *   rule the harvest follows, and it exists because a hand-written table was
+ *   measurably wrong once: I had "塞泰里斯神庙" where the client says
+ *   "塞塔里斯神庙". Do not add a row you have not seen the client produce.
  */
 (function (global) {
   'use strict';
@@ -75,14 +88,39 @@
   };
 
   // ------------------------------------------------------------ dungeon zhCN
-  // Deliberately empty -- see the header note. Names are harvested from the
-  // game's own localized lockout strings by model.js. This object stays only as
-  // a merge target so a future hand-correction has somewhere to live.
-  L.dungeonZh = {};
+  // challengeModeID -> zhCN. Backstop for when nothing is currently locked; the
+  // harvest in model.js still wins when it has an answer. Verified against this
+  // machine's lockout strings -- see the header note before adding rows.
+  L.dungeonZh = {
+    // Midnight season 2
+    588: '毒牙祭坛',        // Altar of Fangs
+    587: '密谋小径',        // Murder Row
+    586: '纳洛拉克的洞穴',  // Den of Nalorakk
+    584: '夺目谷',          // The Blinding Vale
+    585: '虚空之痕竞技场',  // Voidscar Arena
+    249: '诸王之眠',        // Kings' Rest
+    250: '塞塔里斯神庙',    // Temple of Sethraliss
+    399: '红玉新生法池'     // Ruby Life Pools
+  };
 
-  // Raid instanceID -> zhCN. Also empty by design: a raid you have a lockout on
-  // carries its localized name in savedInstances[].name, which the model prefers.
-  L.raidZh = {};
+  // Raid instanceID -> zhCN. Same rule: the lockout's own localized name wins,
+  // this is what keeps the header Chinese once the lockout expires.
+  L.raidZh = {
+    // Midnight season 2
+    2987: '潮缚石窟',        // The Tidebound Grotto
+    3004: '烈毒之渊',        // The Venomous Abyss
+    // Midnight season 1
+    2912: '虚影尖塔',        // The Voidspire
+    2913: '进军奎尔丹纳斯',  // March on Quel'Danas
+    2939: '梦境裂隙',        // The Dreamrift
+    1592: '孢陨幽境',        // Sporefall
+    // Timewalking instances, which arrive as lockouts like any other. 961 is a
+    // DUNGEON, not a raid -- it is here because this table is keyed by
+    // instanceID and is consulted for any lockout-derived column.
+    564: '黑暗神殿',         // Black Temple
+    603: '奥杜尔',           // Ulduar
+    961: '风暴烈酒酿造厂'    // Stormstout Brewery (timewalking dungeon)
+  };
 
   // ------------------------------------------------------- equipment slots
   L.slotZh = {
@@ -200,11 +238,39 @@
   L.dungeonLabel = function (cmID, info, overrides, harvested) {
     if (overrides && overrides[cmID]) return String(overrides[cmID]);
     if (harvested && harvested[cmID]) return String(harvested[cmID]);
-    var zh = L.dungeonZh[cmID];
-    if (zh && zh.zh) return zh.zh;
+    if (L.dungeonZh[cmID]) return L.dungeonZh[cmID];
     if (info && info.name) return info.name;
     if (info && info.abbr) return info.abbr;
     return '#' + cmID;
+  };
+
+  /**
+   * Best available label for a raid.
+   *
+   * `lockoutName` is savedInstances[].name, which arrives already localized --
+   * but only while the lockout lives. Once it expires the caller passes '' and
+   * the learned cache / table below is all that is left, which is exactly the
+   * case that used to fall through to English.
+   *
+   * @param {number} instanceID
+   * @param {string} [lockoutName] localized name straight from the lockout
+   * @param {string} [enName]      the addon's enUS name
+   * @param {string} [abbr]        the addon's abbreviation
+   * @param {object} [learned]     {instanceID: localizedName} from settings
+   */
+  L.raidLabel = function (instanceID, lockoutName, enName, abbr, learned) {
+    if (lockoutName && L.hasCJK(lockoutName)) return String(lockoutName);
+    if (learned && learned[instanceID]) return String(learned[instanceID]);
+    if (L.raidZh[instanceID]) return L.raidZh[instanceID];
+    if (lockoutName) return String(lockoutName);
+    if (enName) return String(enName);
+    if (abbr) return String(abbr);
+    return '#' + instanceID;
+  };
+
+  /** True when the string contains at least one CJK ideograph. */
+  L.hasCJK = function (s) {
+    return /[一-鿿]/.test(String(s == null ? '' : s));
   };
 
   /**
@@ -231,8 +297,7 @@
   L.dungeonNeedsTranslation = function (cmID, overrides, harvested) {
     if (overrides && overrides[cmID]) return false;
     if (harvested && harvested[cmID]) return false;
-    var zh = L.dungeonZh[cmID];
-    return !(zh && zh.zh);
+    return !L.dungeonZh[cmID];
   };
 
   // ------------------------------------------------------------- armor types

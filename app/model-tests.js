@@ -208,6 +208,151 @@
       return bad.length === 0 || bad.join('; ');
     });
 
+    // The bug these guard: every Chinese dungeon/raid name in the scanned data
+    // comes from a LIVE lockout or a keystone in your bag. Once those are gone the
+    // only thing left is the cache in settings, which is localStorage -- keyed by
+    // folder path, shared by every file:// page, and lost when the folder moves.
+    // With an empty cache the M+ headers fell back to the addon's English abbr
+    // (verified: MR, DON). Simulate it by deleting both sources of truth.
+    //
+    // Raid columns behave differently and it is worth writing down: they are
+    // DERIVED from lockouts, so with every lockout gone the columns disappear
+    // instead of turning English. Raids leak English only when a column exists
+    // whose name is not Chinese -- an instance missing from the addon table, or a
+    // name the client never localized. That is what the raidLabel test covers.
+    var postReset = (function () {
+      if (!global.AE_DATA) return null;
+      var raw = JSON.parse(JSON.stringify(global.AE_DATA));
+      AE.asArray(raw.sources).forEach(function (s) {
+        if (typeof s.lua !== 'string') return;
+        s.lua = dropLuaTable(s.lua, 'savedInstances');
+        s.lua = dropLuaTable(s.lua, 'keystone');
+      });
+      try {
+        return AE.buildModel(raw, {}, {}, global.AE_BAGSYNC, {});
+      } catch (e) { return null; }
+    })();
+
+    t('周重置后（无锁定、无钥石、无缓存）大秘境表头仍是中文', function () {
+      if (!postReset) return '构建模型失败';
+      if (!postReset.columns.dungeonIds.length) return '没有副本列可验证';
+      var bad = [];
+      postReset.columns.dungeonIds.forEach(function (id) {
+        var meta = postReset.tables.dungeonById[id];
+        var full = L.dungeonLabel(id, meta, {}, postReset.dungeonNames);
+        var short = L.dungeonShort(id, meta, {}, postReset.dungeonNames,
+                                   postReset.dungeonShortNames);
+        if (!L.hasCJK(full)) bad.push(id + ' 全名=' + full);
+        if (!L.hasCJK(short)) bad.push(id + ' 缩写=' + short);
+      });
+      return bad.length === 0 || bad.join('; ');
+    });
+
+    t('周重置后团本列直接消失，不会留下英文表头', function () {
+      // Worth pinning because it corrects an easy wrong assumption: raid columns
+      // are DERIVED FROM lockouts, so with every lockout gone there is nothing
+      // left to label. Whatever survives must still be Chinese.
+      if (!postReset) return '构建模型失败';
+      var bad = postReset.columns.raidColumns.filter(function (rc) {
+        return !L.hasCJK(rc.name);
+      });
+      return bad.length === 0 ||
+             ('这些团本列变成英文了: ' + bad.map(function (b) { return b.name; }).join(', '));
+    });
+
+    t('团本列表头是中文（全名和缩写都算）', function () {
+      if (!m.columns.raidColumns.length) return '没有团本列可验证';
+      var bad = [];
+      m.columns.raidColumns.forEach(function (rc) {
+        if (!L.hasCJK(rc.name)) bad.push(rc.instanceID + ' 全名=' + rc.name);
+        var short = m.raidShortNames[rc.instanceID] || rc.abbr;
+        if (!L.hasCJK(short)) bad.push(rc.instanceID + ' 缩写=' + short);
+      });
+      return bad.length === 0 || bad.join('; ');
+    });
+
+    t('团本名的兜底顺序：锁定 > 缓存 > 内置表 > 英文', function () {
+      // The whole point of the fix: a raid whose lockout name is missing or in
+      // English must still come out Chinese.
+      if (L.raidLabel(3004, '烈毒之渊', 'The Venomous Abyss', 'VA', {}) !== '烈毒之渊') {
+        return '锁定名没有优先';
+      }
+      if (L.raidLabel(3004, '', 'The Venomous Abyss', 'VA', { 3004: '缓存名' }) !== '缓存名') {
+        return '缓存没有生效';
+      }
+      if (L.raidLabel(3004, '', 'The Venomous Abyss', 'VA', {}) !== '烈毒之渊') {
+        return '内置表没有生效';
+      }
+      // An enUS client would send an English "localized" name; the table wins.
+      if (L.raidLabel(3004, 'The Venomous Abyss', 'The Venomous Abyss', 'VA', {}) !== '烈毒之渊') {
+        return '英文锁定名盖掉了内置表';
+      }
+      // A raid nobody has a name for anywhere still has to render something.
+      return L.raidLabel(999999, '', 'Some Raid', 'SR', {}) === 'Some Raid' ||
+             '未知团本没有回落到英文';
+    });
+
+    t('中文缩写撞车时不会退回英文', function () {
+      // Two dungeons sharing a 4-char prefix used to make the loser render its
+      // English abbr, so one header in a row of Chinese ones was English.
+      var out = AE.shortenNames([
+        { id: 1, full: '烈毒之渊烈毒', fallback: 'VA' },
+        { id: 2, full: '烈毒之渊烈毒', fallback: 'VB' },
+        { id: 3, full: '烈毒之渊烈毒', fallback: 'VC' }
+      ]);
+      var vals = [out[1], out[2], out[3]];
+      var eng = vals.filter(function (v) { return !L.hasCJK(v); });
+      if (eng.length) return '仍然退回英文: ' + eng.join(',');
+      if (vals[0] === vals[1] || vals[1] === vals[2] || vals[0] === vals[2]) {
+        return '缩写重复了: ' + vals.join(',');
+      }
+      return true;
+    });
+
+    t('团本中文名也有缓存（不再只靠当前锁定）', function () {
+      if (!m.raidNames) return 'model.raidNames 不存在';
+      if (!Object.keys(m.raidNames).length) return '一个都没还原到';
+      var ascii = Object.keys(m.raidNames).filter(function (k) {
+        return !L.hasCJK(m.raidNames[k]);
+      });
+      return ascii.length === 0 || ('这些不是中文: ' + ascii.join(','));
+    });
+
+    t('名字缓存被写脏时不会把脏值当表头', function () {
+      // The cache is plain JSON inside settings that a user can hand-edit, and it
+      // outranks the built-in table -- so a junk value used to be stringified
+      // straight into a header ([object Object] was reachable this way).
+      var junk = { 588: { nope: 1 }, 587: 42, 586: 'Den of Nalorakk', abc: '毒牙' };
+      var mj;
+      try {
+        mj = AE.buildModel(global.AE_DATA, junk, {}, global.AE_BAGSYNC, junk);
+      } catch (e) { return 'threw: ' + String(e.message).split('\n')[0]; }
+      var bad = [];
+      Object.keys(mj.dungeonNames).forEach(function (k) {
+        if (!L.hasCJK(mj.dungeonNames[k])) bad.push('副本 ' + k + '=' + mj.dungeonNames[k]);
+      });
+      Object.keys(mj.raidNames).forEach(function (k) {
+        if (!L.hasCJK(mj.raidNames[k])) bad.push('团本 ' + k + '=' + mj.raidNames[k]);
+      });
+      return bad.length === 0 || bad.join('; ');
+    });
+
+    t('英文表头模式仍然给英文（中文兜底没有盖掉它）', function () {
+      var cjk = m.columns.dungeonIds.map(function (id) {
+        return L.dungeonAbbr(id, m.tables.dungeonById[id], {}, m.dungeonNames);
+      }).filter(L.hasCJK);
+      return cjk.length === 0 || ('这些应该是英文: ' + cjk.join(','));
+    });
+
+    t('用户自定义名字优先于中文兜底表', function () {
+      var id = m.columns.dungeonIds[0];
+      if (id == null) return '没有副本列可验证';
+      var ov = {};
+      ov[id] = '我的名字';
+      var got = L.dungeonLabel(id, m.tables.dungeonById[id], ov, m.dungeonNames);
+      return got === '我的名字' || ('得到 ' + got);
+    });
+
     t('护甲类型与职业一致', function () {
       var bad = [];
       m.characters.forEach(function (ch) {
@@ -682,6 +827,39 @@
 
     return { pass: pass, fail: fail, skipped: skipped, results: results };
   };
+
+  /**
+   * Delete every `["name"] = { ... }` table from a SavedVariables Lua string,
+   * matching braces so nested tables go with it. Used to fake a post-reset file:
+   * that is the one state the scanned data can never show us, because the data on
+   * disk always has whatever lockouts existed at scan time.
+   */
+  /**
+   * Empty out every `["name"] = { ... }` table in a SavedVariables blob.
+   *
+   * Used to fabricate post-weekly-reset data from the real scan. Searching must
+   * resume PAST each replacement: the text written back still starts with the
+   * needle, so restarting from 0 would match it again forever.
+   */
+  function dropLuaTable(lua, name) {
+    var needle = '["' + name + '"] = {';
+    var repl = '["' + name + '"] = {}';
+    var out = lua;
+    var from = 0;
+    for (;;) {
+      var at = out.indexOf(needle, from);
+      if (at < 0) return out;
+      var i = at + needle.length, depth = 1;
+      while (i < out.length && depth > 0) {
+        var c = out.charAt(i);
+        if (c === '{') depth++;
+        else if (c === '}') depth--;
+        i++;
+      }
+      out = out.slice(0, at) + repl + out.slice(i);
+      from = at + repl.length;
+    }
+  }
 
   function pickKeys(src, keys) {
     var o = {};

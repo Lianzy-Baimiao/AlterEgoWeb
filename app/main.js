@@ -49,7 +49,8 @@
       model = AE.buildModel(global.AE_DATA,
                             loaded.settings.learnedDungeonNames,
                             loaded.settings.dungeonNameOverrides,
-                            global.AE_BAGSYNC);
+                            global.AE_BAGSYNC,
+                            loaded.settings.learnedRaidNames);
     } catch (e) {
       fatal('数据解析失败', e.message);
       if (global.console) global.console.error(e);
@@ -63,12 +64,20 @@
       return;
     }
 
-    // Remember the localized dungeon names we just harvested, so they survive
-    // after the lockouts that revealed them expire.
+    // Remember the localized dungeon and raid names we just harvested, so they
+    // survive after the lockouts that revealed them expire. The built-in tables
+    // in labels.js cover the seasons this build shipped with; this cache is what
+    // keeps a FUTURE season Chinese without waiting for a new release.
     var learnedChanged = false;
     Object.keys(model.dungeonNames).forEach(function (k) {
       if (loaded.settings.learnedDungeonNames[k] !== model.dungeonNames[k]) {
         loaded.settings.learnedDungeonNames[k] = model.dungeonNames[k];
+        learnedChanged = true;
+      }
+    });
+    Object.keys(model.raidNames).forEach(function (k) {
+      if (loaded.settings.learnedRaidNames[k] !== model.raidNames[k]) {
+        loaded.settings.learnedRaidNames[k] = model.raidNames[k];
         learnedChanged = true;
       }
     });

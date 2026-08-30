@@ -111,6 +111,11 @@
       // Learned localized dungeon names, so they survive lockout expiry.
       learnedDungeonNames: {},
 
+      // Same for raid names. Raid lockouts expire every week, and the localized
+      // name only exists while the lockout does, so without this the raid
+      // headers fell back to English after every reset.
+      learnedRaidNames: {},
+
       // User corrections to dungeon labels.
       dungeonNameOverrides: {}
     };

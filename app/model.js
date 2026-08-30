@@ -611,7 +611,7 @@
 
   // ------------------------------------------------------------ column sets
 
-  function deriveColumns(characters, tables, activeSeason) {
+  function deriveColumns(characters, tables, activeSeason, learnedRaidNames) {
     // --- Mythic+ dungeons -------------------------------------------------
     // Start from the addon's authoritative order for the active season, then
     // append any challengeModeID seen in data that the table does not know
@@ -660,8 +660,12 @@
         key: k,
         instanceID: r.instanceID,
         difficultyID: r.difficultyID,
-        // Prefer the localized name straight from the lockout data.
-        name: r.name || (meta ? meta.name : '#' + r.instanceID),
+        // Prefer the localized name straight from the lockout data, then the
+        // learned cache, then the built-in table -- English only as a last
+        // resort. A lockout is gone every reset, so relying on r.name alone is
+        // what made these headers flip back to English.
+        name: L.raidLabel(r.instanceID, r.name, meta ? meta.name : '',
+                          meta ? meta.abbr : '', learnedRaidNames),
         abbr: meta ? meta.abbr : ('#' + r.instanceID),
         difficultyName: r.difficultyName || L.raidDifficultyZh[r.difficultyID] || String(r.difficultyID),
         total: r.total
@@ -757,6 +761,28 @@
 
   // -------------------------------------------------- localized name harvest
   /**
+   * Copy a learned-name cache over `out`, keeping only rows that still look
+   * like {gameID: localizedName}.
+   *
+   * The caches are plain JSON that a user can hand-edit, that older builds wrote
+   * with different rules, and that a wrong call site could hand the wrong object
+   * entirely. Without this filter a stray value gets String()-ed straight into a
+   * column header. CJK is required because the whole point of the cache is to
+   * remember a LOCALIZED name -- an English one must fall through to the tables
+   * in labels.js instead of outranking them.
+   */
+  function mergeLearned(out, learned) {
+    if (!learned || typeof learned !== 'object') return out;
+    Object.keys(learned).forEach(function (k) {
+      var v = learned[k];
+      if (!/^\d+$/.test(k)) return;
+      if (typeof v !== 'string' || !L.hasCJK(v)) return;
+      out[k] = v;
+    });
+    return out;
+  }
+
+  /**
    * Recover localized dungeon names from the data itself. Two independent
    * sources, because neither alone covers every dungeon:
    *
@@ -776,11 +802,7 @@
   function harvestDungeonNames(characters, tables, learned) {
     var out = {};
     // Previously learned names first, so a fresh harvest can correct them.
-    if (learned) {
-      Object.keys(learned).forEach(function (k) {
-        if (learned[k]) out[k] = String(learned[k]);
-      });
-    }
+    mergeLearned(out, learned);
 
     // --- source 1: dungeon lockouts, joined through mapId
     var nameByInstance = {};
@@ -812,6 +834,30 @@
       if (!out[cmID]) out[cmID] = name;
     });
 
+    return out;
+  }
+
+  /**
+   * Recover localized RAID names, same idea as harvestDungeonNames but simpler:
+   * savedInstances[].name is already the localized string and instanceID is the
+   * key the columns use, so no join is needed. Only current lockouts are in the
+   * data, so `learned` (persisted by settings.js) carries names past expiry.
+   *
+   * Timewalking and dungeon lockouts are harvested too -- they are still real
+   * localized instance names, and a timewalking raid becomes a raid column.
+   */
+  function harvestRaidNames(characters, learned) {
+    var out = {};
+    mergeLearned(out, learned);
+    characters.forEach(function (ch) {
+      var all = ch.raids.dungeonLockouts.concat(
+        Object.keys(ch.raids.byKey).map(function (k) { return ch.raids.byKey[k]; }));
+      all.forEach(function (r) {
+        // Only trust a name that is actually localized; an enUS client would
+        // otherwise poison the cache with English that then outranks the table.
+        if (r && r.instanceID && r.name && L.hasCJK(r.name)) out[r.instanceID] = r.name;
+      });
+    });
     return out;
   }
 
@@ -887,12 +933,22 @@
 
     pending.forEach(function (it) {
       var short = null;
+      // 2-4 chars: wide enough to separate 毒牙祭坛 from 毒牙峰, narrow enough that a
+      // 60-column table still fits. Beyond 4 the column would stretch.
       for (var len = 2; len <= Math.min(4, it.full.length); len++) {
         var cand = it.full.slice(0, len);
         if (!used[cand]) { short = cand; break; }
       }
-      // A duplicate header would be worse than an English one: two columns would
-      // look interchangeable.
+      // Every prefix taken means another column starts with the same 4 chars. A
+      // duplicate header would be worse than an English one -- two columns would
+      // look interchangeable -- but English is the bug being fixed here, so
+      // disambiguate with a digit and stay Chinese.
+      if (!short) {
+        var base = it.full.slice(0, 2);
+        for (var n = 2; n <= 9; n++) {
+          if (!used[base + n]) { short = base + n; break; }
+        }
+      }
       if (!short) short = it.fallback;
       used[short] = true;
       out[it.id] = short;
@@ -900,6 +956,11 @@
 
     return out;
   }
+
+  // Exported so the collision behaviour can be tested directly; building a real
+  // collision out of scanned data would mean waiting for two dungeons that share
+  // a 4-character prefix to be in season together.
+  AE.shortenNames = shortenNames;
 
   /**
    * Two-character Chinese abbreviations for the dungeon columns.
@@ -909,9 +970,16 @@
   function buildShortNames(dungeonIds, tables, dungeonNames, overrides) {
     return shortenNames(dungeonIds.map(function (cmID) {
       var meta = tables.dungeonById[cmID];
+      // Must go through dungeonLabel, not dungeonNames alone: the harvest only
+      // knows dungeons that are currently locked or keyed, so reading the raw
+      // map here sent every other column to its English abbr even though
+      // L.dungeonZh had the Chinese name. dungeonLabel walks the whole chain.
+      var full = L.dungeonLabel(cmID, meta, overrides, dungeonNames);
       return {
         id: cmID,
-        full: (overrides && overrides[cmID]) || dungeonNames[cmID] || '',
+        // shortenNames only abbreviates CJK; an English label falls through to
+        // `fallback` on its own, so passing the resolved label is safe.
+        full: L.hasCJK(full) ? full : '',
         fallback: (meta && meta.abbr) || ('#' + cmID)
       };
     }));
@@ -970,9 +1038,12 @@
   /**
    * @param {object} raw  window.AE_DATA as produced by tools/scan.ps1
    * @param {object} [learnedNames]  cached {challengeModeID: localizedName}
+   * @param {object} [nameOverrides] user dungeon label overrides
+   * @param {object} [bagSyncRaw]    window.AE_BAGSYNC
+   * @param {object} [learnedRaidNames] cached {instanceID: localizedName}
    * @returns {object} the view model
    */
-  AE.buildModel = function (raw, learnedNames, nameOverrides, bagSyncRaw) {
+  AE.buildModel = function (raw, learnedNames, nameOverrides, bagSyncRaw, learnedRaidNames) {
     if (!raw || !raw.sources) throw new Error('AE_DATA is missing or malformed');
 
     var tables = buildTables(raw.addonTables);
@@ -1075,7 +1146,10 @@
       s.seasonMismatch = s.seasons.length > 0 && s.seasons.indexOf(activeSeason) < 0;
     });
 
-    var columns = deriveColumns(characters, tables, activeSeason);
+    // Harvested BEFORE the columns are derived, because the raid column labels
+    // consume it as their second-choice source after the live lockout name.
+    var raidNames = harvestRaidNames(characters, learnedRaidNames);
+    var columns = deriveColumns(characters, tables, activeSeason, raidNames);
     var dungeonNames = harvestDungeonNames(characters, tables, learnedNames);
     var season = harvestSeasonName(characters, tables, activeSeason);
     var dungeonShortNames = buildShortNames(columns.dungeonIds, tables, dungeonNames, nameOverrides);
@@ -1121,6 +1195,7 @@
         parseErrors: bagSync.parseErrors
       },
       dungeonNames: dungeonNames,
+      raidNames: raidNames,
       dungeonShortNames: dungeonShortNames,
       raidShortNames: raidShortNames,
       staleDays: STALE_DAYS
