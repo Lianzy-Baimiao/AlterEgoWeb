@@ -111,19 +111,53 @@
   function talents() { return global.AE_TALENTS || null; }
   function tree() { return global.AE_TALENT_TREE || null; }
 
-  /** 图标名 -> 可用的图片地址。没有配置图标源就返回 null（画占位块）。 */
+  // 图标默认从包里的 app/icons/ 取 —— 那是打包前用 tools\fetch-icons.js 下好的，
+  // 469 个文件约 1 MB，离线可用。国内访问不到 wowhead 的图床（实测直连 403），
+  // 所以不能在运行时去拉图；iconBaseUrl 只是留给想换成自己图床的人。
+  var ICON_DIR = 'app/icons';
+
+  /** 图标名 -> 图片地址。名字为空才返回 null（那时候画占位块）。 */
   function iconUrl(name) {
     if (!name) return null;
-    var base = String(settings().iconBaseUrl || '').trim();
-    if (!base) return null;
+    var base = String(settings().iconBaseUrl || '').trim() || ICON_DIR;
     return base.replace(/\/+$/, '') + '/' + name + '.jpg';
   }
 
-  /** itemId -> 图标名。需要另一份映射数据，没有就返回空。 */
+  /** itemId -> 图标名。来自 app/item-icons.js，没加载就返回空。 */
   function itemIcon(itemId) {
     var m = global.AE_ITEM_ICONS;
     if (!m) return '';
     return m[itemId] || '';
+  }
+
+  /**
+   * itemId -> 品质。BisData 里**没有**品质字段（我在本机 2187 件上数过是 0 次），
+   * 这份是按 itemId 查出来的，和图标一起放在 app/item-icons.js。
+   * 实测分布 {1:14, 3:54, 4:500} —— 所以「BiS 一定是紫装」是错的，附魔卷轴是蓝的、
+   * 合剂是白的，硬写成紫色会把这三类都染错。
+   */
+  function itemQuality(itemId) {
+    var m = global.AE_ITEM_QUALITY;
+    if (!m) return null;
+    var q = m[itemId];
+    return q == null ? null : q;
+  }
+
+  /** 按 itemId 出一个 <img>，没有图标数据就返回 null。size 是显示边长。 */
+  function iconImg(itemId, size, fallbackName) {
+    var name = itemIcon(itemId) || fallbackName || '';
+    var url = iconUrl(name);
+    if (!url) return null;
+    var img = doc.createElement('img');
+    img.src = url;
+    img.alt = '';
+    img.width = size;
+    img.height = size;
+    // 图标文件缺一个不该让整行塌掉，也不该留一个碎图标记。
+    img.addEventListener('error', function () {
+      if (img.parentNode) img.parentNode.removeChild(img);
+    });
+    return img;
   }
 
   function buildClassIndex() {
@@ -554,16 +588,10 @@
     var row = el('div', 'item' + (isTop ? ' top' : ''));
     if (mine && mine.itemId === itemId) row.classList.add('have');
 
-    // 图标：有图标源就出图，没有就出一个按来源上色的占位块。
+    // 图标：包里有图就出图，没有就出一个按来源上色的占位块。
     var icon = el('span', 'icon');
-    var iname = itemIcon(itemId);
-    var url = iconUrl(iname);
-    if (url) {
-      var img = doc.createElement('img');
-      img.src = url;
-      img.alt = '';
-      img.width = 24;
-      img.height = 24;
+    var img = iconImg(itemId, 24);
+    if (img) {
       icon.appendChild(img);
     } else {
       icon.classList.add('ph');
@@ -574,9 +602,10 @@
 
     var main = el('span', 'im');
     var name = el('b', null, it.n || ('物品 ' + itemId));
-    // BiS 列表里的东西在实际数据里全是紫装（我在本机 2187 件上验过没有 quality
-    // 字段，所以这里用装等来源上色，不假装知道品质）。
-    name.style.color = L.qualityColors[4];
+    // 品质来自 app/item-icons.js（BisData 自己没有这个字段）。查不到就不上色，
+    // 而不是默认紫色 —— 默认紫会把蓝色附魔和白色合剂都染错。
+    var q = itemQuality(itemId);
+    if (q != null && L.qualityColors[q]) name.style.color = L.qualityColors[q];
     main.appendChild(name);
 
     var sub = el('span', 'sub2');
@@ -651,7 +680,12 @@
       var gl = el('div', 'chips');
       s.gems.forEach(function (row) {
         var c = el('span', 'chip');
-        c.appendChild(el('b', null, row[1] || ('宝石 ' + row[0])));
+        var gi = iconImg(row[0], 16);
+        if (gi) c.appendChild(gi);
+        var gn = el('b', null, row[1] || ('宝石 ' + row[0]));
+        var gq = itemQuality(row[0]);
+        if (gq != null && L.qualityColors[gq]) gn.style.color = L.qualityColors[gq];
+        c.appendChild(gn);
         c.appendChild(el('span', 'n', pct(row[2])));
         c.setAttribute('data-tip', 'itemID ' + row[0] + '　使用率 ' + pct(row[2]));
         gl.appendChild(c);
@@ -673,7 +707,13 @@
         var box = el('span', 'chips');
         list.forEach(function (en) {
           var c = el('span', 'chip');
-          c.appendChild(el('b', null, en[1] || ('附魔 ' + en[0])));
+          // en[3] 是附魔卷轴的 itemId；图标查的是它，不是附魔 ID。
+          var ei = en[3] ? iconImg(en[3], 16) : null;
+          if (ei) c.appendChild(ei);
+          var en2 = el('b', null, en[1] || ('附魔 ' + en[0]));
+          var eq = en[3] ? itemQuality(en[3]) : null;
+          if (eq != null && L.qualityColors[eq]) en2.style.color = L.qualityColors[eq];
+          c.appendChild(en2);
           c.appendChild(el('span', 'n', pct(en[2])));
           c.setAttribute('data-tip', '附魔 ID ' + en[0]
             + (en[3] ? '　卷轴 itemID ' + en[3] : '')
@@ -700,13 +740,15 @@
         var box = el('span', 'chips');
         groups[kind].forEach(function (it) {
           var chip = el('span', 'chip');
-          var url = iconUrl(it.icon);
-          if (url) {
-            var img = doc.createElement('img');
-            img.src = url; img.alt = ''; img.width = 16; img.height = 16;
-            chip.appendChild(img);
-          }
-          chip.appendChild(el('b', null, it.n));
+          // 优先按 itemId 查（那是 app/icons/ 里真有的文件名）。BisData 自带的
+          // it.icon 是插件在游戏里用的名字，和图床上的名字**不一样** ——
+          // 本机 35 个消耗品实测 35 个全不一致，所以它只能当兜底。
+          var ci = iconImg(it.id, 16, it.icon);
+          if (ci) chip.appendChild(ci);
+          var cn = el('b', null, it.n);
+          var cq = itemQuality(it.id);
+          if (cq != null && L.qualityColors[cq]) cn.style.color = L.qualityColors[cq];
+          chip.appendChild(cn);
           if (it.stat) {
             var st = el('span', 'n', B.statNames[it.stat] || it.stat);
             st.style.color = statColor(it.stat);
@@ -1028,8 +1070,9 @@
         }
         return;
       }
-      // 图标映射是可选的，有就加载，没有就算了（不报错 —— 包里本来就没有）
-      if (String(settings().iconBaseUrl || '').trim() && !global.AE_ITEM_ICONS) {
+      // 图标映射现在是包里自带的，无条件加载；它同时带了品质。
+      // 加不到也不报错 —— 那时候退化成占位块，功能不受影响。
+      if (!global.AE_ITEM_ICONS) {
         loadDataFile('item-icons.js', 'AE_ITEM_ICONS', function () {
           if (state.tab === 'talents') ensureTalents(render);
           else render();

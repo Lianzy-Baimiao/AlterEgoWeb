@@ -642,12 +642,12 @@
       'item-icons.js（itemId → 图标名）。'));
     bisSec.appendChild(textField('数据目录地址', s.remoteDataUrl, '留空 = 只用包里的',
       function (v) { s.remoteDataUrl = v.trim(); }));
-    bisSec.appendChild(textField('图标地址前缀', s.iconBaseUrl, '留空 = 不显示图标',
+    bisSec.appendChild(textField('图标地址前缀', s.iconBaseUrl, '留空 = 用包里的 app/icons/',
       function (v) { s.iconBaseUrl = v.trim(); }));
     bisSec.appendChild(el('p', 'note',
-      '图标前缀 + 图标名 + .jpg 就是一张图的地址。' +
-      '插件的装备数据里只有 itemId，没有图标名 —— 所以装备图标还需要上面那份 ' +
-      'item-icons.js；消耗品和附魔本来就带图标名，配好前缀就能显示。'));
+      '图标图片已经在安装包的 app/icons/ 下（469 张，约 1 MB），离线就能显示，' +
+      '这一栏留空即可。填了就改成「前缀 + 图标名 + .jpg」去别处取图，' +
+      '只有你自己架了图床才需要。'));
     panel.appendChild(bisSec);
 
     // ---- dungeon names ---------------------------------------------------

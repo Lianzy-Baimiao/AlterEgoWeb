@@ -146,8 +146,12 @@
       //   tree, which cannot be extracted from the addon at all) gets in without
       //   shipping a new release. They are loaded with <script src>, not fetch():
       //   file:// pages cannot fetch, so each file must assign to its global.
-      // iconBaseUrl: a base URL for <name>.jpg icon images. Without it the panel
-      //   draws colored placeholders instead of icons.
+      // iconBaseUrl: a base URL for <name>.jpg icon images. Empty means "use the
+      //   bundled app/icons/" -- 469 files, ~1 MB, downloaded at build time by
+      //   tools/fetch-icons.js. It is NOT a switch for having icons at all:
+      //   pointing a browser in mainland China at wowhead's image host returns
+      //   403 (measured), so runtime fetching is not an option and the icons
+      //   have to ship. This setting only exists for swapping in your own host.
       remoteDataUrl: '',
       iconBaseUrl: ''
     };

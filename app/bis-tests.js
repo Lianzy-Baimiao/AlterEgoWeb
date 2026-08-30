@@ -363,6 +363,92 @@
       return bad.length === 0 || bad.length + ' 处越界，例如 ' + bad[0];
     });
 
+    // ------------------------------------------------------------ 图标数据
+    // app/item-icons.js 是 tools\fetch-icons.js 生成的：itemId -> 图标名、
+    // itemId -> 品质。两样都不在 GearInsight 的 BisData 里。
+    // 图片文件本身在不了浏览器里查，那部分由 Node 侧的渲染 harness 断言。
+
+    t('图标数据：装备表里每个 itemId 都有图标名', function () {
+      var B = global.AE_BIS, IC = global.AE_ITEM_ICONS;
+      if (!B || !IC) return '图标数据未加载，跳过';
+      var miss = Object.keys(B.items).filter(function (id) { return !IC[id]; });
+      return miss.length === 0 ||
+        miss.length + '/' + Object.keys(B.items).length + ' 件没有图标名，例如 ' + miss[0];
+    });
+
+    t('图标数据：宝石、附魔卷轴、消耗品也都有图标名', function () {
+      var B = global.AE_BIS, IC = global.AE_ITEM_ICONS;
+      if (!B || !IC) return '图标数据未加载，跳过';
+      var need = {};
+      Object.keys(B.specs).forEach(function (key) {
+        var s = B.specs[key];
+        (s.gems || []).forEach(function (r) { if (r[0]) need[r[0]] = '宝石'; });
+        Object.keys(s.ench || {}).forEach(function (slot) {
+          (s.ench[slot] || []).forEach(function (r) { if (r[3]) need[r[3]] = '附魔卷轴'; });
+        });
+      });
+      (B.consumables || []).forEach(function (c) { if (c.id) need[c.id] = '消耗品'; });
+      var miss = Object.keys(need).filter(function (id) { return !IC[id]; });
+      return miss.length === 0 ||
+        miss.length + ' 个没有图标名，例如 ' + need[miss[0]] + ' ' + miss[0];
+    });
+
+    t('图标数据：图标名只含小写字母数字下划线', function () {
+      var IC = global.AE_ITEM_ICONS;
+      if (!IC) return '图标数据未加载，跳过';
+      // 图标名会直接拼进 URL。出现斜杠、点、大写或中文都说明取错了字段，
+      // 而且拼出来的地址还可能跑到 app/icons/ 外面去。
+      var bad = Object.keys(IC).filter(function (id) {
+        return !/^[a-z0-9_]+$/.test(IC[id]);
+      });
+      return bad.length === 0 ||
+        bad.length + ' 个图标名不合法，例如 ' + IC[bad[0]];
+    });
+
+    t('图标数据：品质表覆盖所有装备，且取值在 0..7', function () {
+      var B = global.AE_BIS, Q = global.AE_ITEM_QUALITY;
+      if (!B || !Q) return '图标数据未加载，跳过';
+      var miss = [], bad = [];
+      Object.keys(B.items).forEach(function (id) {
+        var q = Q[id];
+        if (q == null) { miss.push(id); return; }
+        if (typeof q !== 'number' || q < 0 || q > 7) bad.push(id + '=' + q);
+      });
+      if (miss.length) return miss.length + ' 件没有品质，例如 ' + miss[0];
+      return bad.length === 0 || '品质越界：' + bad.slice(0, 3).join(', ');
+    });
+
+    t('图标数据：品质不是清一色的 4', function () {
+      var Q = global.AE_ITEM_QUALITY;
+      if (!Q) return '图标数据未加载，跳过';
+      // 我一开始按「BiS 必然是紫装」写死了颜色，实测是错的：附魔卷轴是蓝的(3)、
+      // 合剂是白的(1)。这条测试盯着这个假设，别让它悄悄回来。
+      var dist = {};
+      Object.keys(Q).forEach(function (id) { dist[Q[id]] = (dist[Q[id]] || 0) + 1; });
+      var kinds = Object.keys(dist).length;
+      return kinds >= 2 || '所有物品品质都是 ' + Object.keys(dist)[0] + '，不合理';
+    });
+
+    t('图标数据：没有多余条目', function () {
+      var B = global.AE_BIS, IC = global.AE_ITEM_ICONS;
+      if (!B || !IC) return '图标数据未加载，跳过';
+      // 反向检查：item-icons.js 里的每个 id 都应该是数据里真用到的，
+      // 否则就是换赛季后没重新生成，图标包里躺着一堆上赛季的东西。
+      var used = {};
+      Object.keys(B.items).forEach(function (id) { used[id] = 1; });
+      Object.keys(B.specs).forEach(function (key) {
+        var s = B.specs[key];
+        (s.gems || []).forEach(function (r) { used[r[0]] = 1; });
+        Object.keys(s.ench || {}).forEach(function (slot) {
+          (s.ench[slot] || []).forEach(function (r) { if (r[3]) used[r[3]] = 1; });
+        });
+      });
+      (B.consumables || []).forEach(function (c) { used[c.id] = 1; });
+      var extra = Object.keys(IC).filter(function (id) { return !used[id]; });
+      return extra.length === 0 ||
+        extra.length + ' 个 itemId 在数据里用不到，例如 ' + extra[0] + '（该重跑 fetch-icons）';
+    });
+
     return { pass: pass, fail: fail, skipped: false, results: results };
   };
 
