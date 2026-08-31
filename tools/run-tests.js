@@ -122,6 +122,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               tgrids: 0, tnodes: 0, tnodeOn: 0, tedges: 0, tedgeOn: 0,
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
               trenders: 0, tdup: 0, tnoId: 0, tgeo: 0, tSpill: 0, tOverlap: 0, thero: 0, theroEn: 0,
+              tico: 0, tnoIco: 0, ticoBad: 0, ticoNoCls: 0, ticoMismatch: 0, ticoPair: 0,
               tmaxCol: 0, tmaxRow: 0, tCluster: 0,
               // 无障碍
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
@@ -273,10 +274,12 @@ function checkTalents(label) {
       if (!nid) { stats.tnoId++; }
       else if (seen[nid]) { dup++; stats.tdup++; }
       else seen[nid] = 1;
-      // 节点上必须有中文名 —— 没有图标的树全靠名字读，名字空了等于白画。
-      var nm = null;
+      // 节点上必须有中文名。图标是认天赋的主要手段，但名字是唯一的**文字**信息，
+      // 读屏软件和「图挂了」的情况都只剩它。
+      var nm = null, ico = null;
       n.children.forEach(function (c) {
         if (c.classList && c.classList.contains('nm')) nm = c;
+        if (c.tagName === 'IMG') ico = c;
       });
       if (!nm || !nm.textContent) {
         stats.tnoName++;
@@ -284,6 +287,60 @@ function checkTalents(label) {
       } else if (!/[\u4e00-\u9fff]/.test(nm.textContent)) {
         stats.tnoCJK++;
         if (stats.tnoCJK < 4) problems.push(label + ' 天赋节点名不是中文：' + nm.textContent);
+      }
+      // 天赋图标。这一段是新加的，而且是**被一次假通过逼出来的**：
+      // 图标接上之后套件依然报「7947 个图标」——和一张天赋图都没有的时候一模一样。
+      // 原因是天赋渲染走 checkTalents，而数图标的代码只在 checkRender 里。
+      // 4304 个节点、2094 张图，全都没有被任何断言看过一眼。
+      if (!ico) {
+        stats.tnoIco++;
+        if (stats.tnoIco < 4) problems.push(label + ' 天赋节点 ' + nid + ' 没有图标');
+      } else {
+        stats.tico++;
+        var isrc = ico.attrs.src || ico.src || '';
+        if (isrc.indexOf('app/talent-icons/') !== 0) {
+          stats.ticoBad++;
+          if (stats.ticoBad < 4) {
+            problems.push(label + ' 天赋图标 src 不指向 app/talent-icons/：' + isrc);
+          }
+        } else if (!fs.existsSync(path.join(ROOT, isrc))) {
+          missingFiles[isrc] = 1;
+        }
+        // 图标必须有 class=ti，否则 style.css 里那一整段（24px、压暗未点的）全落空。
+        // 实测漏过一次：img 建出来了、图也在，但没设 class，样式一条没生效。
+        if (!ico.classList || !ico.classList.contains('ti')) {
+          stats.ticoNoCls++;
+          if (stats.ticoNoCls < 4) {
+            problems.push(label + ' 天赋图标没有 class=ti，style.css 那段样式会全部落空');
+          }
+        }
+        // **图标和名字必须来自同一个 entry。**
+        //
+        // 上面三条加起来仍然抓不住「图标取错了 entry」：把 icons[ent[2]] 写成
+        // icons[ent[1]]（名字下标当图标下标用）照样得到一个存在的图标名、
+        // 存在的文件、正确的路径前缀 —— 三条全过，而二选一节点会图文不符。
+        // 所以这里对着上游数据反查：显示的名字属于哪个 entry，图标就必须是
+        // 那个 entry 的图标。同名 entry 存在（同一天赋的多个 rank），所以
+        // 收成集合再判定。
+        var up2 = TREE && TREE.nodes ? TREE.nodes[nid] : null;
+        if (up2 && nm && nm.textContent) {
+          var wantIco = {}, nWant = 0;
+          (up2[5] || []).forEach(function (e) {
+            if (TREE.names[e[1]] !== nm.textContent) return;
+            var inm = TREE.icons[e[2]];
+            if (inm) { wantIco[inm] = 1; nWant++; }
+          });
+          var got = isrc.replace(/^.*\//, '').replace(/\.jpg$/, '');
+          if (nWant && !wantIco[got]) {
+            stats.ticoMismatch++;
+            if (stats.ticoMismatch < 4) {
+              problems.push(label + ' 节点 ' + nid + ' 图文不符：名字「' + nm.textContent
+                + '」对应图标 ' + Object.keys(wantIco).join('/') + '，画出来的却是 ' + got);
+            }
+          } else if (nWant) {
+            stats.ticoPair++;
+          }
+        }
       }
     }
     // 英雄天赋名。talent-data.js 里存的是英文（那份数据来自插件），面板要靠
@@ -506,6 +563,29 @@ if (stats.tmaxCol > 9 || stats.tmaxRow > 11) {
 if (stats.tgeo < 4000) problems.push('只量到 ' + stats.tgeo + ' 个节点方块，几何检查没跑起来');
 if (stats.tSpill > 0) problems.push(stats.tSpill + ' 个天赋节点跑到画布外面了');
 if (stats.tOverlap > 0) problems.push(stats.tOverlap + ' 对天赋节点互相重叠（网格算错了）');
+// 天赋图标。写成「一个都不许少」而不是一个比例：图标名字典是全覆盖的
+// （2094/2094 张文件都在），所以每个节点都该有图。
+// 这一组的门槛是实测压出来的：4304 个节点 → 4304 张图标。
+if (stats.tnoIco > 0) {
+  problems.push(stats.tnoIco + ' 个天赋节点没有图标（图标名字典或 nodeEntry 坏了）');
+}
+if (stats.ticoBad > 0) problems.push(stats.ticoBad + ' 个天赋图标 src 不指向 app/talent-icons/');
+// 图文不符一个都不允许。并且要求反查真的跑过足够多次 ——
+// 如果 wantIco 永远是空（比如 TREE.names 取不到），上面那条会一直是 0，
+// 看起来像「全对」，实际上一次都没比。本机实测能配上名字的节点 4304 中的大部分。
+if (stats.ticoPair < 3000) {
+  problems.push('图文配对只查了 ' + stats.ticoPair + ' 次，太少（反查没真跑）');
+}
+if (stats.ticoMismatch > 0) {
+  problems.push(stats.ticoMismatch + ' 个天赋节点图文不符（图标和名字取了不同的 entry）');
+}
+if (stats.ticoNoCls > 0) {
+  problems.push(stats.ticoNoCls + ' 个天赋图标没有 class=ti（style.css 那段样式全部落空）');
+}
+// 数量必须和节点数相等。写成「> 4000」的话，「只有一半节点有图」也能过。
+if (stats.tico !== stats.tnodes) {
+  problems.push('天赋图标 ' + stats.tico + ' 个，节点 ' + stats.tnodes + ' 个，不一一对应');
+}
 
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
@@ -514,6 +594,9 @@ console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精�
   + '（' + stats.tspecs + ' 个专精，' + stats.tgrids + ' 棵树，节点 ' + stats.tnodes
   + '，点亮 ' + stats.tnodeOn + '，连线 ' + stats.tedges + '，点亮 ' + stats.tedgeOn
   + '，点数徽章 ' + stats.tRank + '，英雄天赋名 ' + stats.thero
+  + '，图标 ' + stats.tico + '（没图标 ' + stats.tnoIco + '，路径错 ' + stats.ticoBad
+  + '，缺 class ' + stats.ticoNoCls + '，图文配对 ' + stats.ticoPair
+  + '，图文不符 ' + stats.ticoMismatch + '）'
   + '，方块 ' + stats.tgeo + '（重叠 ' + stats.tOverlap + '，超出 ' + stats.tSpill + '）'
   + '，方块尺寸 ' + NODE_BOX.w + '×' + NODE_BOX.h + '（读自 style.css）'
   + '，最大 ' + stats.tmaxCol + ' 列 × ' + stats.tmaxRow + ' 行，聚类越界 '

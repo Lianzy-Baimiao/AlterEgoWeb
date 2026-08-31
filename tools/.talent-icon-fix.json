@@ -1,0 +1,26 @@
+{
+ "v": 1,
+ "note": "raidbots 规范化过的图标名 → wowhead 给的真名。键是 raidbots 的坏名字，也是 app/talent-icons/ 下的文件名。由 tools/fetch-talent-icons.js 生成。",
+ "updatedAt": "2026-08-31",
+ "map": {
+  "inv12_apextalent_demonhunter__untetheredrage": "inv12_apextalent_demonhunter-_untetheredrage",
+  "spell_priest_power_word": "spell_priest_power-word",
+  "spell_priest_void_flay": "spell_priest_void-flay",
+  "spell_priest_void_blast": "spell_priest_void-blast",
+  "spell_frost_ice_shards": "spell_frost_ice-shards",
+  "inv_10_specialreagentfoozles_tuskclaw_ice": "inv_10_specialreagentfoozles_tuskclaw-ice",
+  "inv121_ability_hunter_aimedshot": "8026692",
+  "achievement_guildperk_havegroup_willtravel": "achievement_guildperk_havegroup-willtravel",
+  "ability_rogue_shuriken_storm": "ability_rogue_shuriken-storm",
+  "inv121_ability_shaman_ascendance_air": "8026696",
+  "spell_firefrost_orb": "spell_firefrost-orb",
+  "spell_frost_ring_of_frost": "spell_frost_ring-of-frost",
+  "inv121_ability_shaman_ascendance_fire": "8026697",
+  "spell_frostfire_orb": "spell_frostfire-orb",
+  "spell_frost_piercing_chill": "spell_frost_piercing-chill",
+  "inv121_ability_warrior_javelineer": "8026700",
+  "achievement_firelands_raid_ragnaros": "achievement_firelands-raid_ragnaros",
+  "warlock__bloodstone": "warlock_-bloodstone",
+  "inv121_ability_shaman_ascendance_water": "8026698"
+ }
+}

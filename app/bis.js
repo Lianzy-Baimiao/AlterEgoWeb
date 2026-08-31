@@ -128,6 +128,56 @@
     return base.replace(/\/+$/, '') + '/' + name + '.jpg';
   }
 
+  // 天赋图标是另一批文件（app/talent-icons/，2094 张 56×56 约 5.1 MB），
+  // 由 tools\fetch-talent-icons.js 在打包前下好。**故意不走 iconBaseUrl** ——
+  // 那个设置是给装备图标换图床用的，两批图不在同一个目录下，
+  // 拿它拼天赋图标的地址会得到一堆 404。
+  var TALENT_ICON_DIR = 'app/talent-icons';
+
+  /**
+   * 天赋图标名 -> 图片地址。
+   *
+   * 文件名就是 app/talent-tree.js 里 icons 字典的那个名字，即使那个名字是
+   * **raidbots 规范化坏了的**（比如 spell_frost_ring_of_frost，真名是
+   * ...ring-of-frost）。抓取工具按坏名字存盘，就是为了让这里不需要映射表 ——
+   * 否则 app/ 会多出第二个需要跟着上游维护的真相来源。
+   */
+  function talentIconUrl(name) {
+    if (!name) return null;
+    return TALENT_ICON_DIR + '/' + name + '.jpg';
+  }
+
+  /**
+   * 一个 entry -> 它的图标 <img>，取不到就返回 null（那时候节点只有文字，和以前一样）。
+   *
+   * entryFormat = [entryId, nameIdx, iconIdx, spellId, maxRanks]，图标名在 icons 字典里。
+   *
+   * alt 故意是空串：节点方块里图标**旁边就是天赋的中文名**，读屏软件念完名字
+   * 再念一遍图标文件名是纯噪音。空 alt 是「装饰图」的正确写法 —— 缺 alt 属性
+   * 才是问题（那会让读屏去念 src）。run-tests.js 的无障碍断言查的正是「有没有
+   * alt 属性」，不是「alt 非空」。
+   */
+  function talentIconImg(ent, size) {
+    if (!ent) return null;
+    var TR = tree();
+    if (!TR || !TR.icons) return null;
+    var url = talentIconUrl(TR.icons[ent[2]] || '');
+    if (!url) return null;
+    var img = doc.createElement('img');
+    // class 必须是 ti —— app/style.css 里 .tnode .ti 管尺寸和「没点的压暗」。
+    // 忘了设这一行的话图会按原始 56px 铺满整个节点框，而且压暗全部落空。
+    img.className = 'ti';
+    img.src = url;
+    img.alt = '';
+    img.width = size;
+    img.height = size;
+    // 缺一张图不该让整个节点塌掉，也不该留一个碎图标记。
+    img.addEventListener('error', function () {
+      if (img.parentNode) img.parentNode.removeChild(img);
+    });
+    return img;
+  }
+
   /** itemId -> 图标名。来自 app/item-icons.js，没加载就返回空。 */
   function itemIcon(itemId) {
     var m = global.AE_ITEM_ICONS;
@@ -964,7 +1014,10 @@
   // 实测发现它本质上就是网格：职业树是严格的 600×600，专精树 600 为主，
   // 英雄子树是 5×5。所以把不同坐标值按容差聚成列/行，再按网格摆 ——
   // 容差从 50 到 250 都测过，同一格重叠始终是 0，最大 9 列 × 11 行。
-  var CELL_W = 74, CELL_H = 44, GRID_TOL = 100;
+  // 一格的尺寸。节点方块是 62×50，格子比它大 12px 留空隙。
+  // CELL_H 从 44 涨到 62 是因为节点里加了 24px 的天赋图标：图标在上、名字在下，
+  // 方块高度 32 → 50。不涨格子的话上下两行会贴在一起（实测重叠）。
+  var CELL_W = 74, CELL_H = 62, GRID_TOL = 100;
 
   /** 不同坐标值 -> 列/行下标。相邻差超过 GRID_TOL 才算新一列。 */
   function clusterIndex(vals) {
@@ -1075,16 +1128,41 @@
     return heroZhMap[en] || en;
   }
 
+  /**
+   * 节点显示哪一个 entry：点了就是点中的那一个，没点就是第一个。
+   *
+   * 名字和图标**必须走同一个函数**。二选一的节点有两个 entry，各自有名字和图标；
+   * 名字取「点中的那一边」而图标取「第一个」的话，界面上就会图文不符 ——
+   * 这种错看起来像数据坏了，其实是两处各自挑了一次。
+   */
+  function nodeEntry(n, hit) {
+    var ents = n[5] || [];
+    if (hit) {
+      for (var i = 0; i < ents.length; i++) if (ents[i][0] === hit.eid) return ents[i];
+    }
+    return ents[0] || null;
+  }
+
   /** 节点上显示的名字：选了哪一边就显那一边。 */
   function nodeLabel(n, hit) {
-    var TR = tree();
-    var ents = n[5] || [];
-    var e = null;
-    if (hit) {
-      for (var i = 0; i < ents.length; i++) if (ents[i][0] === hit.eid) e = ents[i];
-    }
-    if (!e) e = ents[0];
-    return e ? (TR.names[e[1]] || '') : '';
+    var e = nodeEntry(n, hit);
+    return e ? (tree().names[e[1]] || '') : '';
+  }
+
+  /**
+   * 节点上显示的图标名（不带扩展名），取不到就返回空串。
+   *
+   * 图片在 app/talent-icons/ 下，由 tools/fetch-talent-icons.js 打包前下好（2094 张，
+   * 5.14 MB，100% 覆盖）。**文件名就是 app/talent-tree.js 里 icons 字典的那个名字** ——
+   * 其中 19 个是 raidbots 规范化坏了的名字（真名带连字符），抓取工具查到真名后
+   * 仍然按坏名字存盘，就是为了让这里不需要任何映射表。
+   */
+  function nodeIcon(n, hit) {
+    var e = nodeEntry(n, hit);
+    if (!e) return '';
+    var nm = tree().icons[e[2]];
+    // 名字会拼进 <img src>。只放行小写字母数字下划线，和抓取工具那条断言同一条规矩。
+    return (nm && /^[a-z0-9_]+$/.test(nm)) ? nm : '';
   }
 
   /**
@@ -1168,6 +1246,11 @@
       b.setAttribute('data-node', id);
       b.style.left = (pos[id].x - CELL_W / 2 + 6) + 'px';
       b.style.top = (pos[id].y - CELL_H / 2 + 6) + 'px';
+      // 图标在名字上面。游戏里天赋是靠图标认的，纯文字的树跟游戏里对不上。
+      // 图标跟名字取**同一个 entry**（nodeEntry），否则二选一节点会图文不符。
+      var ent = nodeEntry(n, hit);
+      var tico = talentIconImg(ent, 24);
+      if (tico) b.appendChild(tico);
       b.appendChild(el('span', 'nm', nodeLabel(n, hit)));
       if (maxR > 1) b.appendChild(el('span', 'r', (hit ? hit.rank : 0) + '/' + maxR));
 

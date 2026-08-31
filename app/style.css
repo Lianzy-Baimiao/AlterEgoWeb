@@ -1312,9 +1312,13 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
 }
 .tree-edge.on { background: var(--accent); opacity: .55; }
 
+/* 62×50：图标 24 + 名字 22 + 上下内边距 2 刚好放下。
+   高度是 tools\run-tests.js 的几何断言**读这里**取的（NODE_BOX），
+   不是它自己写死的 —— 改这一行会连带改掉那组断言的期望值。
+   同时 app/bis.js 的 CELL_H 要跟着走，否则行距不够、方块会上下叠。 */
 .tnode {
   position: absolute;
-  width: 62px; height: 32px;
+  width: 62px; height: 50px;
   box-sizing: border-box;
   padding: 1px 2px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1325,13 +1329,27 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
   cursor: default;
   overflow: hidden;
 }
+/* 天赋图标。游戏里天赋是靠图标认的，纯文字的树跟游戏里对不上。 */
+.tnode .ti {
+  width: 24px; height: 24px;
+  border-radius: 2px;
+  display: block; flex: 0 0 auto;
+  /* 没点的天赋压暗，和游戏里一致；点了的恢复原色。 */
+  filter: grayscale(1) brightness(.55);
+}
+.tnode.on .ti { filter: none; }
 .tnode .nm {
   font-size: 10px; line-height: 1.1;
   text-align: center;
   max-height: 22px; overflow: hidden;
   word-break: break-all;
 }
-.tnode .r { font-size: 9px; color: var(--fg3); line-height: 1.1; }
+/* 点数徽章挪到右下角。放在流里会把总高顶到 58px、超出 50px 的框。 */
+.tnode .r {
+  position: absolute; right: 2px; bottom: 0;
+  font-size: 9px; color: var(--fg3); line-height: 1.1;
+  background: var(--bg2); border-radius: 2px; padding: 0 1px;
+}
 .tnode.on {
   background: var(--bg3);
   border-color: var(--accent);
