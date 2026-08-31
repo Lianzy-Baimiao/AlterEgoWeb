@@ -16,6 +16,9 @@ AlterEgoWeb-v*.zip
 # 靠记性不如靠这条规则。
 _*
 
+# 变异测试的互斥锁（tools/mutate-lock.js 占/ 放）。跑挂了会残留，删掉即可。
+tools/.mutating.lock
+
 # 天赋树的上游原始文件缓存（raidbots talents.json 3.1 MB + 暴雪 DB2 两张表 10.6 MB）。
 # tools/fetch-talent-tree.js 下到这里，只为了避免反复下载；产出物 app/talent-tree.js
 # 才是要提交的东西。14 MB 的上游数据不该进仓库。
@@ -26,6 +29,13 @@ tools/.talent-raw/
 # 两张表加起来只有 15 KB）。按 .talent-raw/ 的同一条道理不进仓库：**产出物**
 # app/class-names.js（2.2 KB）才是要提交的东西，上游原始 dump 随时能重下。
 tools/.db2-names/
+
+# raider.io 的原始下载缓存（排行榜 runs.json + 每个角色一份 profile，共约 2 MB）。
+# tools/fetch-talent-truth.js 和后面的 fetch-rio.js 下到这里。不进仓库有两条理由：
+#   1. 和上面两个缓存同一条道理 —— 产出物（tools/talent-truth.json 38 KB）才该提交；
+#   2. 这些 profile 里带**真实角色名和服务器名**。虽然它们本来就是 raider.io 的
+#      公开数据，但产出物已经刻意剥掉了角色名，没理由再把原始 dump 放进仓库。
+tools/.rio-raw/
 
 # Editor / OS noise
 .vscode/

@@ -79,17 +79,50 @@ function writer() {
   };
 }
 
-/** raidbots 的 talents.json（14 MB 的原始缓存，gitignore 掉了）。没有就返回 null。 */
+/**
+ * 解码要的两样东西：每个职业的节点顺序，和每个专精自己的节点表。
+ *
+ * 读的是**提交进仓库的** app/talent-tree.js，不是 14 MB 的 raidbots 原始缓存。
+ * 这一点是有意的：解码器和它的校验器必须在「刚克隆完、还没联网」的机器上能跑，
+ * 否则校验器只会静默跳过 —— 而「因为没数据所以跳过」的测试报成通过，是这个项目
+ * 反复踩到的那种假绿。
+ *
+ * 返回 {specId: {t: {className, specName, fullNodeOrder}, nodes: {id: 节点}}}。
+ * 形状故意和以前读原始文件时一致，调用方不用改。
+ */
 function loadOrder() {
-  if (!fs.existsSync(RAW)) return null;
-  var raw = JSON.parse(fs.readFileSync(RAW, 'utf8'));
+  var tree = loadTree();
+  if (!tree || !tree.nodeOrder) return null;
+  var SUBTREE = tree.types.indexOf('subtree');
   var bySpec = {};
-  raw.forEach(function (t) {
+  Object.keys(tree.specs).forEach(function (sid) {
+    var sp = tree.specs[sid];
+    var order = tree.nodeOrder[sp.cls];
+    if (!order) return;
     var nodes = {};
-    ['classNodes', 'specNodes', 'heroNodes', 'subTreeNodes'].forEach(function (g) {
-      (t[g] || []).forEach(function (n) { nodes[n.id] = n; });
+    ['classNodes', 'specNodes', 'heroNodes', 'subNodes'].forEach(function (g) {
+      (sp[g] || []).forEach(function (id) {
+        var row = tree.nodes[id];
+        if (!row) return;
+        // row = [posX, posY, maxRanks, typeIdx, reqPoints, entries[], subTreeId, requiresNode]
+        // entry = [entryId, nameIdx, iconIdx, spellId, maxRanks]
+        //
+        // maxRanks 那一格：生成器写的是 `n.maxRanks || 0`，而英雄天赋选择节点
+        // （type=subtree）在 raidbots 里根本没有这个字段。所以 0 要还原成 null，
+        // 不然 rank 的兜底会把「没有上限」当成「上限 0」。这不是猜的：实测
+        // maxRanks=0 的节点恰好是那 40 个 subtree 节点，两个数字对得上。
+        var isSub = row[3] === SUBTREE;
+        nodes[id] = {
+          maxRanks: (row[2] === 0 && isSub) ? null : row[2],
+          type: tree.types[row[3]],
+          entries: (row[5] || []).map(function (e) { return { id: e[0], maxRanks: e[4] }; })
+        };
+      });
     });
-    bySpec[t.specId] = { t: t, nodes: nodes };
+    bySpec[sid] = {
+      t: { className: sp.cls, specName: sp.specEn, fullNodeOrder: order },
+      nodes: nodes
+    };
   });
   return bySpec;
 }
@@ -109,6 +142,10 @@ function loadTree() {
  * nodes[i] = {id, purchased, rank, choice}
  */
 function decode(S, bySpec) {
+  // bySpec 必传。漏传过一次，后果是每个串都解出 0 个节点、err 写着「没有 specID
+  // xxx」—— 看上去像「数据对不上」，其实是调用错了，我照着这个假读数写了一整轮
+  // 结论。所以这里硬抛：少参数是调用者的 bug，不是一种数据情况。
+  if (bySpec === undefined) throw new Error('decode(S, bySpec)：bySpec 必传，用 loadOrder() 取');
   var arr = toBits(S);
   if (!arr) return { err: '串里有 base64 表外的字符' };
   var r = reader(arr);
@@ -147,7 +184,17 @@ function decode(S, bySpec) {
     var n = entry.nodes[rec.id];
     rec.maxRanks = n ? n.maxRanks : null;
     rec.inSpec = !!n;
-    if (rec.rank === null) rec.rank = rec.maxRanks;
+    // 没读到 partial 位时，点数就是该节点的上限。但**英雄天赋的选择节点
+    // （type='subtree'）在 raidbots 里根本没有 maxRanks 字段**，直接赋值会得到
+    // undefined。这不是我猜的默认值：raider.io 的真值对这 33 个节点一致给 1
+    // （英雄树只有「选了 / 没选」两种状态），改成退到 1 之后 rank 不符从 33 → 0。
+    if (rec.rank === null) {
+      rec.rank = (typeof rec.maxRanks === 'number') ? rec.maxRanks : 1;
+    }
+    // purchased 位的反面就是「系统白给的」。这不是推测：拿 raider.io 的
+    // grantedNode 真值比过 32 份 profile，干净串上 0 处不符。
+    rec.granted = !rec.purchased;
+    rec.entryIndex = entryIndexOf(rec, n);
     out.nodes.push(rec);
   }
   // 末尾应该只剩补的 0
@@ -169,6 +216,30 @@ function decode(S, bySpec) {
 }
 
 /**
+ * 位流里没有「用了哪个 entry」这个字段，只有二选一节点带 2 位下标。
+ * 其余多 entry 的节点（raidbots 的 type='tiered'，界面上是同名的三档）
+ * 靠 rank 推：按 entries[].maxRanks 累加，rank 落在哪一档就是那个下标。
+ *
+ * **这条规则的验证是不完整的**，别把它当已证实的。32 份 raider.io profile 里
+ * tiered 节点只出现过满级一种情况（31/31 都是 rank=4 → entryIndex=2，
+ * 而 maxRanks 是 1/2/1，累加恰好落在下标 2），所以「累加」和「永远取最后一档」
+ * 在现有样本上给出同样的答案，分不开。要分开得有一份没点满 tiered 的样本。
+ * 二选一节点那一路是真验证过的：下标直接来自位流，309 个样本 0 处不符。
+ */
+function entryIndexOf(rec, def) {
+  if (rec.choice !== null) return rec.choice;
+  var ents = (def && def.entries) || [];
+  if (ents.length < 2) return 0;
+  if (typeof rec.rank !== 'number') return 0;
+  var acc = 0;
+  for (var i = 0; i < ents.length; i++) {
+    acc += (typeof ents[i].maxRanks === 'number' ? ents[i].maxRanks : 1);
+    if (rec.rank <= acc) return i;
+  }
+  return ents.length - 1;
+}
+
+/**
  * 语义检查 —— 这才是能证伪布局的那一半。
  *
  * 三条都是「游戏里结构上不可能」的事，跟点数上限那种我猜的数字无关：
@@ -179,6 +250,15 @@ function decode(S, bySpec) {
  *   3. 只有真有两个 entry 的节点才能带「二选一下标」。
  */
 function checkSemantics(out, entry) {
+  // 第二个参数是**单个专精的条目**（loadOrder()[specId]），不是整张表。
+  // 传错了会让 entry.nodes 是 undefined。以前这里会当场崩在 entry.nodes[id]
+  // 上，堆栈指向本文件，看着像解码器的 bug —— 实际是调用方传错。
+  // 我自己在探针里连着传错两次（decode 少传 bySpec、这里传整张表），
+  // 两次都得到「0 个节点、全不干净」这种看起来像数据结论的输出。
+  if (!entry || !entry.nodes) {
+    throw new Error('checkSemantics 的第二个参数要 loadOrder()[specId]（单个专精），'
+      + '不是整张表，也不能省');
+  }
   out.crossSpec = 0; out.overMax = 0; out.badChoice = 0;
   out.nodes.forEach(function (n) {
     var def = entry.nodes[n.id];

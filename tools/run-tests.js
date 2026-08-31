@@ -32,6 +32,10 @@ var fs = require('fs');
 var path = require('path');
 var stub = require('./dom-stub.js');
 
+// 变异测试会**在磁盘上真的改源文件**。它和这个套件并行跑，读数全是垃圾。
+// 这一句必须在 makeEnv / load 之前 —— 一旦开始读文件就已经晚了。
+require('./mutate-lock.js').assertNotMutating();
+
 var ROOT = stub.ROOT;
 var env = stub.makeEnv(['bis', 'bis-sub', 'bis-body']);
 var g = env.g;
@@ -554,11 +558,23 @@ console.log(pad('无障碍') + (stats.a11yImg + stats.a11yBtnBad + stats.a11yTip
 // 一个没跑的检查报成通过，就是我在别处反复踩过的「空测试」。
 var VERIFIERS = [
   { label: '数据格式', script: 'verify-bis-data.js', data: 'bis-data.js' },
-  { label: '天赋树格式', script: 'verify-talent-tree.js', data: 'talent-tree.js' }
+  { label: '天赋树格式', script: 'verify-talent-tree.js', data: 'talent-tree.js' },
+  // own=true：这个校验器自己打的那行比通用的「N 项检查」信息量大（它要报少解 /
+  // rank / entryIndex / granted 各自的不符数），所以原样透传，不降级成计数。
+  { label: '天赋串解码', script: 'verify-talent-decode.js', data: 'talent-tree.js',
+    need: 'tools/talent-truth.json', own: true }
 ];
 VERIFIERS.forEach(function (v) {
   if (!fs.existsSync(path.join(ROOT, 'app', v.data))) {
     console.log(pad(v.label) + '跳过（没有 app/' + v.data + '）');
+    return;
+  }
+  // 真值文件是提交进仓库的。它不见了不是「这台机器没数据」，是仓库缺东西 ——
+  // 那种情况下「跳过」会把一条 2406 项的断言静默变成真空，所以硬失败。
+  if (v.need && !fs.existsSync(path.join(ROOT, v.need))) {
+    problems.push(v.label + '：缺 ' + v.need + '（它是提交进仓库的，'
+      + '不该缺；重新生成跑 node tools\\fetch-talent-truth.js）');
+    console.log(pad(v.label) + '缺真值文件');
     return;
   }
   var cp = require('child_process');
@@ -567,7 +583,12 @@ VERIFIERS.forEach(function (v) {
   var out = String(r.stdout || '') + String(r.stderr || '');
   var m = /检查项\s+(\d+)/.exec(out);
   if (r.status === 0) {
-    console.log(pad(v.label) + '通过（' + (m ? m[1] : '?') + ' 项检查）');
+    if (v.own) {
+      var own = out.split(/\r?\n/).filter(function (ln) { return ln.trim(); })[0] || '';
+      console.log(own || (pad(v.label) + '通过'));
+    } else {
+      console.log(pad(v.label) + '通过（' + (m ? m[1] : '?') + ' 项检查）');
+    }
     return;
   }
   console.log(pad(v.label) + '不合格式');
@@ -580,9 +601,15 @@ VERIFIERS.forEach(function (v) {
 
 // ------------------------------------------------------------------- 打包一致性
 // tools/ 是被**整个目录递归复制**进发布包的，.gitignore 管不到它。
-// 所以任何依赖测试脚手架（run-tests.js / dom-stub.js）的工具，都必须写进
-// build-release.ps1 的 $dropFromPkg，否则用户解开 zip 会拿到一个跑不起来的脚本。
-// 这一条以前靠我记着，记漏过 —— 现在让它自己查。
+// 所以任何**测试专用**的工具都必须写进 build-release.ps1 的 $dropFromPkg，
+// 否则用户解开 zip 会拿到一个跑不起来的脚本。这一条以前靠我记着，记漏过。
+//
+// 判据有两条，缺一不可：
+//   1. 引用了测试脚手架（run-tests.js / dom-stub.js）；
+//   2. 文件名是 mutate-*.js —— 变异测试一律是测试专用。
+// 第 2 条是这一轮补的：mutate-decode.js 跑的是 verify-talent-decode.js，
+// 一个字都没提脚手架，于是第 1 条漏掉了它，守卫报「4 个」而实际有 5 个。
+// **注意 verify-*.js 不算测试专用** —— 那几个是随包发布的、用户能自己跑的校验器。
 (function () {
   var HARNESS = ['run-tests.js', 'dom-stub.js'];
   var ps = path.join(ROOT, 'tools', 'build-release.ps1');
@@ -599,7 +626,8 @@ VERIFIERS.forEach(function (v) {
     if (!/\.js$/.test(f)) return;
     var src = fs.readFileSync(path.join(ROOT, 'tools', f), 'utf8');
     var uses = HARNESS.some(function (h) { return h !== f && src.indexOf(h) >= 0; });
-    if (!uses && HARNESS.indexOf(f) < 0) return;
+    var isMutant = /^mutate-.*\.js$/.test(f);
+    if (!uses && !isMutant && HARNESS.indexOf(f) < 0) return;
     need.push(f);
     if (!listed[f]) miss.push(f);
   });
@@ -607,9 +635,43 @@ VERIFIERS.forEach(function (v) {
   miss.forEach(function (f) {
     problems.push('tools/' + f + ' 依赖测试脚手架，但没写进 build-release.ps1 的 $dropFromPkg，会被打进发布包');
   });
-  console.log(pad('打包一致性') + (miss.length
-      ? miss.length + ' 个工具会被误打包（共 ' + need.length + ' 个依赖脚手架）'
-      : '通过（' + need.length + ' 个依赖脚手架的工具全在 $dropFromPkg 里）'));
+
+  // 缓存**目录**同理，而且更容易漏：文件名单和目录名单是两个变量，
+  // 我这一轮加 tools/.rio-raw/（1.9 MB 的角色 profile 缓存）时就只改了 .gitignore。
+  // 判据：.gitignore 里每一个 tools/.xxx/ 都必须出现在 $dropDirsFromPkg 里。
+  // 用 .gitignore 当事实来源，而不是我在这里再抄一份名单 —— 抄的那份会过期。
+  var dirMiss = [], dirNeed = [];
+  var gi = path.join(ROOT, '.gitignore');
+  var dblk = /\$dropDirsFromPkg\s*=\s*@\(([\s\S]*?)\)/.exec(txt);
+  if (!fs.existsSync(gi)) {
+    problems.push('找不到 .gitignore，缓存目录的打包检查没跑起来');
+  } else if (!dblk) {
+    problems.push('build-release.ps1 里找不到 $dropDirsFromPkg，缓存目录的打包检查没跑起来');
+  } else {
+    var dListed = {};
+    (dblk[1].match(/'tools\\([^']+)'/g) || []).forEach(function (s) {
+      dListed[/'tools\\([^']+)'/.exec(s)[1]] = 1;
+    });
+    fs.readFileSync(gi, 'utf8').split(/\r?\n/).forEach(function (ln) {
+      var m = /^tools\/(\.[^\/\s]+)\/\s*$/.exec(ln.trim());
+      if (!m) return;
+      dirNeed.push(m[1]);
+      if (!dListed[m[1]]) dirMiss.push(m[1]);
+    });
+    if (dirNeed.length < 2) {
+      problems.push('只从 .gitignore 里认出 ' + dirNeed.length + ' 个 tools/ 缓存目录，这项检查没跑起来');
+    }
+    dirMiss.forEach(function (d) {
+      problems.push('tools/' + d + '/ 在 .gitignore 里，但没写进 build-release.ps1 的 $dropDirsFromPkg'
+        + '，会被整个打进发布包（tools/ 是从磁盘递归复制的，.gitignore 管不到）');
+    });
+  }
+
+  console.log(pad('打包一致性') + (miss.length || dirMiss.length
+      ? (miss.length + dirMiss.length) + ' 个会被误打包（' + miss.length + ' 个脚本，'
+        + dirMiss.length + ' 个缓存目录）'
+      : '通过（' + need.length + ' 个测试专用脚本 + ' + dirNeed.length
+        + ' 个缓存目录全在名单里）'));
 })();
 
 // ----------------------------------------------------------------------- 汇总
@@ -626,6 +688,7 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验 + 打包一致性'
+  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验'
+    + ' + 天赋串解码对真值 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

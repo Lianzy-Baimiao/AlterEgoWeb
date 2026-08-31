@@ -75,7 +75,10 @@ $dropFromPkg = @(
     'tools\dom-stub.js',         # test harness
     'tools\run-tests.js',        # test harness
     'tools\mutate-a11y.js',     # mutation suite for the a11y assertions; needs run-tests.js
-    'tools\mutate-names.js'     # mutation suite for the zhCN name assertions; needs run-tests.js
+    'tools\mutate-names.js',    # mutation suite for the zhCN name assertions; needs run-tests.js
+    'tools\mutate-decode.js',   # mutation suite for the talent-decode assertions
+    'tools\mutate-lock.js',     # the mutex those mutation suites share
+    'tools\mutate-pkg.js'      # mutation suite for the packaging guard itself; needs run-tests.js
 )
 foreach ($f in $dropFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $f) -Force -ErrorAction SilentlyContinue
@@ -87,7 +90,8 @@ foreach ($f in $dropFromPkg) {
 # without this line it would ship. Keep dirs and files in separate lists.
 $dropDirsFromPkg = @(
     'tools\.talent-raw',        # 14 MB upstream cache for fetch-talent-tree.js
-    'tools\.db2-names'          # 15 KB DB2 CSV cache for fetch-class-names.js
+    'tools\.db2-names',         # 15 KB DB2 CSV cache for fetch-class-names.js
+    'tools\.rio-raw'            # 1.9 MB raider.io cache for fetch-talent-truth.js
 )
 foreach ($d in $dropDirsFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $d) -Recurse -Force -ErrorAction SilentlyContinue

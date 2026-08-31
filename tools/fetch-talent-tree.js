@@ -253,10 +253,20 @@ function build(raw, nameMap) {
   var nodes = {};        // nodeID → 节点数组
   var subTrees = {};     // subTreeId → [中文名下标, atlas, [nodeID…], 英文名]
   var specs = {};
+  // 职业名 → 导入串里节点的**排列顺序**（raidbots 的 fullNodeOrder）。
+  //
+  // 为什么必须带上：官方天赋导入串是一串**没有 nodeID 的位流** —— 第 n 个节点是谁，
+  // 完全由这张顺序表决定。少了它，串只能解出串头（版本 + specID + treeHash），
+  // 后面的位一个都对不上。
+  //
+  // 为什么按**职业**存而不是按专精：实测 13 个职业内部各专精的 fullNodeOrder
+  // **完全一致，0 分歧**，按职业存 2896 个 id（18.2 KB），按专精存 8970 个（3.1 倍）。
+  // 下面那条守卫盯着这个前提：真出现分歧就直接报错，而不是随便留一份。
+  var nodeOrder = {};
   var stat = {
     specs: 0, nodeRefs: 0, distinctNodes: 0, entries: 0,
     zh: 0, en: 0, noEntryId: 0, dropped: 0, conflicts: 0, edges: 0,
-    iconExt: 0
+    iconExt: 0, orderIds: 0
   };
 
   raw.forEach(function (t) {
@@ -271,6 +281,16 @@ function build(raw, nameMap) {
       edges: {}, free: []
     };
     var keyFor = { class: 'classNodes', spec: 'specNodes', hero: 'heroNodes', sub: 'subNodes' };
+
+    // 顺序表：同职业各专精必须给出一模一样的一份。
+    var ord = t.fullNodeOrder || [];
+    if (!ord.length) throw new Error(t.className + '/' + t.specName + ' 没有 fullNodeOrder');
+    if (!nodeOrder[t.className]) {
+      nodeOrder[t.className] = ord.slice();
+    } else if (nodeOrder[t.className].join(',') !== ord.join(',')) {
+      throw new Error(t.className + ' 各专精的 fullNodeOrder 不一致（' + t.specName
+        + ' 和先前的专精对不上）—— 顺序表不能按职业存一份了，得改成按专精存');
+    }
 
     GROUPS.forEach(function (g) {
       var arr = t[g[0]] || [];
@@ -380,8 +400,10 @@ function build(raw, nameMap) {
   });
   stat.dangling = dangling;
 
+  Object.keys(nodeOrder).forEach(function (c) { stat.orderIds += nodeOrder[c].length; });
+
   return { names: names, icons: icons, nodes: nodes, subTrees: subTrees,
-           specs: specs, stat: stat };
+           specs: specs, nodeOrder: nodeOrder, stat: stat };
 }
 
 // ------------------------------------------------------------------ 写文件
@@ -412,6 +434,7 @@ function writeJs(b, nameMap) {
   out.push('icons:' + JSON.stringify(b.icons) + ',');
   out.push('subTrees:' + JSON.stringify(b.subTrees) + ',');
   out.push('nodes:' + JSON.stringify(b.nodes) + ',');
+  out.push('nodeOrder:' + JSON.stringify(b.nodeOrder) + ',');
   out.push('specs:' + JSON.stringify(b.specs));
   out.push('};');
   var src = out.join('\n') + '\n';
@@ -462,6 +485,10 @@ ensureSources(function (err) {
   console.log('丢掉的占位节点 ' + s.dropped + '，清掉的悬空连线 ' + s.dangling +
               '，连线总数 ' + s.edges +
               '，剥掉扩展名的图标 ' + s.iconExt);
+  console.log('节点顺序表 ' + Object.keys(b.nodeOrder).length + ' 个职业，共 ' +
+              Object.keys(b.nodeOrder).reduce(function (a, k) {
+                return a + b.nodeOrder[k].length; }, 0) + ' 个 id' +
+              '（解导入串要用它，同职业各专精一致已在生成时校验）');
   console.log('app/talent-tree.js  ' + (bytes / 1024).toFixed(1) + ' KB（' + bytes + ' 字节）');
 
   // 中文名覆盖率是这份数据的核心价值。低了就是join 出了问题，不能默默通过。

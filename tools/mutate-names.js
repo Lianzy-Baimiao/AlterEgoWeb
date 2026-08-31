@@ -25,12 +25,19 @@ var fs = require('fs');
 var path = require('path');
 var cp = require('child_process');
 
+var lock = require('./mutate-lock.js');
+
 var ROOT = path.resolve(__dirname, '..');
 var NAMES = path.join(ROOT, 'app', 'class-names.js');
 var RUNNER = path.join(__dirname, 'run-tests.js');
 
+// 变异会改、甚至暂时重命名磁盘上的 app/class-names.js，整个过程要独占。
+lock.acquire('mutate-names');
+process.on('exit', lock.release);
+
 function run() {
-  var r = cp.spawnSync(process.execPath, [RUNNER], { cwd: ROOT, encoding: 'utf8' });
+  var r = cp.spawnSync(process.execPath, [RUNNER],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
   return { status: r.status, out: String(r.stdout || '') + String(r.stderr || '') };
 }
 

@@ -19,8 +19,14 @@ var fs = require('fs');
 var path = require('path');
 var cp = require('child_process');
 
+var lock = require('./mutate-lock.js');
+
 var ROOT = path.resolve(__dirname, '..');
 var BIS = path.join(ROOT, 'app', 'bis.js');
+
+// 变异会真的改磁盘上的 app/bis.js，所以整个过程要独占。
+lock.acquire('mutate-a11y');
+process.on('exit', lock.release);
 
 // [说明, 目标文件, 原文, 换成什么]
 var MUTANTS = [
@@ -47,7 +53,7 @@ var MUTANTS = [
 
 function run() {
   var r = cp.spawnSync(process.execPath, [path.join(__dirname, 'run-tests.js')],
-    { cwd: ROOT, encoding: 'utf8' });
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
   return r.status;
 }
 
