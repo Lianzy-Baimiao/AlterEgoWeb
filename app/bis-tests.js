@@ -207,22 +207,26 @@
 
     // -------------------------------------------------------- 职业 / 专精名
 
-    t('职业标签：已核对过的 9 个职业给中文名', function () {
+    t('职业标签：13 个职业全部给中文名', function () {
       if (!L || !L.classLabel) return 'labels.js 没加载，跳过';
-      var known = ['DEATHKNIGHT', 'DEMONHUNTER', 'DRUID', 'HUNTER', 'PALADIN',
-                   'PRIEST', 'SHAMAN', 'WARLOCK', 'WARRIOR'];
-      var bad = known.filter(function (c) { return !L.hasCJK(L.classLabel(c)); });
-      return bad.length === 0 || '没给中文名: ' + bad.join(',');
+      // 以前这一条只查 9 个 —— 另外 4 个（唤魔师/法师/武僧/潜行者）本机存档里
+      // 没有可核对的中文名，只能退回英文 token。现在 app/class-names.js 从暴雪
+      // DB2 取到了全部 13 个，所以断言收紧成「一个英文都不许剩」。
+      var bad = Object.keys(L.classColors).filter(function (c) {
+        return !L.hasCJK(L.classLabel(c));
+      });
+      return bad.length === 0 || '还在显示英文: ' + bad.join(',');
     });
 
-    t('职业标签：没有中文名的退回英文 token，不是空字符串', function () {
-      if (!L || !L.classLabel) return 'labels.js 没加载，跳过';
-      // 本机存档里只有 9 个职业，另外 4 个没有可核对的中文名。宁可显示
-      // 英文，也不自己编 —— 这条测试守的是「不能退化成空白按钮」。
+    t('职业标签：DB2 那份和存档收来的 9 个逐字一致', function () {
+      if (!L || !L.classLabel || !global.AE_DB2_NAMES) return 'DB2 名字表没加载';
+      // 两个独立的暴雪来源：L.classZh 是从运行中的客户端存档里收来的，
+      // AE_DB2_NAMES.cls 是 DB2 导出的。它们必须一致 —— 不一致说明有一边
+      // 不是我以为的那份数据，那时候「显示的是中文」反而更危险。
       var bad = [];
-      ['EVOKER', 'MAGE', 'MONK', 'ROGUE'].forEach(function (c) {
-        var v = L.classLabel(c);
-        if (!v) bad.push(c + ' → 空');
+      Object.keys(L.classZh).forEach(function (k) {
+        var db2 = global.AE_DB2_NAMES.cls[k];
+        if (db2 && db2 !== L.classZh[k]) bad.push(k + '：DB2「' + db2 + '」≠ 存档「' + L.classZh[k] + '」');
       });
       return bad.length === 0 || bad.join('; ');
     });
@@ -263,19 +267,32 @@
       return bad.length === 0 || bad.join(', ');
     });
 
-    t('死骑的冰霜专精不叫「冰法」', function () {
+    t('死骑的冰霜专精显示「冰霜」，不是「冰法」', function () {
       // GearInsight 自己的表里 DEATHKNIGHT/FROST = 「冰法」。中文客户端里
       // 死骑不可能叫冰法 —— 那是法师的专精名，两边撞在同一个 key 上了。
+      // 以前只能断言「不等于冰法」（退回英文 FROST 也算过）；现在 DB2 按 specID
+      // 给出了正确答案，所以断言的是**正确的那个名字**。
       if (!L || !L.specLabel) return 'labels.js 没加载，跳过';
-      var key = null;
+      var s = null;
+      Object.keys(B.specs).forEach(function (k) {
+        if (B.specs[k].cls === 'DEATHKNIGHT' && B.specs[k].spec === 'FROST') s = B.specs[k];
+      });
+      if (!s) return '找不到 DEATHKNIGHT/FROST';
+      var label = L.specLabel(s.specId, s.specCn, null, s.spec);
+      return label === '冰霜' || '显示的是「' + label + '」，应该是「冰霜」';
+    });
+
+    t('专精标签：40 个专精全是中文名', function () {
+      // 以前 DISCIPLINE / PRESERVATION 没有中文名，只能显示英文。
+      // DB2 按 specID 建表之后一个都不该剩。
+      if (!L || !L.specLabel) return 'labels.js 没加载，跳过';
+      var bad = [];
       Object.keys(B.specs).forEach(function (k) {
         var s = B.specs[k];
-        if (s.cls === 'DEATHKNIGHT' && s.spec === 'FROST') key = k;
+        var v = L.specLabel(s.specId, s.specCn, null, s.spec);
+        if (!L.hasCJK(v)) bad.push(s.cls + '/' + s.spec + ' → ' + v);
       });
-      if (!key) return '找不到 DEATHKNIGHT/FROST';
-      var s = B.specs[key];
-      var label = L.specLabel(s.specId, s.specCn, null, s.spec);
-      return label !== '冰法' || '还是显示成「冰法」';
+      return bad.length === 0 || '还在显示英文: ' + bad.join('，');
     });
 
     // ------------------------------------------------------------ 天赋编码

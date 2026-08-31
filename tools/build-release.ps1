@@ -74,7 +74,8 @@ $dropFromPkg = @(
     'tools\.talent-names.json',  # 271 KB of DB2 zhCN join results, dev-only
     'tools\dom-stub.js',         # test harness
     'tools\run-tests.js',        # test harness
-    'tools\mutate-a11y.js'      # mutation suite for the a11y assertions; needs run-tests.js
+    'tools\mutate-a11y.js',     # mutation suite for the a11y assertions; needs run-tests.js
+    'tools\mutate-names.js'     # mutation suite for the zhCN name assertions; needs run-tests.js
 )
 foreach ($f in $dropFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $f) -Force -ErrorAction SilentlyContinue
@@ -85,7 +86,8 @@ foreach ($f in $dropFromPkg) {
 # CSV dumps). It is gitignored, but this copies from DISK, not from git -- so
 # without this line it would ship. Keep dirs and files in separate lists.
 $dropDirsFromPkg = @(
-    'tools\.talent-raw'         # 14 MB upstream cache for fetch-talent-tree.js
+    'tools\.talent-raw',        # 14 MB upstream cache for fetch-talent-tree.js
+    'tools\.db2-names'          # 15 KB DB2 CSV cache for fetch-class-names.js
 )
 foreach ($d in $dropDirsFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $d) -Recurse -Force -ErrorAction SilentlyContinue

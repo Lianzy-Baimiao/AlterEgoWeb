@@ -22,6 +22,11 @@ _*
 # 注意和 tools/.icon-cache.json 的区别：那个是**连接后的结果**（几十 KB），要提交。
 tools/.talent-raw/
 
+# 职业 / 专精中文名的上游原始文件缓存（暴雪 DB2 的 ChrClasses + ChrSpecialization，
+# 两张表加起来只有 15 KB）。按 .talent-raw/ 的同一条道理不进仓库：**产出物**
+# app/class-names.js（2.2 KB）才是要提交的东西，上游原始 dump 随时能重下。
+tools/.db2-names/
+
 # Editor / OS noise
 .vscode/
 .idea/

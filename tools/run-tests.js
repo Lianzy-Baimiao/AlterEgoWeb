@@ -45,7 +45,11 @@ function load(f) {
 }
 
 // 顺序照抄 tests.html。data/ 下两个是扫描产物，可能不存在。
-['app/lua-parser.js', 'app/parser-tests.js', 'app/labels.js', 'app/model.js',
+// class-names.js 必须在 labels.js 前面：labels.js 的 classLabel / specLabel
+// 读 window.AE_DB2_NAMES。缺了它会静默退回旧的兜底表（4 个职业显英文、
+// 死骑冰霜显 FROST），测试照样全绿 —— 所以它是硬依赖，不是可选项。
+['app/class-names.js', 'app/lua-parser.js', 'app/parser-tests.js', 'app/labels.js',
+ 'app/model.js',
  'app/settings.js', 'app/columns.js', 'app/layouts.js', 'app/model-tests.js',
  'app/export.js', 'app/bis.js', 'app/bis-tests.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f);
