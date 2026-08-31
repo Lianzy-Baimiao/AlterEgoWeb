@@ -1205,6 +1205,14 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 }
 .item .usage .track .fill { height: 100%; background: var(--accent); opacity: .7; }
 .item .usage .n { display: block; font-size: 10.5px; color: var(--fg2); text-align: right; }
+/* maxroll 视角：这一列放名次徽章而不是使用率条。宽度沿用 .usage 的 92px，
+ * 所以三个视角切换时右侧那一列不会左右跳。 */
+.item .usage.rank { display: flex; justify-content: flex-end; align-items: center; }
+.item .tag.bis { color: var(--good, #4caf50); border-color: var(--good, #4caf50); }
+.item .tag.alt { color: var(--fg3); }
+/* 部位标题上的「首选 N ・替代 M」。跟 .tag.cov 同一族，但它不是百分比，
+ * 所以不套 .no 那个「覆盖率太低」的警告色。 */
+.slot-head .tag.cov.mr { color: var(--fg2); }
 /* 来源徽章（团本 / 钥石 / 套装转换…）的底样式。
  *
  * 这条以前是**漏的**：只写了 .tag.use 和 .tag.trk，没写 .item .tag 本身。

@@ -42,7 +42,15 @@
   var state = {
     tab: 'gear',        // 'gear' | 'talents'
     key: '',            // 'DEATHKNIGHT/BLOOD/Deathbringer'
-    view: 'raid',       // 'raid' | 'mplus' | 'rio'（rio = raider.io 实战分布）
+    // 'maxroll' | 'raid' | 'mplus' | 'rio'
+    //   maxroll = maxroll.gg 的编辑推荐（**默认视角**，用户第 15 轮定的）
+    //   raid / mplus = GearInsight 的参照表
+    //   rio = raider.io 实战分布
+    //
+    // 默认给 maxroll 而不是 raid：它回答的是「我该穿什么」，那是打开这个面板
+    // 最常见的目的。但 app/maxroll-data.js 是**懒加载**的，首屏那一瞬间
+    // mrPick() 还是 null —— renderGear 里因此有一条兜底，见下面 fallbackView()。
+    view: 'maxroll',
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
     build: -1,          // 天赋树画哪一套，-1 = 该类别里用得最多的那套
@@ -52,6 +60,7 @@
   var gearLoaded = false, gearLoading = false;
   var talLoaded = false, talLoading = false;
   var rioLoaded = false, rioLoading = false;
+  var mrLoaded = false, mrLoading = false;
 
   // ------------------------------------------------------------------ 小工具
 
@@ -139,6 +148,101 @@
     var R = rio();
     if (!R || !R.specs) return null;
     return R.specs[String(specId)] || null;
+  }
+
+  /**
+   * maxroll 的编辑推荐（app/maxroll-data.js，实测 98.4 KB / 40 个专精 / 80 篇指南）。
+   *
+   * **和上面两份都不是同一个东西。** 三份数据回答的是三个不同的问题：
+   *   · BisData（GearInsight）：顶尖玩家的使用率，带属性权重 / 宝石附魔 / 掉落来源；
+   *   · rio（raider.io）：榜上真实角色的分布，**带每个部位的真实样本量**；
+   *   · maxroll：**编辑给出的排序**（Best in Slot / Farmable Alternatives 两张表）。
+   *
+   * maxroll 这份**没有样本量也没有使用率** —— 它不是统计，是推荐。
+   * 所以它的行不能画使用率条：那会凭空造出一个没人算过的百分比。
+   * 取而代之画名次（#1 / #2 …），并把 BiS 和「可刷替代」分开标。
+   */
+  function maxroll() { return global.AE_MAXROLL || null; }
+
+  /** specId + 类型 -> maxroll 里那个视角。kind 是 'raid' | 'mplus'。 */
+  function mrView(specId, kind) {
+    var M = maxroll();
+    if (!M || !M.specs) return null;
+    var s = M.specs[String(specId)];
+    if (!s || !s.views) return null;
+    return s.views[kind] || null;
+  }
+
+  /**
+   * maxroll 的一个专精挑一个视角出来。团本和大秘境两篇指南都可能有，
+   * 优先给大秘境（面板别处的锁定/进度也是以大秘境为主），没有再退到团本。
+   * 返回 {v 视角, kind 实际用的类型} 或 null。
+   */
+  function mrPick(specId) {
+    var mp = mrView(specId, 'mplus');
+    if (mp) return { v: mp, kind: 'mplus' };
+    var rd = mrView(specId, 'raid');
+    if (rd) return { v: rd, kind: 'raid' };
+    return null;
+  }
+
+  /** maxroll 的物品元数据 {n 中文名, i 图标名, q 品质}。 */
+  function mrItem(itemId) {
+    var M = maxroll();
+    if (!M || !M.items) return null;
+    return M.items[String(itemId)] || null;
+  }
+
+  /**
+   * maxroll 的一个视角 -> 面板要的行形状。
+   *
+   * 产物里每个槽位是 `bis: [itemId…]` 和 `alt: [itemId…]` 两个**有序**列表
+   * （顺序就是 maxroll 表里的顺序）。这里拼成面板的行形状：
+   *   `[itemId, 装等, 使用率, 来源下标, 可升级上限, 轨道码, 人数, 名次, 是不是替代件]`
+   *
+   * 来源下标写 **-2** 当标记（rio 用 -1）。为什么不用 undefined：0 是合法下标，
+   * 拿假值判断会把「来源下标为 0 的 BisData 行」一起吞掉 —— rio 那边就是这么定的，
+   * 这里沿用同一套约定。
+   *
+   * 使用率一律写 **null**，不是 0 也不是 100。maxroll 没有这个量，
+   * 写 0 会画出一条空条，写 100 会画满 —— 两个都是在编数字。renderItem 见到
+   * null 就不画那条，改画名次徽章。
+   */
+  function mrSlots(v) {
+    var rows = {};
+    // n 是**空表**，而且必须存在。maxroll 没有样本量，但调用点会读 conv.n[slotId] ——
+    // 不给这个字段就是 TypeError（第一版就这么炸的：加了视角之后渲染检查直接崩）。
+    // 空表的语义正好对：查任何部位都得到 undefined，renderSlot 于是不画 N 徽章。
+    var ns = {};
+    if (!v) return { rows: rows, n: ns };
+    var ITEMS = (maxroll() || {}).items || {};
+    function ilvlOf(id) {
+      // maxroll 不给装等。rio 那边有「平均装等」，能对上就借来显示，
+      // 对不上就留 0 —— 不猜。
+      var R = rio();
+      var ri = R && R.items ? R.items[String(id)] : null;
+      return (ri && ri.ilvl) || 0;
+    }
+    Object.keys(v.bis || {}).forEach(function (k) {
+      var list = v.bis[k] || [];
+      rows[k] = list.map(function (id, i) {
+        return [id, ilvlOf(id), null, -2, 0, 0, null, i + 1, false];
+      });
+    });
+    // 可刷替代接在后面，标上 alt 位。同一件已经在 BiS 里就不重复列。
+    Object.keys(v.alt || {}).forEach(function (k) {
+      var list = v.alt[k] || [];
+      var into = rows[k] = rows[k] || [];
+      var seen = {};
+      into.forEach(function (r) { seen[r[0]] = 1; });
+      list.forEach(function (id, i) {
+        if (seen[id]) return;
+        into.push([id, ilvlOf(id), null, -2, 0, 0, null, i + 1, true]);
+      });
+    });
+    // ITEMS 只是拿来确认物品池在（校验器已经验过引用完整性），这里不再逐行查。
+    void ITEMS;
+    return { rows: rows, n: ns };
   }
 
   /**
@@ -518,18 +622,50 @@
 
   // ------------------------------------------------------------ 装备页
 
+  /**
+   * 当前视角的数据还没到（或这个专精没有）时该退到哪个视角。
+   *
+   * 为什么需要它：默认视角是 maxroll，但 app/maxroll-data.js 是**懒加载**的，
+   * 首屏那一瞬间 mrPick() 恒为 null。不兜底的话面板会空着一下，
+   * 而「空一下」和「这个专精真的没数据」在界面上长得一模一样。
+   *
+   * **只改这一次渲染用哪个视角，不动 state.view** —— 数据到了会重画（见
+   * ensureMaxroll 的回调），那时候就该自动回到用户选的 maxroll 视角。
+   * 把 state.view 改掉的话用户的选择就被我悄悄覆盖了。
+   */
+  function effectiveView(s) {
+    var v = state.view;
+    if (v === 'maxroll' && !mrPick(s.specId)) {
+      // maxroll 还没到：退到 BisData 的大秘境视角（它是随包同步加载的，一定在）
+      return s.mplus && Object.keys(s.mplus).length ? 'mplus' : 'raid';
+    }
+    if (v === 'rio' && !rioSpec(s.specId)) return 'mplus';
+    return v;
+  }
+
   function renderGear(host) {
     var B = bis();
     var s = currentSpec();
     if (!s) { host.appendChild(el('p', 'note', '没有这个专精的数据。')); return; }
 
+    // 这一次渲染真正用的视角。和 state.view 可能不同 —— 见 effectiveView。
+    var view = effectiveView(s);
+
     // 副标题要说清「你现在看的是哪份数据」——两份数据的日期和范围都不一样，
     // 混着显示一个日期是在撒谎。
-    var subRs = state.view === 'rio' ? rioSpec(s.specId) : null;
+    var subRs = view === 'rio' ? rioSpec(s.specId) : null;
+    var subMr = view === 'maxroll' ? mrPick(s.specId) : null;
     if (subRs) {
       var R = rio();
       setSub('数据 ' + ((R && R.updatedAt) || '?') + '　raider.io '
         + ((R && R.season) || '?') + '　样本 ' + (subRs.nGear || 0) + ' 人');
+    } else if (subMr) {
+      // 这里**不写样本量**，因为 maxroll 没有。写来源指南的 slug ——
+      // 那是可追溯的东西：照着它能翻到原页面自己核对。
+      var M = maxroll();
+      setSub('数据 ' + ((M && M.updatedAt) || '?') + '　maxroll.gg　'
+        + (subMr.kind === 'mplus' ? '大秘境指南' : '团本指南')
+        + '　编辑推荐，无样本量');
     } else {
       setSub('数据 ' + (B.updatedAt || '?') + '　' + (s.zone || ''));
     }
@@ -538,6 +674,8 @@
     var bar = el('div', 'bis-bar');
     var viewWrap = el('span', 'seg');
     var VIEWS = [
+      ['maxroll', '最佳推荐', 'maxroll.gg 的职业指南：编辑给出的 Best in Slot 排序 '
+        + '+ 可刷替代。**没有样本量也没有使用率** —— 它是推荐，不是统计'],
       ['raid', '团本视角', '来自 GearInsight 的团本参照表'],
       ['mplus', '大秘境视角', '来自 GearInsight 的大秘境参照表'],
       ['rio', '实战分布', 'raider.io 大秘境排行榜上真实角色的装备统计，每个部位都带样本量']
@@ -546,6 +684,7 @@
       // rio 视角只有在 app/rio-data.js 真的加载进来、而且这个专精有数据时才给。
       // 画一个点不下去的按钮比不画更糟。
       if (v[0] === 'rio' && !rioSpec(s.specId)) return;
+      if (v[0] === 'maxroll' && !mrPick(s.specId)) return;
       var b = button(v[1], state.view === v[0] ? 'on' : null, function () {
         state.view = v[0];
         persist({ bisView: v[0] });
@@ -588,17 +727,20 @@
     host.appendChild(bar);
 
     // rio 视角走另一份数据：它的行形状不同（人数而不是百分比），所以先转一次。
-    var rs = state.view === 'rio' ? rioSpec(s.specId) : null;
-    var conv = rs ? rioSlots(rs) : null;
+    var rs = view === 'rio' ? rioSpec(s.specId) : null;
+    var mr = view === 'maxroll' ? mrPick(s.specId) : null;
+    var conv = rs ? rioSlots(rs) : (mr ? mrSlots(mr.v) : null);
 
     host.appendChild(renderSpecMeta(s));
     // 属性权重 / 达成度是 **GearInsight 独有的**，raider.io 的角色档案里没有。
     // rio 视角下不画它 —— 脚注明写了「这个视角没有属性权重」，一边这么写一边
     // 把另一个数据源的权重摆在上面，那句话就成了假话。
-    if (!rs) host.appendChild(renderStatTargets(s));
+    // maxroll 同理：它的指南页有属性优先级的文字说明，但产物里没抓那部分，
+    // 所以这里也不画 —— 没抓到的东西不能借别的数据源的数字充。
+    if (!rs && !mr) host.appendChild(renderStatTargets(s));
 
     // ---- 部位
-    var slots = conv ? conv.rows : (s[state.view] || {});
+    var slots = conv ? conv.rows : (s[view] || {});
     var ch = currentChar();
     var list = el('div', 'bis-slots');
     var missing = 0, matched = 0, unknown = 0;
@@ -621,7 +763,9 @@
         else if (hit) matched++;
         else missing++;
       }
-      list.appendChild(renderSlot(slotId, rows, mine, hit, conv ? conv.n[slotId] : null));
+      // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
+      list.appendChild(renderSlot(slotId, rows, mine, hit,
+        conv && conv.n ? conv.n[slotId] : null));
     });
     host.appendChild(list);
 
@@ -754,7 +898,24 @@
     rows.forEach(function (r) { sum += (typeof r[2] === 'number' ? r[2] : 0); });
     sum = Math.round(sum * 10) / 10;
 
-    if (sampleN) {
+    // maxroll 的行认自己：来源下标 -2。判据放在数据上而不是外面传进来的参数上，
+    // 是因为这个函数已经有 5 个参数了，再加一个「视角」很容易和 sampleN 打架。
+    var mrRows = rows.length && rows[0][3] === -2;
+
+    if (mrRows) {
+      // **既没有样本量也没有覆盖率。** 上面那个 sum 在这里恒等于 0
+      // （使用率全是 null），所以走原来那条分支会画出「记录 0.0%」——
+      // 一个完全编出来的数字。这里改成报「几件首选 + 几件替代」，都是真的。
+      var nBis = 0, nAlt = 0;
+      rows.forEach(function (r) { if (r[8]) nAlt++; else nBis++; });
+      var mb2 = el('span', 'tag cov mr', '首选 ' + nBis + (nAlt ? ' ・替代 ' + nAlt : ''));
+      mb2.setAttribute('data-tip',
+        'maxroll 这个部位给了 ' + nBis + ' 件首选'
+        + (nAlt ? '、' + nAlt + ' 件可刷替代' : '') + '。\n'
+        + '这份数据**没有样本量也没有使用率** —— 它是编辑的推荐排序，不是统计。\n'
+        + '想看「多少人真的这么穿」，切到「实战分布」视角。');
+      head.appendChild(mb2);
+    } else if (sampleN) {
       // 有真实样本量：显示 N，并按统计学的老规矩提醒 N 太小的时候别当结论。
       // 30 这个界不是我拍的 —— 比例统计在 N=100 时 95% 置信区间约 ±10%，
       // N<30 时宽到没法给结论，校验器里用的也是同一个界。
@@ -819,15 +980,20 @@
     var B = bis();
     var itemId = r[0], ilvl = r[1], usage = r[2], srcIdx = r[3], mx = r[4], trk = r[5];
     var isRio = srcIdx === -1, people = r[6];
+    // maxroll 视角：来源下标 -2，使用率恒为 null（它不是统计，没有这个量），
+    // 第 7 位是名次，第 8 位标它是不是「可刷替代」。
+    var isMr = srcIdx === -2, rank = r[7], isAlt = r[8];
 
     // 物品元数据两边都有，但**各有各的洞**，所以按视角取，取不到再退到另一边：
     //   · rio 自带中文名 / 图标名 / 品质（2432 件，实测中文名 100%）；
     //   · BisData 只有中文名 + 属性，图标和品质要另查 app/item-icons.js。
     // 实测两边都有的 497 件里，品质一致 494（99.4%）、图标名一致 496（99.8%），
     // 所以混用不会打架；不一致的那几件按当前视角自己的数据显示。
-    var ri = isRio ? rioItem(itemId) : null;
+    // maxroll 的物品池也自带中文名 / 图标名 / 品质（36 件 rio 里没有的从 DB2 补过），
+    // 所以它和 rio 走同一条路：优先用自己那份，缺了再退到 BisData。
+    var ri = isRio ? rioItem(itemId) : (isMr ? mrItem(itemId) : null);
     var it = B.items[itemId] || {};
-    var src = isRio ? [] : (B.srcs[srcIdx] || []);
+    var src = (isRio || isMr) ? [] : (B.srcs[srcIdx] || []);
     var srcText = src[0] || '', cat = src[1] || '', boss = src[2] || '';
 
     var row = el('div', 'item' + (isTop ? ' top' : ''));
@@ -896,7 +1062,7 @@
 
     // 来源徽章。**rio 没有掉落来源**（profile 只说角色身上穿着什么，不说哪掉的），
     // 所以这里不能编一个「其他」出来 —— 那会让人以为查过了。写「?」并在提示里说清。
-    if (!isRio) {
+    if (!isRio && !isMr) {
       var badge = el('span', 'tag', B.sourceCategories[cat] || cat || '?');
       badge.style.borderColor = catColor(cat);
       badge.style.color = catColor(cat);
@@ -904,29 +1070,46 @@
       row.appendChild(badge);
     }
 
-    var u = el('span', 'usage');
-    var track = el('span', 'track');
-    var fill = el('span', 'fill');
-    fill.style.width = Math.max(2, Math.min(100, usage)) + '%';
-    track.appendChild(fill);
-    u.appendChild(track);
-    u.appendChild(el('span', 'n', pct(usage)));
-    // rio 的提示带**分子分母**：「12/97 人」比「12.4%」可查证得多，
-    // 而这正是换数据源的理由 —— BisData 那边只能给一个没有分母的百分比。
-    u.setAttribute('data-tip', isRio
-      ? (people != null ? people + '/' + Math.round(people * 100 / usage) + ' 人这个部位用它'
-                        : pct(usage) + ' 的人这个部位用它')
-      : '顶尖玩家里有 ' + pct(usage) + ' 的人这个部位用它'
-        + (boss ? '\n掉落：' + boss : '')
-        + (srcText ? '\n' + srcText : ''));
-    row.appendChild(u);
+    if (isMr) {
+      // **不画使用率条。** maxroll 没有这个量，画出来的任何宽度都是我编的。
+      // 画名次 + 它出自哪张表，这两个都是数据里真有的东西。
+      var mb = el('span', 'usage rank');
+      var tag = el('span', 'tag ' + (isAlt ? 'alt' : 'bis'),
+        (isAlt ? '替代 #' : 'BiS #') + rank);
+      tag.setAttribute('data-tip', isAlt
+        ? 'maxroll 的「可刷替代」表里排第 ' + rank + '（拿得到的退而求其次的选择）'
+        : 'maxroll 的「Best in Slot」表里排第 ' + rank + '（编辑给的首选）');
+      mb.appendChild(tag);
+      row.appendChild(mb);
+    } else {
+      var u = el('span', 'usage');
+      var track = el('span', 'track');
+      var fill = el('span', 'fill');
+      fill.style.width = Math.max(2, Math.min(100, usage)) + '%';
+      track.appendChild(fill);
+      u.appendChild(track);
+      u.appendChild(el('span', 'n', pct(usage)));
+      // rio 的提示带**分子分母**：「12/97 人」比「12.4%」可查证得多，
+      // 而这正是换数据源的理由 —— BisData 那边只能给一个没有分母的百分比。
+      u.setAttribute('data-tip', isRio
+        ? (people != null ? people + '/' + Math.round(people * 100 / usage) + ' 人这个部位用它'
+                          : pct(usage) + ' 的人这个部位用它')
+        : '顶尖玩家里有 ' + pct(usage) + ' 的人这个部位用它'
+          + (boss ? '\n掉落：' + boss : '')
+          + (srcText ? '\n' + srcText : ''));
+      row.appendChild(u);
+    }
 
     row.setAttribute('data-tip', ((ri && ri.n) || it.n || '') + '\nitemID ' + itemId
-      + '\n' + (isRio ? '平均装等 ' : '装等 ') + ilvl
+      + (ilvl ? '\n' + (isRio ? '平均装等 ' : '装等 ') + ilvl : '')
       + (mx && mx > ilvl ? '（可升到 ' + mx + '）' : '')
-      + (isRio ? '' : '\n' + (srcText || '来源未知'))
-      + '\n使用率 ' + pct(usage)
-      + (isRio && people != null ? '（' + people + ' 人）' : ''));
+      + (isRio || isMr ? '' : '\n' + (srcText || '来源未知'))
+      // maxroll 那行故意不写「使用率」——它没有这个数，写了就是编。
+      + (isMr
+        ? '\nmaxroll ' + (isAlt ? '可刷替代' : 'Best in Slot') + ' 第 ' + rank
+          + '\n这是编辑给的推荐排序，不是使用率统计'
+        : '\n使用率 ' + pct(usage)
+          + (isRio && people != null ? '（' + people + ' 人）' : '')));
     return row;
   }
 
@@ -1052,7 +1235,34 @@
   function renderFootnote(s) {
     var B = bis();
     var p = el('p', 'note bis-foot');
-    var rs = state.view === 'rio' && s ? rioSpec(s.specId) : null;
+    // 用**这次真正渲染的视角**，不是 state.view —— 首屏 maxroll 还没加载时
+    // 画的是 mplus，脚注要跟着说 mplus 那份数据的事。
+    var view = s ? effectiveView(s) : state.view;
+    var rs = view === 'rio' && s ? rioSpec(s.specId) : null;
+    var mr = view === 'maxroll' && s ? mrPick(s.specId) : null;
+
+    if (mr) {
+      var M = maxroll();
+      p.appendChild(doc.createTextNode(
+        '数据来自 ' + ((M && M.source) || 'maxroll.gg') + '，'
+        + '抓取日期 ' + ((M && M.updatedAt) || '?') + '，'
+        + '这个专精用的是' + (mr.kind === 'mplus' ? '大秘境' : '团本') + '指南（'
+        + (mr.v.slug || '?') + '）。'));
+      p.appendChild(el('br'));
+      // 这一段是这个视角最要紧的一句话。maxroll 给的是排序，不是统计 ——
+      // 界面上到处都没有百分比，脚注必须解释为什么没有，否则看起来像是数据缺了。
+      p.appendChild(doc.createTextNode(
+        '这是 maxroll 编辑给出的**推荐排序**，不是使用率统计：'
+        + '它没有样本量，也没有「多少人这么穿」。所以这里画的是名次'
+        + '（BiS #1 = 编辑的首选，替代 #1 = 可刷替代表里的第一个），不画使用率条 —— '
+        + '那个数没人算过，画出来就是编的。'));
+      p.appendChild(el('br'));
+      p.appendChild(doc.createTextNode(
+        '想看「榜上的人真的穿什么、多少人这么穿」，切到「实战分布」；'
+        + '想看属性权重 / 宝石 / 掉落来源，切到前两个视角。'
+        + '物品中文名来自暴雪 DB2。'));
+      return p;
+    }
 
     if (rs) {
       var R = rio();
@@ -1070,7 +1280,7 @@
       p.appendChild(el('br'));
       p.appendChild(doc.createTextNode(
         '这个视角没有属性权重 / 宝石 / 附魔 / 掉落来源 —— raider.io 的角色档案里没有这些，'
-        + '要看那些切回前两个视角。'));
+        + '要看那些切到「团本视角」或「大秘境视角」。'));
       return p;
     }
 
@@ -1756,7 +1966,8 @@
     // 上次选的专精 / 视角
     var s = settings();
     if (s.bisSpec) state.key = s.bisSpec;
-    if (s.bisView === 'raid' || s.bisView === 'mplus' || s.bisView === 'rio') state.view = s.bisView;
+    if (s.bisView === 'raid' || s.bisView === 'mplus' || s.bisView === 'rio'
+      || s.bisView === 'maxroll') state.view = s.bisView;
     if (s.bisTab === 'gear' || s.bisTab === 'talents') state.tab = s.bisTab;
     if (s.bisTalentCat) state.tcat = s.bisTalentCat;
     if (s.bisChar) state.charKey = s.bisChar;
@@ -1777,6 +1988,7 @@
         if (state.tab === 'talents') ensureTalents(render);
         else render();
         ensureRio();
+        ensureMaxroll();
       }
 
       // 图标映射现在是包里自带的，无条件加载；它同时带了品质。
@@ -1809,6 +2021,27 @@
       rioLoaded = true;
       // 数据到了才值得重画；没到就保持现状（两个 BisData 视角照常能用）。
       if (global.AE_RIO && gearLoaded) render();
+    });
+  }
+
+  /**
+   * 后台加载 app/maxroll-data.js（实测 98.4 KB）。
+   *
+   * 跟 ensureRio 同一套规矩，理由也一样：**可选数据的失败只能影响它自己**。
+   * 没加载成功的话「最佳推荐」按钮不出现（mrPick() 恒为 null），
+   * 而不是出一个点了没反应的按钮。
+   *
+   * 它比 rio 小得多（98 KB vs 849 KB），但还是不放进 index.html ——
+   * 打开面板才需要，跟 bis-data.js 一样按需加载。
+   */
+  function ensureMaxroll() {
+    if (mrLoaded || mrLoading) return;
+    if (global.AE_MAXROLL) { mrLoaded = true; return; }
+    mrLoading = true;
+    loadDataFile('maxroll-data.js', 'AE_MAXROLL', function () {
+      mrLoading = false;
+      mrLoaded = true;
+      if (global.AE_MAXROLL && gearLoaded) render();
     });
   }
 

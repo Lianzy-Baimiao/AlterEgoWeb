@@ -69,8 +69,11 @@ function load(f) {
 // 必须显式加载 —— 「因为没数据所以跳过」的测试报成通过，是最难发现的假绿。
 // rio-data.js 也在这里：它是**入库的产物**，不是可选下载物。缺了它就该红，
 // 而不是让「实战分布」视角悄悄不渲染 —— 那正是「跳过报成通过」的假绿。
+// maxroll-data.js 同理。加视角那一轮它**没**在这个名单里，于是「最佳推荐」
+// 视角在测试里从来没被画过，而套件照样全绿（渲染次数 163 一个都没涨）——
+// 又一次「跳过报成通过」。数字没动就是没跑，这条读数救了一次。
 ['app/bis-data.js', 'app/talent-data.js', 'app/talent-tree.js',
- 'app/item-icons.js', 'app/rio-data.js'].forEach(function (f) {
+ 'app/item-icons.js', 'app/rio-data.js', 'app/maxroll-data.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f + '（先跑对应的 tools\\gen-*.js / fetch-*.js）');
 });
 var haveScan = load('data/data.js');
@@ -139,6 +142,7 @@ var specKeys = Object.keys(B.specs);
 var problems = [];
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
               sn: 0, snBad: 0, rioRenders: 0, rioSlots: 0,
+              mr: 0, mrBad: 0,
               // 天赋树
               tgrids: 0, tnodes: 0, tnodeOn: 0, tedges: 0, tedgeOn: 0,
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
@@ -251,17 +255,24 @@ function checkRender(label) {
         if (stats.trkBad < 4) problems.push(label + ' 轨道徽章文字不对：' + n.textContent);
       }
     }
-    // 部位头上的徽章有**两种**，按 class 分开验，不能共用一条正则：
+    // 部位头上的徽章有**三种**，按 class 分开验，不能共用一条正则：
     //   · cov（BisData 视角）「记录 95.9%」—— 列表被截断，只能说覆盖率；
-    //   · cov sn（rio 视角）「N=97」—— 有真实样本量。
-    // 共用一条正则的话两边都验不住：要么 N= 被判不合格，要么正则松到什么都能过。
+    //   · cov sn（rio 视角）「N=97」—— 有真实样本量；
+    //   · cov mr（maxroll 视角）「首选 1 ・替代 1」—— **既没有样本量也没有覆盖率**，
+    //     它是编辑推荐，那两个量在这份数据里不存在。
+    // 共用一条正则的话三边都验不住：要么 N= 被判不合格，要么正则松到什么都能过。
     if (n.classList && n.classList.contains('slot-head')) {
       stats.slots++;
       if (isRio) stats.rioSlots++;
     }
     if (n.classList && n.classList.contains('cov')) {
-      var isSn = n.classList.contains('sn');
-      if (isSn) {
+      if (n.classList.contains('mr')) {
+        stats.mr++;
+        if (!/^首选 \d+( ・替代 \d+)?$/.test(n.textContent)) {
+          stats.mrBad++;
+          if (stats.mrBad < 4) problems.push(label + ' maxroll 徽章文字不对：' + n.textContent);
+        }
+      } else if (n.classList.contains('sn')) {
         stats.sn++;
         if (!/^N=\d+$/.test(n.textContent)) {
           stats.snBad++;
@@ -282,7 +293,7 @@ function checkRender(label) {
 // openBis() 只在第一次调用时读设置（之后 gearLoaded 为真就直接 render），
 // 所以每换一个组合都要重新 eval bis.js，否则 80 次渲染画的是同一个专精。
 specKeys.forEach(function (key) {
-  ['raid', 'mplus', 'rio'].forEach(function (view) {
+  ['maxroll', 'raid', 'mplus', 'rio'].forEach(function (view) {
     settings.bisTab = 'gear';
     settings.bisSpec = key;
     settings.bisView = view;
@@ -293,6 +304,37 @@ specKeys.forEach(function (key) {
     checkRender(key + '/' + view);
   });
 });
+
+// ---- 首屏兜底：默认视角是 maxroll，而 app/maxroll-data.js 是**懒加载**的。
+//
+// 上面那 203 次渲染全是「数据已经在」的情况，所以它们**验不到**这条路。
+// 真实首屏是另一回事：state.view 已经是 'maxroll'，但 AE_MAXROLL 还没到，
+// mrPick() 恒为 null。没有 effectiveView() 兜底的话面板会空一下，
+// 而「空一下」和「这个专精真没数据」在界面上分不出来。
+//
+// 这里把 AE_MAXROLL 临时藏起来，重新走一次完整渲染，要求**照样画出装备**。
+(function checkFirstPaintFallback() {
+  var saved = g.AE_MAXROLL;
+  delete g.AE_MAXROLL;
+  var before = problems.length;
+  var sample = specKeys.slice(0, 3);
+  sample.forEach(function (key) {
+    settings.bisTab = 'gear';
+    settings.bisSpec = key;
+    settings.bisView = 'maxroll';   // 用户选的是 maxroll
+    settings.bisChar = '';
+    body.children.length = 0;
+    load('app/bis.js');
+    g.AE.openBis();
+    // checkRender 里那条「一件装备都没画出来」就是这次要验的东西
+    checkRender('首屏兜底/' + key);
+  });
+  g.AE_MAXROLL = saved;
+  if (problems.length > before) {
+    problems.push('maxroll 数据没加载时首屏画不出装备 —— effectiveView() 的兜底失效了');
+  }
+  stats.fallbackChecked = sample.length;
+})();
 
 // .tnode 的方块尺寸从 style.css 里读，不写死在这里。
 // 写死的话改了 CSS 而忘了改这里，几何检查就会拿着旧尺寸算，算出来的「不重叠」
@@ -687,12 +729,20 @@ if (stats.trkBad > 0) {
 // 徽章：每个部位组头上**恰好一个**，两种加起来必须等于部位组数。
 // 写成相等而不是「> 0」—— 「至少有一个」那种断言在只有一个部位画出来的时候也能过。
 // 两种分开数再求和，才能同时抓住「rio 视角忘了给徽章」和「BisData 视角多给一个」。
-if (stats.cov + stats.sn !== stats.slots) {
+if (stats.cov + stats.sn + stats.mr !== stats.slots) {
   problems.push('覆盖率徽章 ' + stats.cov + ' + 样本量徽章 ' + stats.sn
-    + ' = ' + (stats.cov + stats.sn) + '，部位组 ' + stats.slots + ' 个，不一一对应');
+    + ' + maxroll 徽章 ' + stats.mr + ' = ' + (stats.cov + stats.sn + stats.mr)
+    + '，部位组 ' + stats.slots + ' 个，不一一对应');
 }
 if (stats.covBad > 0) problems.push(stats.covBad + ' 个覆盖率徽章文字不合格式');
 if (stats.snBad > 0) problems.push(stats.snBad + ' 个样本量徽章文字不合格式');
+if (stats.mrBad > 0) problems.push(stats.mrBad + ' 个 maxroll 徽章文字不合格式');
+// 空转守卫：三种徽章都必须真的出现过。少了一种说明那个视角没被画到，
+// 而上面那条求和等式在「某个视角整个缺席」时照样成立 —— 加视角那一轮
+// 就是这么假绿的（渲染次数一个都没涨，套件却全绿）。
+if (stats.mr < 1) problems.push('一个 maxroll 徽章都没画出来，「最佳推荐」视角没被渲染');
+if (stats.sn < 1) problems.push('一个样本量徽章都没画出来，「实战分布」视角没被渲染');
+if (stats.cov < 1) problems.push('一个覆盖率徽章都没画出来，BisData 两个视角没被渲染');
 if (stats.slots < 1000) problems.push('只画了 ' + stats.slots + ' 个部位组，太少');
 
 // ---- 「实战分布」视角（rio）
@@ -899,7 +949,8 @@ var VERIFIERS = [
   // rank / entryIndex / granted 各自的不符数），所以原样透传，不降级成计数。
   { label: '天赋串解码', script: 'verify-talent-decode.js', data: 'talent-tree.js',
     need: 'tools/talent-truth.json', own: true },
-  { label: 'rio 装备分布', script: 'verify-rio-data.js', data: 'rio-data.js' }
+  { label: 'rio 装备分布', script: 'verify-rio-data.js', data: 'rio-data.js' },
+  { label: 'maxroll 推荐', script: 'verify-maxroll-data.js', data: 'maxroll-data.js' }
 ];
 VERIFIERS.forEach(function (v) {
   if (!fs.existsSync(path.join(ROOT, 'app', v.data))) {

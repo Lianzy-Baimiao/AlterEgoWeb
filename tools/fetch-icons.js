@@ -119,6 +119,29 @@ function collectIds() {
     });
   }
 
+  // maxroll 那份产物（app/maxroll-data.js）里有一批**只在 maxroll 出现**的物品
+  // （实测 357 件里 36 件不在 rio 池里，多是附魔和可刷替代件）。它们的中文名已经
+  // 由生成器从 DB2 补上了，但**图标名 DB2 里没有** —— 所以这批要走 wowhead
+  // 查图标名，跟 BisData 那批同一条路，进 ids。
+  //
+  // 不这么做的后果是实测过的：面板「最佳推荐」视角里出现占位块（渲染检查报
+  // 「出现 3 个占位块」）。
+  var mrFile = path.join(ROOT, 'app', 'maxroll-data.js');
+  var mrNeed = 0;
+  if (fs.existsSync(mrFile)) {
+    var mg = { AE: {} };
+    mg.window = mg;
+    new Function('global', 'window', fs.readFileSync(mrFile, 'utf8')).call(mg, mg, mg);
+    var MR = mg.AE_MAXROLL;
+    if (!MR || !MR.items) throw new Error('app/maxroll-data.js 没有赋值 AE_MAXROLL 或缺 items');
+    Object.keys(MR.items).forEach(function (id) {
+      var it = MR.items[id];
+      if (it && it.i) { rioNames[it.i] = 1; return; }   // 自带图标名的直接下图
+      ids[id] = 1;                                       // 没有图标名的去 wowhead 查
+      mrNeed++;
+    });
+  }
+
   var extra = Object.create(null);
   Object.keys(ownIcon).forEach(function (id) { extra[ownIcon[id]] = 1; });
   Object.keys(rioNames).forEach(function (n) { extra[n] = 1; });
@@ -127,7 +150,8 @@ function collectIds() {
     ids: Object.keys(ids), kinds: kinds, bis: B,
     ownIcon: ownIcon,
     rioNames: Object.keys(rioNames),
-    extraNames: Object.keys(extra)
+    extraNames: Object.keys(extra),
+    mrNeed: mrNeed
   };
 }
 

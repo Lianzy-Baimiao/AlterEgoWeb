@@ -548,6 +548,11 @@
       if (!B || !IC) return '图标数据未加载，跳过';
       // 反向检查：item-icons.js 里的每个 id 都应该是数据里真用到的，
       // 否则就是换赛季后没重新生成，图标包里躺着一堆上赛季的东西。
+      //
+      // **消费者不止 BisData 一家。** app/maxroll-data.js 里有 36 件只在 maxroll
+      // 出现的物品（附魔和可刷替代件），它们的图标名是 fetch-icons.js 查来的，
+      // 所以也算「用得到」。只数 BisData 的话这条断言会把它们判成上赛季的残留 ——
+      // 实测报了「14 个 itemId 用不到」，而那 14 个恰好是新加的那批。
       var used = {};
       Object.keys(B.items).forEach(function (id) { used[id] = 1; });
       Object.keys(B.specs).forEach(function (key) {
@@ -558,6 +563,8 @@
         });
       });
       (B.consumables || []).forEach(function (c) { used[c.id] = 1; });
+      var MR = global.AE_MAXROLL;
+      if (MR && MR.items) Object.keys(MR.items).forEach(function (id) { used[id] = 1; });
       var extra = Object.keys(IC).filter(function (id) { return !used[id]; });
       return extra.length === 0 ||
         extra.length + ' 个 itemId 在数据里用不到，例如 ' + extra[0] + '（该重跑 fetch-icons）';

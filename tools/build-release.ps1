@@ -96,7 +96,8 @@ foreach ($f in $dropFromPkg) {
 $dropDirsFromPkg = @(
     'tools\.talent-raw',        # 14 MB upstream cache for fetch-talent-tree.js
     'tools\.db2-names',         # 15 KB DB2 CSV cache for fetch-class-names.js
-    'tools\.rio-raw'            # 1.9 MB raider.io cache for fetch-talent-truth.js
+    'tools\.rio-raw',           # 1.9 MB raider.io cache for fetch-talent-truth.js
+    'tools\.maxroll-raw'        # 50 MB of maxroll guide HTML for fetch-maxroll.js (81 pages, measured)
 )
 foreach ($d in $dropDirsFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $d) -Recurse -Force -ErrorAction SilentlyContinue

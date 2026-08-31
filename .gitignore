@@ -37,6 +37,13 @@ tools/.db2-names/
 #      公开数据，但产出物已经刻意剥掉了角色名，没理由再把原始 dump 放进仓库。
 tools/.rio-raw/
 
+# maxroll 指南页的原始 HTML 缓存（每篇 600~750 KB，70 篇装备指南约 45 MB）。
+# tools/fetch-maxroll.js 下到这里，按 slug 命名，存在就跳过，所以中断能续。
+# 和上面三个缓存同一条道理：**产出物** app/maxroll-data.js 才是要提交的东西，
+# 上游 HTML 随时能重下，而且它带 maxroll 的完整页面内容（人家的编辑作品），
+# 更没有理由放进仓库。
+tools/.maxroll-raw/
+
 # Editor / OS noise
 .vscode/
 .idea/
