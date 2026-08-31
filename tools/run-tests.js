@@ -645,7 +645,8 @@ var VERIFIERS = [
   // own=true：这个校验器自己打的那行比通用的「N 项检查」信息量大（它要报少解 /
   // rank / entryIndex / granted 各自的不符数），所以原样透传，不降级成计数。
   { label: '天赋串解码', script: 'verify-talent-decode.js', data: 'talent-tree.js',
-    need: 'tools/talent-truth.json', own: true }
+    need: 'tools/talent-truth.json', own: true },
+  { label: 'rio 装备分布', script: 'verify-rio-data.js', data: 'rio-data.js' }
 ];
 VERIFIERS.forEach(function (v) {
   if (!fs.existsSync(path.join(ROOT, 'app', v.data))) {
@@ -771,7 +772,7 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 两项格式校验'
+  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 三项格式校验'
     + ' + 天赋串解码对真值 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

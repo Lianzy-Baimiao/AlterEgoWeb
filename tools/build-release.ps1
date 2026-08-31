@@ -80,7 +80,8 @@ $dropFromPkg = @(
     'tools\mutate-decode.js',   # mutation suite for the talent-decode assertions
     'tools\mutate-lock.js',     # the mutex those mutation suites share
     'tools\mutate-pkg.js',     # mutation suite for the packaging guard itself; needs run-tests.js
-    'tools\mutate-icons.js'    # mutation suite for the talent-icon assertions
+    'tools\mutate-icons.js',   # mutation suite for the talent-icon assertions
+    'tools\mutate-rio.js'      # mutation suite for the raider.io data assertions
 )
 foreach ($f in $dropFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $f) -Force -ErrorAction SilentlyContinue

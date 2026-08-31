@@ -37,11 +37,21 @@
  *      同一个端点第一条 200、后面全 502，我把它读成了「查不到」，19 个里只修好 1 个。
  *      所以这里所有 5xx / status 0 都退避重试，且「请求失败」和「确实没有」分开计数。
  *
- * 还有一件事这个工具**不做**：物品的中文名。
+ * 物品中文名从**暴雪自己的 DB2** 批量拿，不逐个查
+ * ------------------------------------------------
  * raider.io 的 `items[].name` 实测 687/687 全是英文（`Tempered Horns of the Jade Warlord`）。
- * 中文名要另外查（wowhead `locale=4` 实测给「翡翠督军的淬火战角」）。
- * 这里只存 item_id / icon / item_quality / bonuses —— 那三样 raider.io 白送，
- * 正好是 fetch-icons.js 现在要逐个查 wowhead 才拿到的。名字留给后续那一步。
+ * BisData 给的是中文名，直接换过去等于把面板退回英文 —— 那是功能退化。
+ * 第一版打算逐个查 wowhead `locale=4`（实测能给「翡翠督军的淬火战角」），
+ * 但本机 46 份 profile 里就有 402 个不同 item_id，4000 份会到几千个，
+ * 逐个查要二十多分钟还会撞限速。
+ * 改用 G1 那条路：`https://wago.tools/db2/ItemSparse/csv?locale=zhCN`
+ * —— **一次请求 48 MB / 175164 行**，`ID` + `Display_lang` 两列就是 id → 中文名，
+ * 对本机 402 个 id **命中 402（100%）**。直连可达，不用代理。
+ *
+ * 槽位名这里**一个中文字都不存**。rio 用英文槽位名（head/finger1/…），
+ * 面板用暴雪槽位编号（1/11/…）。映射是**从数据里推出来的**：
+ * 拿两边都出现的 206 件物品投票，12 个唯一槽位 100% 一致；
+ * 戒指 / 饰品 / 主副手三对本来就可互换，按物品分不开，按 rio 的序号定。
  *
  * 用法
  * ----
@@ -51,6 +61,7 @@
  *   node tools\fetch-rio.js --maxpages 5         # 每专精最多翻几页（默认 6）
  *   node tools\fetch-rio.js --rank-only          # 只抓榜（拿天赋串和名单），不抓装备
  *   node tools\fetch-rio.js --offline            # 只用缓存，一个请求都不发
+ *   node tools\fetch-rio.js --keep-names         # 复用已下好的 ItemSparse.csv（默认就复用）
  */
 'use strict';
 
@@ -74,6 +85,28 @@ var ONLY = String(opt('--specs', '')).split(',').filter(Boolean).map(Number);
 var RANK_ONLY = flag('--rank-only');
 var OFFLINE = flag('--offline');
 var CONCURRENCY = 4;
+
+var NAMES_DIR = path.join(__dirname, '.db2-names');
+var ITEM_CSV = path.join(NAMES_DIR, 'ItemSparse.csv');
+var ITEM_CSV_URL = 'https://wago.tools/db2/ItemSparse/csv?locale=zhCN';
+
+/**
+ * rio 的英文槽位名 → 暴雪槽位编号。
+ *
+ * **不是我凭记忆写的**：拿 BisData 里有槽位归属的 498 件和本机 profile 里的 402 件
+ * 求交（206 件），按「同一件物品在两边分别落在哪」投票推出来的。
+ * 12 个唯一槽位得票 100% 一致（back→15、chest→5、feet→8、hands→10、head→1、
+ * legs→7、neck→2、shoulder→3、waist→6、wrist→9，外加 mainhand→16 80%、offhand→17 82%）。
+ * 剩下三对 —— 戒指 11/12、饰品 13/14、主副手 16/17 —— 投票只到 50% 上下，
+ * 因为**同一枚戒指两个槽都能戴**，按物品根本分不开。这三对按 rio 自己的序号定，
+ * finger1→11 / finger2→12 / trinket1→13 / trinket2→14，与 BisData 的编号含义一致。
+ * `shirt` 故意不映射：BisData 没有这个槽，衬衣也不影响强度。
+ */
+var SLOT_MAP = {
+  head: 1, neck: 2, shoulder: 3, chest: 5, waist: 6, legs: 7, feet: 8,
+  wrist: 9, hands: 10, finger1: 11, finger2: 12, trinket1: 13, trinket2: 14,
+  back: 15, mainhand: 16, offhand: 17
+};
 
 // ------------------------------------------------------------------ 专精名单
 
@@ -284,9 +317,242 @@ function profile(ch, cb) {
   });
 }
 
+// --------------------------------------------------------- 中文物品名（DB2）
+
+/*
+ * raider.io 的 `items[].name` 实测 687/687 全英文，所以中文名得另外来一份。
+ *
+ * 走的是 G1 那条已经验证过的路：**暴雪自己的 DB2**，
+ * `https://wago.tools/db2/ItemSparse/csv?locale=zhCN`（直连，不用代理）。
+ * 实测 48.03 MB / 175164 行，`ID` 在第 0 列、`Display_lang` 在第 5 列，
+ * 对本机 402 个不同 item_id **命中 402（100%）**。
+ *
+ * 为什么不逐个查 wowhead：4000 份 profile 会有几千个不同 id，
+ * 而那个端点在并发 2 下就开始 502（本轮实测），一个个问要 20 分钟以上还不稳。
+ * DB2 是一次 15 秒拿全表。
+ *
+ * 为什么 48 MB 不提交、也不做中间产物：**中文名会内联进 app/rio-data.js**，
+ * 产物自带名字，所以这个 CSV 是纯下载缓存（放在已 gitignore 的 tools/.db2-names/）。
+ */
+var DB2_DIR = path.join(__dirname, '.db2-names');
+var ITEM_CSV = path.join(DB2_DIR, 'ItemSparse.csv');
+var ITEM_CSV_URL = 'https://wago.tools/db2/ItemSparse/csv?locale=zhCN';
+
+function downloadItemCsv(cb) {
+  if (!fs.existsSync(DB2_DIR)) fs.mkdirSync(DB2_DIR, { recursive: true });
+  var tmp = ITEM_CSV + '.part';
+  var u = new URL(ITEM_CSV_URL);
+  process.stdout.write('  下 ItemSparse.csv（实测约 48 MB）…');
+  var req = https.request({
+    host: u.hostname, port: 443, method: 'GET', path: u.pathname + u.search,
+    headers: { 'User-Agent': 'WowAltBoard/1.0' }
+  }, function (res) {
+    if (res.statusCode !== 200) {
+      res.resume();
+      cb(new Error('ItemSparse.csv HTTP ' + res.statusCode));
+      return;
+    }
+    var out = fs.createWriteStream(tmp), got = 0;
+    res.on('data', function (c) { got += c.length; });
+    res.pipe(out);
+    out.on('finish', function () {
+      fs.renameSync(tmp, ITEM_CSV);
+      console.log(' 好，' + (got / 1024 / 1024).toFixed(2) + ' MB');
+      cb(null);
+    });
+    out.on('error', cb);
+  });
+  req.on('error', cb);
+  req.setTimeout(120000, function () { req.destroy(new Error('下 ItemSparse.csv 超时')); });
+  req.end();
+}
+
+/** 拆一行 CSV，认引号里的逗号。列名可能挪位置，所以按表头找列，不写死下标。 */
+function splitCsv(line) {
+  var out = [], cur = '', q = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (q) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else q = false;
+      } else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** 只取需要的那些 id 的中文名。ids 是 Set 一样用的对象。 */
+function itemNames(ids, cb) {
+  // ids 必须是**数组**。第一版这里当集合对象用（`ids[id]`），而调用方传的是数组，
+  // 于是 `ids['25']` 命中的是**下标 25**（一个物品 id 字符串，恰好是真值），
+  // 结果把 DB2 里 id 0~174 那些无关物品的名字当成命中存了下来 ——
+  // 报出「命中 38/175」，看着像「有些装备没中文名」，其实是**存了别人的名字**。
+  // 探针单独跑同一份 CSV 是 499/499，两个互斥读数才让它露出来。
+  // 教训还是那条：容易被误用的接口，要让误用**当场炸**，不要让它算出一个像样的错数。
+  if (!Array.isArray(ids)) {
+    throw new TypeError('itemNames 的第一个参数要 id 数组（Object.keys(...)），不是集合对象');
+  }
+  var want = {};
+  ids.forEach(function (id) { want[String(id)] = 1; });
+
+  function parse() {
+    var txt = fs.readFileSync(ITEM_CSV, 'utf8');
+    var nl = txt.indexOf('\n');
+    var head = splitCsv(txt.slice(0, nl).replace(/\r$/, ''));
+    var iId = head.indexOf('ID'), iName = head.indexOf('Display_lang');
+    if (iId < 0 || iName < 0) {
+      throw new Error('ItemSparse.csv 里找不到 ID / Display_lang 列 —— 上游改了表头');
+    }
+    var map = {}, hit = 0, rows = 0, pos = nl + 1;
+    while (pos < txt.length) {
+      var end = txt.indexOf('\n', pos);
+      if (end < 0) end = txt.length;
+      // 快路：先只看第一个逗号前的 id，绝大多数行会在这里被跳掉。
+      var comma = txt.indexOf(',', pos);
+      if (comma > pos && comma < end) {
+        var id = txt.slice(pos, comma);
+        if (want[id]) {
+          var f = splitCsv(txt.slice(pos, end).replace(/\r$/, ''));
+          if (f[iId] === id && f[iName]) { map[id] = f[iName]; hit++; }
+        }
+      }
+      rows++;
+      pos = end + 1;
+    }
+    var nWant = ids.length;
+    var missed = ids.filter(function (id) { return !map[String(id)]; });
+    console.log('  DB2 ' + rows + ' 行，要 ' + nWant + ' 个 id，命中 ' + hit
+      + '（' + (nWant ? (hit * 100 / nWant).toFixed(1) : '0') + '%）');
+    return { map: map, want: nWant, hit: hit, missed: missed };
+  }
+
+  if (fs.existsSync(ITEM_CSV) && fs.statSync(ITEM_CSV).size > 1000000) {
+    cb(null, parse());
+    return;
+  }
+  if (OFFLINE) {
+    cb(new Error('缺 tools/.db2-names/ItemSparse.csv，而且是 --offline'));
+    return;
+  }
+  downloadItemCsv(function (e) {
+    if (e) { cb(e); return; }
+    cb(null, parse());
+  });
+}
+
+// -------------------------------------------------------------------- 聚合
+
+/**
+ * 把「角色名单 + 每人的装备」聚成「每专精每部位的分布」。
+ *
+ * 和 BisData 的两个关键区别，也是换数据源的全部理由：
+ *   · **每个部位带自己的 N**（`slots[槽位].n`）。不是全专精一个数 —— 有人没副手、
+ *     有人没衬衣，各部位人数本来就不同。
+ *   · **分布不截断**：出现过的物品全列，所以百分比之和恒为 100%。
+ *     BisData 只列 1~7 件，实测 1264 个部位组里使用率之和中位数 72.9%。
+ */
+function aggregate(roster, gears) {
+  var specs = {}, itemMeta = {};
+
+  roster.forEach(function (ch) {
+    var g = gears[ch.region + '/' + ch.realm + '/' + ch.name];
+    var sid = String(ch.specId);
+    if (!specs[sid]) specs[sid] = { n: 0, nGear: 0, slots: {}, loadouts: [] };
+    var S = specs[sid];
+    S.n++;
+    if (ch.loadout) S.loadouts.push(ch.loadout);
+    var items = g && g.gear && g.gear.items;
+    if (!items) return;
+    S.nGear++;
+    Object.keys(items).forEach(function (slotName) {
+      var slot = SLOT_MAP[slotName];
+      if (!slot) return;            // shirt / tabard 这类不入表
+      var it = items[slotName];
+      if (!it || !it.item_id) return;
+      var k = String(slot);
+      if (!S.slots[k]) S.slots[k] = { n: 0, c: {}, il: {} };
+      var B = S.slots[k];
+      B.n++;
+      var id = String(it.item_id);
+      B.c[id] = (B.c[id] || 0) + 1;
+      B.il[id] = (B.il[id] || 0) + (it.item_level || 0);
+      if (!itemMeta[id]) {
+        itemMeta[id] = {
+          i: it.icon || '', q: it.item_quality || 0,
+          sock: 0, seen: 0
+        };
+      }
+      itemMeta[id].seen++;
+      if (it.gems && it.gems.length) itemMeta[id].sock++;
+    });
+  });
+
+  // 收尾：把计数表压成排好序的数组 [itemId, 人数, 平均等级]
+  Object.keys(specs).forEach(function (sid) {
+    var S = specs[sid];
+    Object.keys(S.slots).forEach(function (k) {
+      var B = S.slots[k];
+      var arr = Object.keys(B.c).map(function (id) {
+        return [Number(id), B.c[id], Math.round(B.il[id] / B.c[id])];
+      });
+      arr.sort(function (a, b) { return b[1] - a[1] || a[0] - b[0]; });
+      S.slots[k] = { n: B.n, d: arr };
+    });
+  });
+
+  return { specs: specs, itemMeta: itemMeta };
+}
+
+function emit(agg, names, meta) {
+  var specTable = {};
+  var tree = meta.tree;
+  Object.keys(agg.specs).forEach(function (sid) {
+    var S = agg.specs[sid];
+    var sp = tree.specs[sid] || {};
+    specTable[sid] = {
+      cls: sp.cls || '', specEn: sp.specEn || '',
+      n: S.n, nGear: S.nGear, slots: S.slots, loadouts: S.loadouts
+    };
+  });
+
+  var items = {};
+  Object.keys(agg.itemMeta).forEach(function (id) {
+    var m = agg.itemMeta[id];
+    items[id] = { n: names.map[id] || '', i: m.i, q: m.q, sock: m.sock };
+  });
+
+  var obj = {
+    v: 1,
+    updatedAt: new Date().toISOString().slice(0, 10),
+    source: 'raider.io（大秘境每专精排行榜 + 角色 profile fields=gear）',
+    season: SEASON,
+    itemNameSource: 'wago.tools DB2 ItemSparse locale=zhCN',
+    note: '每个部位带自己的样本量 slots[槽位].n；分布 d 不截断，百分比之和恒为 100%。'
+      + '槽位编号沿用暴雪的 INVSLOT（和 app/bis-data.js 的 slotNames 同一套）。',
+    slotOf: SLOT_MAP,
+    fmt: {
+      specs: 'specId → {cls, specEn, n 角色数, nGear 有装备的人数, slots, loadouts 天赋串}',
+      slots: '槽位编号 → {n 这个部位的样本量, d: [[itemId, 人数, 平均装等], …] 按人数降序}',
+      items: 'itemId → {n 中文名, i 图标名, q 品质, sock 带宝石的次数}'
+    },
+    items: items,
+    specs: specTable
+  };
+
+  var js = '/* 自动生成，勿手改。生成器：tools/fetch-rio.js */\n'
+    + 'window.AE_RIO = ' + JSON.stringify(obj) + ';\n';
+  fs.writeFileSync(OUT, js);
+  return { bytes: Buffer.byteLength(js, 'utf8'), obj: obj };
+}
+
 module.exports = {
   loadSpecs: loadSpecs, collectSpec: collectSpec, profile: profile,
-  rankPage: rankPage, netStat: netStat, CACHE: CACHE, OUT: OUT
+  rankPage: rankPage, netStat: netStat, CACHE: CACHE, OUT: OUT,
+  aggregate: aggregate, emit: emit, itemNames: itemNames,
+  splitCsv: splitCsv, SLOT_MAP: SLOT_MAP
 };
 
 // ---------------------------------------------------------------------- main
@@ -390,8 +656,67 @@ function main() {
     console.log('  用时 ' + (((Date.now() - t0) / 1000) | 0) + ' 秒');
     var nGear = Object.keys(gears).length;
     console.log('角色 ' + all.length + '，拿到装备 ' + nGear);
-    console.log('\n下一步（还没写）：把这些聚合成 app/rio-data.js。');
+
+    if (RANK_ONLY) {
+      console.log('\n--rank-only：没有装备就没法聚合，不生成 app/rio-data.js。');
+      return;
+    }
+    if (!nGear) {
+      throw new Error('一个角色的装备都没拿到 —— 不生成产物。'
+        + '（如果是 --offline，先跑一次联网抓取把缓存填上）');
+    }
+
+    var agg = aggregate(all, gears);
+    var ids = Object.keys(agg.itemMeta);
+    console.log('\n聚合：' + Object.keys(agg.specs).length + ' 个专精，'
+      + ids.length + ' 个不同物品');
+
+    // 中文名是最后一步：raider.io 只给英文，名字从暴雪 DB2 批量拿。
+    itemNames(ids, function (e, names) {
+      if (e) throw e;
+      console.log('  中文名 ' + names.hit + '/' + ids.length
+        + '（' + (ids.length ? (names.hit * 100 / ids.length).toFixed(1) : '0') + '%）'
+        + (names.missed.length
+          ? '　缺 ' + names.missed.length + ' 个：' + names.missed.slice(0, 6).join(',')
+          : ''));
+      if (ids.length && names.hit * 100 / ids.length < 95) {
+        // DB2 对本机 402 个 id 实测命中 100%。掉到 95% 以下说明取名这条链断了，
+        // 而不是「有几件冷门装备没名字」—— 宁可停下来，也别产出一堆空名字。
+        throw new Error('中文名命中率只有 '
+          + (names.hit * 100 / ids.length).toFixed(1) + '%，低于 95% —— 拒绝生成。'
+          + '先检查 wago.tools 的 ItemSparse 是否换了列名');
+      }
+
+      var tree = treeOf();
+      var res = emit(agg, names, { tree: tree });
+      console.log('\n写出 ' + path.relative(ROOT, OUT) + '　'
+        + (res.bytes / 1024).toFixed(1) + ' KB');
+
+      // 产物自检：把最该看的三个数打出来，而不是只说「成功」。
+      var sids = Object.keys(res.obj.specs);
+      var nMin = Infinity, nMax = 0, slotMin = Infinity, loadN = 0;
+      sids.forEach(function (sid) {
+        var S = res.obj.specs[sid];
+        nMin = Math.min(nMin, S.n); nMax = Math.max(nMax, S.n);
+        loadN += S.loadouts.length;
+        Object.keys(S.slots).forEach(function (k) {
+          slotMin = Math.min(slotMin, S.slots[k].n);
+        });
+      });
+      console.log('  专精 ' + sids.length + '，每专精人数 ' + (nMin === Infinity ? 0 : nMin)
+        + '~' + nMax + '，最小部位样本量 ' + (slotMin === Infinity ? 0 : slotMin)
+        + '，天赋串 ' + loadN + '，物品 ' + Object.keys(res.obj.items).length);
+      console.log('\n下一步：node tools\\verify-rio-data.js 校验格式。');
+    });
   }
+}
+
+/** 产物里要写职业 / 专精英文名，从天赋树读 —— 那份数据已经过校验。 */
+function treeOf() {
+  var sandbox = { window: {} };
+  // eslint-disable-next-line no-new-func
+  new Function('window', fs.readFileSync(TREE_JS, 'utf8'))(sandbox.window);
+  return sandbox.window.AE_TALENT_TREE;
 }
 
 if (require.main === module) main();
