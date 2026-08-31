@@ -942,13 +942,29 @@ VERIFIERS.forEach(function (v) {
 // 否则用户解开 zip 会拿到一个跑不起来的脚本。这一条以前靠我记着，记漏过。
 //
 // 判据有两条，缺一不可：
-//   1. 引用了测试脚手架（run-tests.js / dom-stub.js）；
+//   1. **真的 require 了**测试脚手架（run-tests.js / dom-stub.js）；
 //   2. 文件名是 mutate-*.js —— 变异测试一律是测试专用。
-// 第 2 条是这一轮补的：mutate-decode.js 跑的是 verify-talent-decode.js，
+// 第 2 条是补的：mutate-decode.js 跑的是 verify-talent-decode.js，
 // 一个字都没提脚手架，于是第 1 条漏掉了它，守卫报「4 个」而实际有 5 个。
 // **注意 verify-*.js 不算测试专用** —— 那几个是随包发布的、用户能自己跑的校验器。
+//
+// 第 1 条原先写的是 indexOf('run-tests.js') >= 0，也就是「源码里提到这个名字」。
+// 太松了：我在 decode-talent-string.js 的注释里写了一句「run-tests.js 用它的
+// toBits() 读串头」，守卫立刻把它判成测试专用，要求加进 $dropFromPkg。
+// 而那是**错的**，加进去会砸掉发布包 —— 见下面「随包工具的依赖不许被丢掉」那条。
+// 改成只认真正的 require()：注释怎么写都不影响判定。
 (function () {
   var HARNESS = ['run-tests.js', 'dom-stub.js'];
+  // require('./x.js') / require("./x") / path.join(__dirname, 'x.js') 都算真依赖；
+  // 出现在注释或字符串说明里的不算。
+  function requiresHarness(src, self) {
+    return HARNESS.some(function (h) {
+      if (h === self) return false;
+      var base = h.replace(/\.js$/, '');
+      var re = new RegExp('require\\(\\s*[\'"]\\./' + base + '(\\.js)?[\'"]\\s*\\)');
+      return re.test(src);
+    });
+  }
   var ps = path.join(ROOT, 'tools', 'build-release.ps1');
   if (!fs.existsSync(ps)) { console.log(pad('打包一致性') + '跳过（没有 build-release.ps1）'); return; }
   var txt = fs.readFileSync(ps, 'utf8');
@@ -962,7 +978,7 @@ VERIFIERS.forEach(function (v) {
   fs.readdirSync(path.join(ROOT, 'tools')).forEach(function (f) {
     if (!/\.js$/.test(f)) return;
     var src = fs.readFileSync(path.join(ROOT, 'tools', f), 'utf8');
-    var uses = HARNESS.some(function (h) { return h !== f && src.indexOf(h) >= 0; });
+    var uses = requiresHarness(src, f);
     var isMutant = /^mutate-.*\.js$/.test(f);
     if (!uses && !isMutant && HARNESS.indexOf(f) < 0) return;
     need.push(f);
@@ -973,6 +989,32 @@ VERIFIERS.forEach(function (v) {
     problems.push('tools/' + f + ' 依赖测试脚手架，但没写进 build-release.ps1 的 $dropFromPkg，会被打进发布包');
   });
 
+  // 反过来的那一半，比上面那半更危险，所以必须也有断言。
+  //
+  // 上面只管「该踢的有没有踢」。但**踢错**是静默的：名单里多写一个文件，
+  // zip 照样打得出来、测试照样全绿，只有用户解开包去跑校验器时才会
+  // 「Cannot find module」。本地永远复现不了，因为本地那个文件在。
+  //
+  // 实际差点发生：decode-talent-string.js 被 verify-talent-decode.js 和
+  // fetch-talent-truth.js 两个**随包发布**的工具 require；守卫（当时判据太松，
+  // 连注释里提一句 run-tests.js 都算）把它报成「测试专用」，而顺手加进名单
+  // 就会打出一个校验器直接崩掉的发布包。
+  //
+  // 判据：随包工具 require 的本地文件，一个都不许出现在 $dropFromPkg 里。
+  var shipped = [], wrongDrop = [];
+  fs.readdirSync(path.join(ROOT, 'tools')).forEach(function (f) {
+    if (!/\.js$/.test(f) || need.indexOf(f) >= 0) return;   // need = 测试专用的那批
+    shipped.push(f);
+    var src = fs.readFileSync(path.join(ROOT, 'tools', f), 'utf8');
+    (src.match(/require\('\.\/([^']+)'\)/g) || []).forEach(function (r) {
+      var dep = /require\('\.\/([^']+)'\)/.exec(r)[1];
+      if (!/\.js$/.test(dep)) dep += '.js';
+      if (listed[dep]) {
+        wrongDrop.push('tools/' + dep + ' 被随包发布的 tools/' + f
+          + ' require，却写进了 $dropFromPkg —— 发布包里那个校验器会因为找不到它而崩');
+      }
+    });
+  });
   // 缓存**目录**同理，而且更容易漏：文件名单和目录名单是两个变量，
   // 我这一轮加 tools/.rio-raw/（1.9 MB 的角色 profile 缓存）时就只改了 .gitignore。
   // 判据：.gitignore 里每一个 tools/.xxx/ 都必须出现在 $dropDirsFromPkg 里。
@@ -1004,11 +1046,24 @@ VERIFIERS.forEach(function (v) {
     });
   }
 
-  console.log(pad('打包一致性') + (miss.length || dirMiss.length
-      ? (miss.length + dirMiss.length) + ' 个会被误打包（' + miss.length + ' 个脚本，'
-        + dirMiss.length + ' 个缓存目录）'
+  // 反向检查的空转守卫：随包工具一个都没认出来的话，上面那段循环等于没跑。
+  // 加这条是因为它的形状和「跳过报成通过」完全一样 —— 判据一写错（比如 need
+  // 把整个 tools/ 都算成测试专用），shipped 就会空掉，循环一次不跑却照样全绿。
+  if (shipped.length < 3) {
+    problems.push('只认出 ' + shipped.length + ' 个随包发布的 tools 脚本，'
+      + '「随包依赖不许进 $dropFromPkg」这条检查等于没跑');
+  }
+  wrongDrop.forEach(function (m2) { problems.push(m2); });
+
+  // 摘要行必须把三类问题都算进去。第一版只看 miss/dirMiss，于是我注入
+  // 「把随包依赖加进名单」这个变异体时，problems 里红了两条、这一行却照印
+  // 「通过」—— 只看摘要的人会以为没事。摘要和断言必须同源。
+  console.log(pad('打包一致性') + (miss.length || dirMiss.length || wrongDrop.length
+      ? (miss.length + dirMiss.length + wrongDrop.length) + ' 个会被误打包或误踢出（'
+        + miss.length + ' 个脚本漏踢，' + dirMiss.length + ' 个缓存目录漏踢，'
+        + wrongDrop.length + ' 个随包依赖被误踢）'
       : '通过（' + need.length + ' 个测试专用脚本 + ' + dirNeed.length
-        + ' 个缓存目录全在名单里）'));
+        + ' 个缓存目录全在名单里，' + shipped.length + ' 个随包脚本的依赖没被误踢）'));
 })();
 
 // ----------------------------------------------------------------------- 汇总
