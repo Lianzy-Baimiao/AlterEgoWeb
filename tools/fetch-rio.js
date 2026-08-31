@@ -84,7 +84,24 @@ var MAXPAGES = Number(opt('--maxpages', 6)) || 6;
 var ONLY = String(opt('--specs', '')).split(',').filter(Boolean).map(Number);
 var RANK_ONLY = flag('--rank-only');
 var OFFLINE = flag('--offline');
-var CONCURRENCY = 4;
+
+/*
+ * 限速参数。**默认值是撞出来的，不是猜的。**
+ *
+ * 第一次全量跑（并发 4、无间隔）实测：
+ *   请求 5862，200 只有 303，**429 有 5558**，用时 474 秒，最后只拿到 361/3994 份装备。
+ * 前 300 份是顺的，之后几乎全被 429 挡掉 —— 说明 raider.io 对 profile 端点有配额，
+ * 不是「偶发拥塞」。所以对策不是重试得更凶，而是**慢下来**：
+ *   · 并发降到 1（--conc 可调）
+ *   · 每个请求之间至少隔 BASE_GAP 毫秒（--gap 可调）
+ *   · 碰到 429 就等 RATE_WAIT，并且**不算作失败**，重试次数给足
+ *
+ * 榜单端点不受影响（98 页全 200），所以只有 profile 段需要这套。
+ */
+var CONCURRENCY = Number(opt('--conc', 1)) || 1;
+var BASE_GAP = Number(opt('--gap', 1100));
+var RATE_WAIT = Number(opt('--ratewait', 65000));
+var RETRIES = Number(opt('--retries', 8)) || 8;
 
 var NAMES_DIR = path.join(__dirname, '.db2-names');
 var ITEM_CSV = path.join(NAMES_DIR, 'ItemSparse.csv');
@@ -170,24 +187,58 @@ function get(url, cb) {
 /**
  * 带退避重试的 GET。
  *
- * 只对 **5xx / 网络错误**重试 —— 那是「问得太快」。4xx 是「你问错了」，重试没意义，
- * 直接把状态码交回去让调用方分类报错。这个区分是本轮踩出来的：
- * 把 502 当成「没有数据」会得到一个完全错误的结论，而且看起来像正常结果。
+ * 重试的判据是「这次失败是不是我问得太快」：
+ *   · **5xx / 网络错误** —— 是。
+ *   · **429 Too Many Requests** —— 是，而且是站点**明说**的。
+ *   · 其他 4xx —— 不是，是「你问错了」，重试没意义，把状态码交回去让调用方分类报错。
+ *
+ * 这个区分是踩出来的：把 502 当成「没有数据」会得到一个完全错误的结论，
+ * 而且看起来像正常结果。**429 这一条是第二次踩**：抓 3994 份 profile 时
+ * 前 300 个 200，之后 5558 次 429，而当时的重试只认 5xx，于是 429 被当成
+ * 「这个角色没有装备」直接丢掉 —— 19 个专精拿到 0 份装备，产物照样生成。
+ *
+ * 429 的退避比 5xx 狠得多（RATE_WAIT 起步、逐次加倍），因为限速是有窗口的，
+ * 500ms 级的退避只会继续撞墙。同时**全局降速**：一旦吃到 429，
+ * 就把所有后续请求的间隔调大（见 throttle），而不是只让这一个请求慢下来。
  */
-var netStat = { req: 0, retry: 0, fail: 0, bytes: 0, codes: {} };
+var netStat = { req: 0, retry: 0, fail: 0, bytes: 0, codes: {}, rate: 0 };
+
+// 全局节流：gap 是每个请求之间的最小间隔（毫秒）。吃到 429 就往上抬，
+// 抬上去之后不再自动降回来 —— 这一轮已经证明「试探性加速」的代价是几千次 429。
+var throttle = { gap: BASE_GAP, last: 0 };
+function schedule(fn) {
+  var now = Date.now();
+  var wait = Math.max(0, throttle.last + throttle.gap - now);
+  throttle.last = now + wait;
+  if (wait) setTimeout(fn, wait); else fn();
+}
+
 function getRetry(url, cb) {
   (function attempt(n) {
-    netStat.req++;
-    get(url, function (e, code, body) {
-      netStat.codes[e ? 'ERR' : code] = (netStat.codes[e ? 'ERR' : code] || 0) + 1;
-      if ((e || code >= 500) && n < 5) {
-        netStat.retry++;
-        setTimeout(function () { attempt(n + 1); }, 500 * n);
-        return;
-      }
-      if (e || code !== 200) { netStat.fail++; cb(e || new Error('HTTP ' + code), code, body); return; }
-      netStat.bytes += body.length;
-      cb(null, code, body);
+    schedule(function () {
+      netStat.req++;
+      get(url, function (e, code, body) {
+        netStat.codes[e ? 'ERR' : code] = (netStat.codes[e ? 'ERR' : code] || 0) + 1;
+        var tooFast = e || code === 429 || code >= 500;
+        if (code === 429) {
+          netStat.rate++;
+          // 站点明说慢一点，那就真的慢下来 —— 全局间隔加倍，上限 2 秒。
+          throttle.gap = Math.min(2000, Math.max(throttle.gap * 2, 200));
+        }
+        if (tooFast && n < RETRIES) {
+          netStat.retry++;
+          var wait = code === 429 ? RATE_WAIT * Math.pow(2, n - 1) : 500 * n;
+          setTimeout(function () { attempt(n + 1); }, wait);
+          return;
+        }
+        if (e || code !== 200) {
+          netStat.fail++;
+          cb(e || new Error('HTTP ' + code), code, body);
+          return;
+        }
+        netStat.bytes += body.length;
+        cb(null, code, body);
+      });
     });
   })(1);
 }
@@ -667,6 +718,38 @@ function main() {
     }
 
     var agg = aggregate(all, gears);
+
+    /*
+     * 发射前守卫：**逐个专精**看装备样本够不够。
+     *
+     * 这条是撞出来的。上面那句 `if (!nGear)` 只挡「一个都没有」，
+     * 而第一次全量跑的真实情况是：总共拿到 361 份装备、看着不为 0，
+     * 但 **19 个专精各自是 0**（被 429 挡光了），产物照样写了出来 ——
+     * 一份 40 专精的 rio-data.js 里有 19 个专精的分布是凭空的。
+     *
+     * 「不许静默产出小样本」这条规矩，本来就是我要用 raider.io 换掉
+     * BisData 的全部理由。所以它必须是**工具自己的硬失败**，
+     * 不能只靠事后跑校验器发现。
+     *
+     * 缓存是按角色存的，所以「停下来重跑」很便宜：已经拿到的不会再下。
+     */
+    var MIN_GEAR = Number(opt('--mingear', Math.min(30, TARGET))) || 1;
+    var thinGear = [];
+    Object.keys(agg.specs).forEach(function (sid) {
+      var S = agg.specs[sid];
+      if (S.nGear < MIN_GEAR) {
+        thinGear.push(sid + ' ' + S.cls + '/' + S.specEn + ' 装备 ' + S.nGear + '/' + S.n);
+      }
+    });
+    if (thinGear.length) {
+      console.log('\n装备样本不足 ' + MIN_GEAR + ' 的专精（' + thinGear.length + ' 个）：');
+      thinGear.forEach(function (s) { console.log('  · ' + s); });
+      throw new Error(thinGear.length + ' 个专精的装备样本不足 ' + MIN_GEAR
+        + ' —— 拒绝生成产物。这正是要换掉 BisData 的毛病，不能在新数据源上重演。'
+        + '\n  多半是被 429 限速挡掉了（看上面的状态码分布）。直接重跑同一条命令即可：'
+        + '\n  已经拿到的角色都在 tools/.rio-raw/ 里，不会重复下载。'
+        + '\n  还是不行就再慢一点：--gap 2000 --conc 1');
+    }
     var ids = Object.keys(agg.itemMeta);
     console.log('\n聚合：' + Object.keys(agg.specs).length + ' 个专精，'
       + ids.length + ' 个不同物品');

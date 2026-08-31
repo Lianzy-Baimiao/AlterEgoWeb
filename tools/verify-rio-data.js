@@ -133,7 +133,8 @@ var itemIds = {};
 })();
 
 // ------------------------------------------------------------------ 专精表
-var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSpecN: Infinity };
+var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSpecN: Infinity,
+  minGear: Infinity, gearTotal: 0, zeroGear: [], thinGear: [] };
 (function () {
   var specs = R.specs || {};
   var sids = Object.keys(specs);
@@ -154,6 +155,21 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSp
       fail('专精 ' + sid + ' 的 nGear=' + S.nGear + ' 比 n=' + S.n + ' 还大');
     }
     stat.minSpecN = Math.min(stat.minSpecN, S.n);
+    stat.minGear = Math.min(stat.minGear, S.nGear || 0);
+    stat.gearTotal += S.nGear || 0;
+    // **nGear 才是「这份产物能不能用」的判据。**
+    // n 是榜单上滤出来的人数，nGear 是真的把装备抓下来的人数 —— 两者可以差很远：
+    // 第 13 轮撞 429 限速那次 n 全是 94~100，而 nGear 有 19 个专精是 0，
+    // 校验器却报了「每专精最少 94 人」并放行。一个专精没有装备就没有分布，
+    // 拿这种产物画面板等于骗人，所以这里是**硬失败**，不是警告。
+    ck();
+    if (!S.nGear) {
+      stat.zeroGear.push(sid);
+      fail('专精 ' + sid + '（' + S.cls + '/' + S.specEn + '）一份装备都没抓到'
+        + '（榜上有 ' + S.n + ' 人）—— 这种专精不该出现在产物里');
+    } else if (S.nGear < 30) {
+      stat.thinGear.push(sid + ':' + S.nGear);
+    }
 
     // 天赋串：榜上实测 98~100% 的人带串，所以串数不该远少于人数。
     var lo = S.loadouts || [];
@@ -237,9 +253,13 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSp
 (function () {
   // 这些不是格式错误，是**数据够不够用**的问题，所以走警告。
   // 比例统计在 N=100 时 95% 置信区间约 ±10%，N<30 时宽到没法给结论。
-  if (stat.minSpecN < 30) {
-    warn('最小的专精只有 ' + stat.minSpecN + ' 个样本（N<30 时百分比没有参考价值，'
-      + '正式产物该用 --target 100）');
+  if (stat.minGear < 30) {
+    warn('装备样本最少的专精只有 ' + stat.minGear + ' 人（N<30 时百分比没有参考价值，'
+      + '正式产物该抓够 100 人）');
+  }
+  if (stat.thinGear.length) {
+    warn(stat.thinGear.length + ' 个专精的装备样本不足 30：'
+      + stat.thinGear.slice(0, 8).join('，') + (stat.thinGear.length > 8 ? ' …' : ''));
   }
   if (stat.specs < 40) {
     warn('只有 ' + stat.specs + '/40 个专精 —— 是试跑产物吗？');
@@ -251,8 +271,12 @@ console.log('校验       ' + path.relative(BASE, dataPath));
 console.log('数据       v' + R.v + '   ' + R.updatedAt + '   ' + R.season);
 console.log('规模       ' + stat.specs + ' 专精 / ' + Object.keys(R.items || {}).length
   + ' 件 / ' + stat.slots + ' 部位组 / ' + stat.rows + ' 行 / ' + stat.loadouts + ' 条天赋串');
-console.log('样本量     每专精最少 ' + (stat.minSpecN === Infinity ? '?' : stat.minSpecN)
-  + ' 人，每部位最少 ' + (stat.minSlotN === Infinity ? '?' : stat.minSlotN) + ' 人');
+// 两个数都打出来。只打 n 会把「榜上有 100 人」说成「有 100 人的装备」——
+// 那是第 13 轮真实发生过的误报。
+console.log('榜单样本   每专精最少 ' + (stat.minSpecN === Infinity ? '?' : stat.minSpecN) + ' 人');
+console.log('装备样本   每专精最少 ' + (stat.minGear === Infinity ? '?' : stat.minGear)
+  + ' 人，合计 ' + stat.gearTotal + ' 人，每部位最少 '
+  + (stat.minSlotN === Infinity ? '?' : stat.minSlotN) + ' 人');
 console.log('检查项     ' + checks);
 
 if (warns.length) {
