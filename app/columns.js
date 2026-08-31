@@ -476,11 +476,14 @@
         },
         sort: function (ch) {
           var r = ch.raids.byKey[rc.key];
-          return r ? r.progress : -1;
+          return r && r.active ? r.progress : -1;
         },
         render: function (td, ch) {
           var r = ch.raids.byKey[rc.key];
-          if (!r) return dash(td);
+          // 过期残留当成「本周没打」。存档里的锁定快照只在角色上线时更新，
+          // 所以上个周期的 8/8 会一直躺在里面。只看 progress 就会把它画成
+          // 本周打满了。
+          if (!r || !r.active) return dash(td);
           td.textContent = r.progress + '/' + r.total;
           if (r.progress >= r.total && r.total > 0) td.className += ' full';
           else if (r.progress > 0) td.className += ' partial';

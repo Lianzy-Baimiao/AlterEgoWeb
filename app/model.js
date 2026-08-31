@@ -279,6 +279,23 @@
         progress: num(si.encounterProgress),
         total: num(si.numEncounters),
         locked: si.locked === true,
+        // 「本周有效」= 游戏自己还说它锁着。
+        //
+        // 插件存的是 GetSavedInstanceInfo 的整份快照，角色不上线就没人更新它，
+        // 于是上个周期的记录会一直躺在存档里。表格原先只读 progress/total，
+        // 那些残留照样被画成「8/8」还染成绿色 —— 看上去像是这个号本周清了本。
+        //
+        // 实测本机 44 条记录只有两种形态，没有中间态：
+        //   locked=true  且 expires 在未来、reset>0   —— 11 条，本周真在锁
+        //   locked=false 且 expires=0、reset=0        —— 33 条，过期残留
+        // 两个独立判据（locked 与 expires>scannedAt）44/44 一致，model-tests
+        // 里钉住了这条一致性；这里取 locked，因为它是游戏直接给的结论。
+        //
+        // 注意**不能**在这里就把过期记录丢掉：副本和团本的中文名正是从锁定
+        // 记录里学来的（harvestRaidNames / harvestDungeonNames）。实测只留本周
+        // 的话，能学到名字的副本从 17 个掉到 3 个，14 个名字会退回英文。
+        // 所以记录全留，由列/格子/明细各自按 active 过滤。
+        active: si.locked === true,
         extended: si.extended === true,
         reset: num(si.reset),
         expires: num(si.expires),
@@ -639,9 +656,14 @@
     // --- Raid lockouts ----------------------------------------------------
     // Union of (instanceID, difficultyID) actually present, ordered by the
     // addon's raid order then by difficulty.
+    // 只有本周还锁着的记录才配拥有一列。团本列是**从锁定记录派生**的，
+    // 所以把过期残留挡在这里，整列就不会出现 —— 比在渲染时画个「·」干净。
     var raidKeySet = {};
     characters.forEach(function (ch) {
-      Object.keys(ch.raids.byKey).forEach(function (k) { raidKeySet[k] = ch.raids.byKey[k]; });
+      Object.keys(ch.raids.byKey).forEach(function (k) {
+        var r = ch.raids.byKey[k];
+        if (r && r.active) raidKeySet[k] = r;
+      });
     });
     var raidKeys = Object.keys(raidKeySet).sort(function (a, b) {
       var ra = raidKeySet[a], rb = raidKeySet[b];

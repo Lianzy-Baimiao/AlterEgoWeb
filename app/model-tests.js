@@ -290,6 +290,64 @@
       return anyDungeonLockout ? true : true;
     });
 
+    // ---- 「只显示本周的」这一组 -------------------------------------------
+    // 原先表格只读 progress/total，把过期的锁定快照画成了本周进度：一个号
+    // 上个周期打的 8/8 会一直显示成绿色满进度，看起来像本周清了本。
+    // 存档里的锁定快照只在角色上线时更新，所以不上线的号永远停在旧值。
+
+    t('active 与 expires 两个独立判据完全一致', function () {
+      // 判据取的是 locked（游戏直接给的结论），但必须证明它和「过期时间还没到」
+      // 说的是同一件事 —— 否则 active 可能只是恒真/恒假的摆设。
+      // 实测本机 44 条记录只有两种形态，没有中间态。
+      var n = 0, bad = [];
+      m.characters.forEach(function (ch) {
+        var all = ch.raids.dungeonLockouts.concat(
+          Object.keys(ch.raids.byKey).map(function (k) { return ch.raids.byKey[k]; }));
+        all.forEach(function (r) {
+          n++;
+          var byExpiry = r.expires > m.scannedAt;
+          if (r.active !== byExpiry) {
+            bad.push(r.name + '/' + r.difficultyName + ' active=' + r.active
+              + ' expires=' + r.expires + ' scannedAt=' + m.scannedAt);
+          }
+        });
+      });
+      if (!n) return '一条锁定记录都没有，这条断言等于没跑';
+      return bad.length === 0 || (n + ' 条里有 ' + bad.length + ' 条两个判据不一致: '
+        + bad.slice(0, 3).join('; '));
+    });
+
+    t('团本列只从本周还锁着的记录派生', function () {
+      // 列是从锁定记录派生的，所以过滤必须发生在建列的时候：
+      // 一个所有角色都已过期的副本，不该继续占着一列。
+      if (!m.columns.raidColumns.length) return '没有团本列可验证';
+      var bad = [];
+      m.columns.raidColumns.forEach(function (rc) {
+        var anyActive = m.characters.some(function (ch) {
+          var r = ch.raids.byKey[rc.key];
+          return r && r.active;
+        });
+        if (!anyActive) bad.push(rc.name + '/' + rc.difficultyName);
+      });
+      return bad.length === 0 || ('这些列没有任何角色本周还锁着: ' + bad.join(', '));
+    });
+
+    t('过期的锁定记录仍然留在模型里（中文名要靠它）', function () {
+      // 不能在 mapRaids 里就把过期记录丢掉：副本和团本的中文名正是从锁定记录
+      // 里学来的。实测只留本周的话，能学到名字的副本从 17 个掉到 3 个。
+      // 所以「留着记录、各消费端按 active 过滤」是有意的，这条钉住它。
+      var kept = 0;
+      m.characters.forEach(function (ch) {
+        var all = ch.raids.dungeonLockouts.concat(
+          Object.keys(ch.raids.byKey).map(function (k) { return ch.raids.byKey[k]; }));
+        all.forEach(function (r) { if (!r.active) kept++; });
+      });
+      if (!kept) return '本机数据里没有过期记录，这条断言等于没跑';
+      // 有过期记录，就必须仍然学得到中文名。
+      var names = Object.keys(m.raidNames).length;
+      return names > 0 || '留着 ' + kept + ' 条过期记录，却一个团本中文名都没学到';
+    });
+
     t('藏宝图三个状态都读到了', function () {
       var withMap = m.characters.filter(function (c) { return c.treasureMap; });
       if (!withMap.length) return '没有角色有 delveMap 记录（本周登录过角色才会有）';

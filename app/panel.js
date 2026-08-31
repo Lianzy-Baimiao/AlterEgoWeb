@@ -1027,8 +1027,10 @@
       body.appendChild(dl);
     }
 
-    // -- raid lockouts
-    var raidKeys = Object.keys(ch.raids.byKey);
+    // -- raid lockouts（只列本周还锁着的；过期残留见 model.js 里 active 那段注释）
+    var raidKeys = Object.keys(ch.raids.byKey).filter(function (k) {
+      return ch.raids.byKey[k].active;
+    });
     if (raidKeys.length) {
       body.appendChild(el('h3', null, '团队副本进度'));
       raidKeys.forEach(function (k) {
@@ -1046,13 +1048,16 @@
 
     // -- dungeon lockouts (heroic/mythic/timewalking) are kept out of the raid
     //    columns but are still worth showing here.
-    if (ch.raids.dungeonLockouts.length) {
+    var activeDungeonLockouts = ch.raids.dungeonLockouts.filter(function (d) {
+      return d.active;
+    });
+    if (activeDungeonLockouts.length) {
       body.appendChild(el('h3', null, '地下城锁定'));
       var dt = el('table', 'mini-table');
       var dhr = el('tr');
       ['副本', '难度', '进度'].forEach(function (h) { dhr.appendChild(el('th', null, h)); });
       dt.appendChild(dhr);
-      ch.raids.dungeonLockouts.forEach(function (d2) {
+      activeDungeonLockouts.forEach(function (d2) {
         var tr = el('tr');
         tr.appendChild(el('td', null, d2.name));
         tr.appendChild(el('td', null, d2.difficultyName));
