@@ -936,6 +936,93 @@ VERIFIERS.forEach(function (v) {
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
 
+// ----------------------------------------------------------------------- 并发池
+// fetch-rio.js 的 pool() 有一个**只在缓存全命中时才炸**的坑，本轮实测踩到：
+// worker 平时异步回调（发请求），缓存命中时**同步**回调，于是 next() 在同步回调里
+// 再调 next()，栈深度跟条目数同阶。`--offline` 跑 3994 个角色到第 1539 个就
+// Maximum call stack size exceeded —— 也就是**缓存越全越容易崩**，
+// 而「全用缓存」正是这套缓存存在的理由（断点续抓、离线重新产出）。
+//
+// 这条测试用的条目数 5000 是有来由的：修复前实测崩在第 3384 条，
+// 取一个明显超过它的数，才能保证这条断言真的压得到那个坑。
+(function () {
+  var RIO;
+  try { RIO = require('./fetch-rio.js'); } catch (e) {
+    problems.push('并发池：require fetch-rio.js 失败：' + e.message);
+    console.log(pad('并发池') + '加载失败');
+    return;
+  }
+  if (typeof RIO.pool !== 'function') {
+    problems.push('并发池：fetch-rio.js 没有导出 pool()，回归测试压不到东西');
+    console.log(pad('并发池') + '没有 pool');
+    return;
+  }
+  // 状态行必须和断言看同一份数据。第一版只看 crashed，结果「done 多调一次」
+  // 这个变异明明被 doneCount 断言抓到了（problems 里有、退出码 1），
+  // 这一行却照样印「通过」—— 状态行说的和断言查的不是一回事，就是假绿。
+  var before = problems.length;
+  var N = 5000, checks = 0;
+
+  // 这条测试的力量全在 N 上：修复前实测崩在第 3384 条，N 必须明显超过它。
+  // 没有这条下限，以后谁把 N 调小一点，这条断言就会变成一个永远绿的空测试 ——
+  // 「不炸栈」在 100 条的时候本来就不炸。
+  if (N <= 3384) {
+    problems.push('并发池：条目数太少（' + N + '），压不到那个坑'
+      + '（修复前实测崩在第 3384 条，N 必须明显大于它）');
+  }
+
+  // 甲：同步 worker（= 缓存全命中）。要求走完、顺序不重不漏、done 只调一次。
+  var seen = [], doneCount = 0, crashed = null;
+  try {
+    RIO.pool(new Array(N).join(',').split(',').map(function (_, i) { return i; }),
+      1,
+      function (it, cb) { seen.push(it); cb(); },
+      function () { doneCount++; });
+  } catch (e) { crashed = e; }
+
+  if (crashed) {
+    problems.push('并发池：同步 worker 跑 ' + N + ' 条崩了（'
+      + crashed.message + '），走到第 ' + seen.length + ' 条。'
+      + '这正是「缓存全命中导致栈溢出」那个坑');
+  } else {
+    checks++;
+    if (seen.length !== N) {
+      problems.push('并发池：同步 worker 只走了 ' + seen.length + ' 条，应该是 ' + N);
+    }
+    checks++;
+    var ordered = true;
+    for (var i = 0; i < seen.length; i++) if (seen[i] !== i) { ordered = false; break; }
+    if (!ordered) problems.push('并发池：同步 worker 的条目重了或漏了');
+    checks++;
+    if (doneCount !== 1) {
+      problems.push('并发池：同步 worker 的 done 调了 ' + doneCount + ' 次，应该正好 1 次');
+    }
+  }
+
+  // 乙：异步 worker（= 真发请求）。同一份实现两条路都得对，
+  // 否则「修好同步那条、弄坏异步那条」会静默通过。
+  var aSeen = 0, aDone = 0;
+  RIO.pool([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3,
+    function (it, cb) { aSeen++; setTimeout(cb, 0); },
+    function () { aDone++; });
+  // setTimeout 还没跑完，这里只能断言「已经派出去了并发上限那么多」——
+  // 派出 3 个正是并发度 3 的意思，派出 10 个就说明并发限制没生效。
+  checks++;
+  if (aSeen !== 3) {
+    problems.push('并发池：并发度 3 应该先派出 3 个 worker，实际派出 ' + aSeen);
+  }
+
+  if (checks < 4) problems.push('并发池：只跑到 ' + checks + ' 项检查，测试没跑起来');
+  // 括号里印**实测到的数**，不是「应该怎样」的口号。
+  // 上一版写死了「不炸栈，done 一次，并发度生效」，结果 done 被调两次时
+  // 这行照样自夸「done 一次」—— 断言红了、自述还在说好话，两边数据不同源。
+  console.log(pad('并发池')
+    + (crashed ? '崩了' : (problems.length > before ? '有问题' : '通过'))
+    + '（同步 worker ' + N + ' 条走完 ' + seen.length + '，顺序'
+    + (ordered ? '不重不漏' : '有重漏') + '，done ' + doneCount + ' 次，'
+    + '并发度 3 实际派出 ' + aSeen + '）');
+})();
+
 // ------------------------------------------------------------------- 打包一致性
 // tools/ 是被**整个目录递归复制**进发布包的，.gitignore 管不到它。
 // 所以任何**测试专用**的工具都必须写进 build-release.ps1 的 $dropFromPkg，
@@ -1081,6 +1168,6 @@ if (problems.length) {
 var bad = total.fail + problems.length;
 console.log(bad === 0
   ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 三项格式校验'
-    + ' + 天赋串解码对真值 + 打包一致性'
+    + ' + 天赋串解码对真值 + 并发池 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

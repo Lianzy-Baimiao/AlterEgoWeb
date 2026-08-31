@@ -103,9 +103,9 @@ var BASE_GAP = Number(opt('--gap', 1100));
 var RATE_WAIT = Number(opt('--ratewait', 65000));
 var RETRIES = Number(opt('--retries', 8)) || 8;
 
-var NAMES_DIR = path.join(__dirname, '.db2-names');
-var ITEM_CSV = path.join(NAMES_DIR, 'ItemSparse.csv');
-var ITEM_CSV_URL = 'https://wago.tools/db2/ItemSparse/csv?locale=zhCN';
+// DB2 中文名表的路径 / URL 在下面 downloadItemCsv 那一段声明（DB2_DIR / ITEM_CSV /
+// ITEM_CSV_URL）。这里原本还有一份一模一样的声明，值相同所以一直没报错，
+// 但顶层重复 var 是真缺陷 —— 已删。
 
 /**
  * rio 的英文槽位名 → 暴雪槽位编号。
@@ -243,18 +243,37 @@ function getRetry(url, cb) {
   })(1);
 }
 
+/**
+ * 并发池。
+ *
+ * **这里有一个只在「缓存全命中」时才会炸的坑，实测踩到过。**
+ * `worker` 平时是异步回调（发请求），但缓存命中时它**同步**就回调了。
+ * 同步回调里再调 `next()`，`next()` 又同步启动下一个 —— 栈就一层层往下压，
+ * 深度跟条目数同阶。实测 `--offline` 跑 3994 个角色，到第 1539 个
+ * `Maximum call stack size exceeded`。也就是说：**缓存越全越容易崩**，
+ * 而「全用缓存」正是这套缓存存在的理由（断点续抓、离线重新产出）。
+ *
+ * 修法不是加大栈，而是**不让嵌套的 next() 递归**：嵌套进来只置一个标记就返回，
+ * 由最外层那个 while 继续推进，栈深恒定。
+ */
 function pool(items, n, worker, done) {
-  var i = 0, active = 0, finished = 0;
+  var i = 0, active = 0, finished = 0, inLoop = false, again = false;
   function next() {
-    while (active < n && i < items.length) {
-      var it = items[i++];
-      active++;
-      worker(it, function () {
-        active--; finished++;
-        if (finished === items.length) { done(); return; }
-        next();
-      });
-    }
+    if (inLoop) { again = true; return; }
+    inLoop = true;
+    do {
+      again = false;
+      while (active < n && i < items.length) {
+        var it = items[i++];
+        active++;
+        worker(it, function () {
+          active--; finished++;
+          if (finished === items.length) { done(); return; }
+          next();
+        });
+      }
+    } while (again);
+    inLoop = false;
   }
   if (!items.length) { done(); return; }
   next();
@@ -603,7 +622,10 @@ module.exports = {
   loadSpecs: loadSpecs, collectSpec: collectSpec, profile: profile,
   rankPage: rankPage, netStat: netStat, CACHE: CACHE, OUT: OUT,
   aggregate: aggregate, emit: emit, itemNames: itemNames,
-  splitCsv: splitCsv, SLOT_MAP: SLOT_MAP
+  splitCsv: splitCsv, SLOT_MAP: SLOT_MAP,
+  // pool 导出只为一个用途：run-tests.js 要能拿同步 worker 压它，
+  // 复现「缓存全命中 → 栈溢出」那个坑。不导出就没法写回归测试。
+  pool: pool
 };
 
 // ---------------------------------------------------------------------- main

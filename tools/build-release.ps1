@@ -82,7 +82,8 @@ $dropFromPkg = @(
     'tools\mutate-pkg.js',     # mutation suite for the packaging guard itself; needs run-tests.js
     'tools\mutate-icons.js',   # mutation suite for the talent-icon assertions
     'tools\mutate-loadout.js', # mutation suite for the talent import-string assertions
-    'tools\mutate-rio.js'      # mutation suite for the raider.io data assertions
+    'tools\mutate-rio.js',     # mutation suite for the raider.io data assertions
+    'tools\mutate-pool.js'     # mutation suite for the fetch-rio pool() regression test
 )
 foreach ($f in $dropFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $f) -Force -ErrorAction SilentlyContinue
