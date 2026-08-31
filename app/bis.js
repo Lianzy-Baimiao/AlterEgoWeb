@@ -37,7 +37,7 @@
   var state = {
     tab: 'gear',        // 'gear' | 'talents'
     key: '',            // 'DEATHKNIGHT/BLOOD/Deathbringer'
-    view: 'raid',       // 'raid' | 'mplus'
+    view: 'raid',       // 'raid' | 'mplus' | 'rio'（rio = raider.io 实战分布）
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
     build: -1           // 天赋树画哪一套，-1 = 该类别里用得最多的那套
@@ -45,6 +45,7 @@
 
   var gearLoaded = false, gearLoading = false;
   var talLoaded = false, talLoading = false;
+  var rioLoaded = false, rioLoading = false;
 
   // ------------------------------------------------------------------ 小工具
 
@@ -113,6 +114,58 @@
   // --------------------------------------------------------------- 数据整理
 
   function bis() { return global.AE_BIS || null; }
+
+  /**
+   * raider.io 的实战装备分布（app/rio-data.js，实测 849.3 KB）。
+   *
+   * **和 BisData 是并存关系，不是替换。** 两边各有对方没有的东西，实测过：
+   *   · rio 独有：**每个部位自己的样本量**（BisData 一个样本量字段都没有）、
+   *     **不截断的完整分布**（实测覆盖率中位数 100%，BisData 只有 69.7%/75.2%）、
+   *     物品图标名 + 品质 + 插槽标记。
+   *   · BisData 独有：属性权重、单体/多目标、武器类型、宝石、附魔、掉落来源、
+   *     升级轨道、团本视角 —— raider.io 的 profile 里没有这些。
+   * 所以面板给 rio 单独开一个视角，而不是把 BisData 拆了。
+   */
+  function rio() { return global.AE_RIO || null; }
+
+  /** specId -> rio 里那个专精的数据。rio 的 specs 是**纯 specId 键**（BisData 是三段键）。 */
+  function rioSpec(specId) {
+    var R = rio();
+    if (!R || !R.specs) return null;
+    return R.specs[String(specId)] || null;
+  }
+
+  /**
+   * rio 的一个专精 -> 面板要的形状。
+   *
+   * rio 的行是 `[itemId, 人数, 平均装等]`，面板原有的行是
+   * `[itemId, 装等, 使用率, 来源下标, 可升级上限, 轨道码]`。这里转成后者的形状，
+   * 好让 renderItem 只有一套：**使用率由「人数 / 该部位样本量」算出来**，
+   * 来源下标写 -1 当标记（rio 没有掉落来源），并把原始人数放在第 6 位。
+   *
+   * 为什么不在生成器里存百分比：百分比是**导出量**，人数和样本量才是原始量。
+   * 存原始量的好处是校验器能验「人数之和 == 样本量」这条恒等式 —— 存百分比就验不了了。
+   */
+  function rioSlots(rs) {
+    var rows = {}, ns = {};
+    if (!rs || !rs.slots) return { rows: rows, n: ns };
+    Object.keys(rs.slots).forEach(function (k) {
+      var b = rs.slots[k];
+      if (!b || !b.n || !b.d) return;
+      ns[k] = b.n;
+      rows[k] = b.d.map(function (r) {
+        return [r[0], r[2], r[1] * 100 / b.n, -1, 0, 0, r[1]];
+      });
+    });
+    return { rows: rows, n: ns };
+  }
+
+  /** rio 的物品元数据 {n 中文名, i 图标名, q 品质, sock 插槽数}。 */
+  function rioItem(itemId) {
+    var R = rio();
+    if (!R || !R.items) return null;
+    return R.items[String(itemId)] || null;
+  }
   function talents() { return global.AE_TALENTS || null; }
   function tree() { return global.AE_TALENT_TREE || null; }
 
@@ -227,8 +280,15 @@
     img.width = size;
     img.height = size;
     // 图标文件缺一个不该让整行塌掉，也不该留一个碎图标记。
+    //
+    // 换到 rio 视角后这条分支**经常走到**：rio 有 2432 件物品，而包里
+    // app/icons/ 只有 462 张图（实测能对上文件的 966/2432 = 39.7%）。
+    // 所以图没了以后要把外面那个格子变回占位块，否则会留一个空洞。
     img.addEventListener('error', function () {
-      if (img.parentNode) img.parentNode.removeChild(img);
+      var p = img.parentNode;
+      if (!p) return;
+      p.removeChild(img);
+      if (p.className === 'icon') { p.className = 'icon ph'; p.textContent = '?'; }
     });
     return img;
   }
@@ -431,17 +491,35 @@
     var s = currentSpec();
     if (!s) { host.appendChild(el('p', 'note', '没有这个专精的数据。')); return; }
 
-    setSub('数据 ' + (B.updatedAt || '?') + '　' + (s.zone || ''));
+    // 副标题要说清「你现在看的是哪份数据」——两份数据的日期和范围都不一样，
+    // 混着显示一个日期是在撒谎。
+    var subRs = state.view === 'rio' ? rioSpec(s.specId) : null;
+    if (subRs) {
+      var R = rio();
+      setSub('数据 ' + ((R && R.updatedAt) || '?') + '　raider.io '
+        + ((R && R.season) || '?') + '　样本 ' + (subRs.nGear || 0) + ' 人');
+    } else {
+      setSub('数据 ' + (B.updatedAt || '?') + '　' + (s.zone || ''));
+    }
 
     // ---- 视角 + 角色对照
     var bar = el('div', 'bis-bar');
     var viewWrap = el('span', 'seg');
-    [['raid', '团本视角'], ['mplus', '大秘境视角']].forEach(function (v) {
+    var VIEWS = [
+      ['raid', '团本视角', '来自 GearInsight 的团本参照表'],
+      ['mplus', '大秘境视角', '来自 GearInsight 的大秘境参照表'],
+      ['rio', '实战分布', 'raider.io 大秘境排行榜上真实角色的装备统计，每个部位都带样本量']
+    ];
+    VIEWS.forEach(function (v) {
+      // rio 视角只有在 app/rio-data.js 真的加载进来、而且这个专精有数据时才给。
+      // 画一个点不下去的按钮比不画更糟。
+      if (v[0] === 'rio' && !rioSpec(s.specId)) return;
       var b = button(v[1], state.view === v[0] ? 'on' : null, function () {
         state.view = v[0];
         persist({ bisView: v[0] });
         render();
       });
+      b.setAttribute('data-tip', v[2]);
       viewWrap.appendChild(b);
     });
     bar.appendChild(viewWrap);
@@ -477,11 +555,18 @@
     }
     host.appendChild(bar);
 
+    // rio 视角走另一份数据：它的行形状不同（人数而不是百分比），所以先转一次。
+    var rs = state.view === 'rio' ? rioSpec(s.specId) : null;
+    var conv = rs ? rioSlots(rs) : null;
+
     host.appendChild(renderSpecMeta(s));
-    host.appendChild(renderStatTargets(s));
+    // 属性权重 / 达成度是 **GearInsight 独有的**，raider.io 的角色档案里没有。
+    // rio 视角下不画它 —— 脚注明写了「这个视角没有属性权重」，一边这么写一边
+    // 把另一个数据源的权重摆在上面，那句话就成了假话。
+    if (!rs) host.appendChild(renderStatTargets(s));
 
     // ---- 部位
-    var slots = s[state.view] || {};
+    var slots = conv ? conv.rows : (s[state.view] || {});
     var ch = currentChar();
     var list = el('div', 'bis-slots');
     var missing = 0, matched = 0, unknown = 0;
@@ -504,7 +589,7 @@
         else if (hit) matched++;
         else missing++;
       }
-      list.appendChild(renderSlot(slotId, rows, mine, hit));
+      list.appendChild(renderSlot(slotId, rows, mine, hit, conv ? conv.n[slotId] : null));
     });
     host.appendChild(list);
 
@@ -521,8 +606,9 @@
       host.insertBefore(sum, list);
     }
 
-    host.appendChild(renderExtras(s));
-    host.appendChild(renderFootnote());
+    // 宝石 / 附魔同理，只有 GearInsight 有。
+    if (!rs) host.appendChild(renderExtras(s));
+    host.appendChild(renderFootnote(s));
   }
 
   function renderSpecMeta(s) {
@@ -615,30 +701,52 @@
     return 'rgb(' + b(c.r) + ',' + b(c.g) + ',' + b(c.b) + ')';
   }
 
-  function renderSlot(slotId, rows, mine, hit) {
+  /**
+   * 一个部位。sampleN 是**真实样本量**，只有 rio 视角给得出来。
+   *
+   * 这两种数据的诚实说法不一样，所以徽章分两种：
+   *   · rio：直接显示 `N=97` —— 这是 G3 换数据源要解决的核心问题。
+   *     BisData 一个样本量字段都没有（原始 Lua 就没有，不是转换时丢的），
+   *     「81%」背后是 5 个人还是 500 个人查不到。
+   *   · BisData：只能显示覆盖率（列出来那几件的使用率之和），并说明列表被截断了。
+   *     本机实测 1264 个部位组里，覆盖率中位数只有 72.9%，206 组不到 50%。
+   */
+  function renderSlot(slotId, rows, mine, hit, sampleN) {
     var B = bis();
     var wrap = el('div', 'slot');
 
     var head = el('div', 'slot-head');
     head.appendChild(el('b', null, B.slotNames[slotId] || ('部位 ' + slotId)));
 
-    // 覆盖率 = 这个部位列出来的几件的使用率之和。
-    //
-    // 为什么要显示它：数据里**没有任何样本量字段**（原始 Lua 就没有，不是转换时丢的），
-    // 所以「81%」背后是 5 个人还是 500 个人，谁也不知道。退一步至少能说清另一件事 ——
-    // 列表是被截断的。本机实测 1264 个部位组里，使用率之和的中位数只有 72.9%，
-    // 有 206 组不到 50%。也就是说很多部位「剩下一半人穿的是什么」根本没在数据里。
-    // 不显示的话，用户看到三件候选很容易以为那就是全部。
     var sum = 0;
     rows.forEach(function (r) { sum += (typeof r[2] === 'number' ? r[2] : 0); });
     sum = Math.round(sum * 10) / 10;
-    var cov = el('span', 'tag cov' + (sum < 50 ? ' no' : ''), '记录 ' + pct(sum));
-    cov.setAttribute('data-tip',
-      '这 ' + rows.length + ' 件加起来占顶尖玩家的 ' + pct(sum) + '。'
-      + (sum < 99.5 ? '\n剩下的 ' + pct(Math.round((100 - sum) * 10) / 10)
-                      + ' 穿的是什么，数据里没有。' : '')
-      + '\n另外：这份数据不带样本量，所以百分比背后是几个人也查不到。');
-    head.appendChild(cov);
+
+    if (sampleN) {
+      // 有真实样本量：显示 N，并按统计学的老规矩提醒 N 太小的时候别当结论。
+      // 30 这个界不是我拍的 —— 比例统计在 N=100 时 95% 置信区间约 ±10%，
+      // N<30 时宽到没法给结论，校验器里用的也是同一个界。
+      // class 里带 sn（sample N）：run-tests.js 靠它区分两种徽章该用哪条格式断言。
+      // 只留 cov 的话，「N=97」会被当成不合格的「记录 xx%」，或者反过来 ——
+      // 两种文字共用一条正则，等于两边都验不住。
+      var nb = el('span', 'tag cov sn' + (sampleN < 30 ? ' no' : ''), 'N=' + sampleN);
+      nb.setAttribute('data-tip',
+        '这个部位是从 ' + sampleN + ' 个玩家身上数出来的，列出了全部 '
+        + rows.length + ' 种（百分比之和 ' + pct(sum) + '）。'
+        + (sampleN < 30
+          ? '\n样本不到 30，百分比只能当参考。'
+          : '\n每个部位的样本量是各自算的 —— 有人没副手，各部位人数本来就不一样。'));
+      head.appendChild(nb);
+    } else {
+      var cov = el('span', 'tag cov' + (sum < 50 ? ' no' : ''), '记录 ' + pct(sum));
+      cov.setAttribute('data-tip',
+        '这 ' + rows.length + ' 件加起来占顶尖玩家的 ' + pct(sum) + '。'
+        + (sum < 99.5 ? '\n剩下的 ' + pct(Math.round((100 - sum) * 10) / 10)
+                        + ' 穿的是什么，数据里没有。' : '')
+        + '\n另外：这份数据不带样本量，所以百分比背后是几个人也查不到。'
+        + '\n换到「实战分布」视角能看到真实样本量。');
+      head.appendChild(cov);
+    }
 
     if (mine) {
       var m = el('span', 'mine' + (hit ? ' ok' : ''));
@@ -671,19 +779,33 @@
 
   // 部位条目：[itemId, ilvl, 使用率, 来源下标, 可升级上限, 轨道码]
   // 后两位可能被生成器省掉（末尾的 0 会被去掉），但不会跳着省。
+  //
+  // **rio 视角多一位**：`[…, 轨道码, 人数]`，而且来源下标固定是 **-1**。
+  // 用 -1 当标记而不是 undefined，是为了让「rio 的行」和「BisData 里来源下标为 0
+  // 的行」区分得开 —— 0 是一个合法下标（srcs[0] 是真的来源），拿假值判断会把它吞掉。
   function renderItem(r, isTop, mine) {
     var B = bis();
     var itemId = r[0], ilvl = r[1], usage = r[2], srcIdx = r[3], mx = r[4], trk = r[5];
+    var isRio = srcIdx === -1, people = r[6];
+
+    // 物品元数据两边都有，但**各有各的洞**，所以按视角取，取不到再退到另一边：
+    //   · rio 自带中文名 / 图标名 / 品质（2432 件，实测中文名 100%）；
+    //   · BisData 只有中文名 + 属性，图标和品质要另查 app/item-icons.js。
+    // 实测两边都有的 497 件里，品质一致 494（99.4%）、图标名一致 496（99.8%），
+    // 所以混用不会打架；不一致的那几件按当前视角自己的数据显示。
+    var ri = isRio ? rioItem(itemId) : null;
     var it = B.items[itemId] || {};
-    var src = B.srcs[srcIdx] || [];
+    var src = isRio ? [] : (B.srcs[srcIdx] || []);
     var srcText = src[0] || '', cat = src[1] || '', boss = src[2] || '';
 
     var row = el('div', 'item' + (isTop ? ' top' : ''));
     if (mine && mine.itemId === itemId) row.classList.add('have');
 
-    // 图标：包里有图就出图，没有就出一个按来源上色的占位块。
+    // 图标：包里有图就出图，没有就出一个占位块。
+    // rio 的物品自带图标名，所以这里把它当 fallback 传进去 —— app/item-icons.js
+    // 只覆盖了 rio 物品的 20.4%（497/2432），不传的话大部分行都会是占位块。
     var icon = el('span', 'icon');
-    var img = iconImg(itemId, 24);
+    var img = iconImg(itemId, 24, ri ? ri.i : '');
     if (img) {
       icon.appendChild(img);
     } else {
@@ -694,12 +816,22 @@
     row.appendChild(icon);
 
     var main = el('span', 'im');
-    var name = el('b', null, it.n || ('物品 ' + itemId));
-    // 品质来自 app/item-icons.js（BisData 自己没有这个字段）。查不到就不上色，
-    // 而不是默认紫色 —— 默认紫会把蓝色附魔和白色合剂都染错。
-    var q = itemQuality(itemId);
+    var name = el('b', null, (ri && ri.n) || it.n || ('物品 ' + itemId));
+    // 品质：rio 自带 q；BisData 没有这个字段，要查 app/item-icons.js。
+    // 查不到就不上色，而不是默认紫色 —— 默认紫会把蓝色附魔和白色合剂都染错。
+    var q = ri && ri.q != null ? ri.q : itemQuality(itemId);
     if (q != null && L.qualityColors[q]) name.style.color = L.qualityColors[q];
     main.appendChild(name);
+
+    // 插槽标记。这是 B6 卡了很久的东西：BisData 只存 bonusIDs，要判断「这件有没有
+    // 插槽」得拿 raidbots 的 116 个插槽 bonusID 清单去比。rio 的 profile 直接给
+    // bonuses，生成器已经解成 sock（实测 494 件带插槽），所以这里白拿。
+    if (ri && ri.sock) {
+      var sk = el('span', 'tag sock', ri.sock > 1 ? '插槽 ×' + ri.sock : '插槽');
+      sk.setAttribute('data-tip', '这件装备带 ' + ri.sock + ' 个插槽'
+        + '（从 raider.io 给的 bonusID 解出来的）');
+      main.appendChild(sk);
+    }
 
     var sub = el('span', 'sub2');
     sub.textContent = String(ilvl) + (mx && mx > ilvl ? '→' + mx : '');
@@ -730,11 +862,15 @@
     }
     row.appendChild(main);
 
-    var badge = el('span', 'tag', B.sourceCategories[cat] || cat || '?');
-    badge.style.borderColor = catColor(cat);
-    badge.style.color = catColor(cat);
-    badge.setAttribute('data-tip', srcText || '来源未知');
-    row.appendChild(badge);
+    // 来源徽章。**rio 没有掉落来源**（profile 只说角色身上穿着什么，不说哪掉的），
+    // 所以这里不能编一个「其他」出来 —— 那会让人以为查过了。写「?」并在提示里说清。
+    if (!isRio) {
+      var badge = el('span', 'tag', B.sourceCategories[cat] || cat || '?');
+      badge.style.borderColor = catColor(cat);
+      badge.style.color = catColor(cat);
+      badge.setAttribute('data-tip', srcText || '来源未知');
+      row.appendChild(badge);
+    }
 
     var u = el('span', 'usage');
     var track = el('span', 'track');
@@ -743,15 +879,22 @@
     track.appendChild(fill);
     u.appendChild(track);
     u.appendChild(el('span', 'n', pct(usage)));
-    u.setAttribute('data-tip', '顶尖玩家里有 ' + pct(usage) + ' 的人这个部位用它'
-      + (boss ? '\n掉落：' + boss : '')
-      + (srcText ? '\n' + srcText : ''));
+    // rio 的提示带**分子分母**：「12/97 人」比「12.4%」可查证得多，
+    // 而这正是换数据源的理由 —— BisData 那边只能给一个没有分母的百分比。
+    u.setAttribute('data-tip', isRio
+      ? (people != null ? people + '/' + Math.round(people * 100 / usage) + ' 人这个部位用它'
+                        : pct(usage) + ' 的人这个部位用它')
+      : '顶尖玩家里有 ' + pct(usage) + ' 的人这个部位用它'
+        + (boss ? '\n掉落：' + boss : '')
+        + (srcText ? '\n' + srcText : ''));
     row.appendChild(u);
 
-    row.setAttribute('data-tip', (it.n || '') + '\nitemID ' + itemId
-      + '\n装等 ' + ilvl + (mx && mx > ilvl ? '（可升到 ' + mx + '）' : '')
-      + '\n' + (srcText || '来源未知')
-      + '\n使用率 ' + pct(usage));
+    row.setAttribute('data-tip', ((ri && ri.n) || it.n || '') + '\nitemID ' + itemId
+      + '\n' + (isRio ? '平均装等 ' : '装等 ') + ilvl
+      + (mx && mx > ilvl ? '（可升到 ' + mx + '）' : '')
+      + (isRio ? '' : '\n' + (srcText || '来源未知'))
+      + '\n使用率 ' + pct(usage)
+      + (isRio && people != null ? '（' + people + ' 人）' : ''));
     return row;
   }
 
@@ -867,9 +1010,38 @@
     return wrap;
   }
 
-  function renderFootnote() {
+  /**
+   * 脚注。**按视角说来源**，不混成一句。
+   *
+   * 两份数据来路完全不同（一份是插件里的参照表，一份是我自己抓的排行榜），
+   * 日期、范围、缺什么都不一样。以前这里硬写「数据来自 GearInsight」，
+   * 换到 rio 视角后那句话就成了假话。
+   */
+  function renderFootnote(s) {
     var B = bis();
     var p = el('p', 'note bis-foot');
+    var rs = state.view === 'rio' && s ? rioSpec(s.specId) : null;
+
+    if (rs) {
+      var R = rio();
+      p.appendChild(doc.createTextNode(
+        '数据来自 ' + ((R && R.source) || 'raider.io') + '，'
+        + '抓取日期 ' + ((R && R.updatedAt) || '?') + '，赛季 ' + ((R && R.season) || '?') + '。'
+        + '这个专精统计了 ' + (rs.nGear || 0) + ' 个角色的实际装备'
+        + (rs.n && rs.n !== rs.nGear ? '（榜上 ' + rs.n + ' 人，其中 ' + rs.nGear + ' 人拿到了装备）' : '')
+        + '。'));
+      p.appendChild(el('br'));
+      p.appendChild(doc.createTextNode(
+        '每个部位的百分比 = 该部位穿这件的人数 / 该部位样本量，'
+        + '分布不截断，所以同一个部位所有候选加起来正好是 100%。'
+        + '物品中文名来自暴雪 DB2（' + ((R && R.itemNameSource) || '?') + '）。'));
+      p.appendChild(el('br'));
+      p.appendChild(doc.createTextNode(
+        '这个视角没有属性权重 / 宝石 / 附魔 / 掉落来源 —— raider.io 的角色档案里没有这些，'
+        + '要看那些切回前两个视角。'));
+      return p;
+    }
+
     p.appendChild(doc.createTextNode(
       '数据来自 GearInsight 插件自带的参照表（' + (B.source || '未知来源') + '），'
       + '统计日期 ' + (B.updatedAt || '?') + '，插件版本 ' + (B.addonVersion || '?') + '。'));
@@ -1482,7 +1654,7 @@
     // 上次选的专精 / 视角
     var s = settings();
     if (s.bisSpec) state.key = s.bisSpec;
-    if (s.bisView === 'raid' || s.bisView === 'mplus') state.view = s.bisView;
+    if (s.bisView === 'raid' || s.bisView === 'mplus' || s.bisView === 'rio') state.view = s.bisView;
     if (s.bisTab === 'gear' || s.bisTab === 'talents') state.tab = s.bisTab;
     if (s.bisTalentCat) state.tcat = s.bisTalentCat;
     if (s.bisChar) state.charKey = s.bisChar;
@@ -1497,19 +1669,46 @@
         }
         return;
       }
+      // 后面两份都是**可选**数据：加载失败只是少一个视角 / 退化成占位块，
+      // 不影响 BisData 那两个视角，所以一律不报错。
+      function done() {
+        if (state.tab === 'talents') ensureTalents(render);
+        else render();
+        ensureRio();
+      }
+
       // 图标映射现在是包里自带的，无条件加载；它同时带了品质。
-      // 加不到也不报错 —— 那时候退化成占位块，功能不受影响。
       if (!global.AE_ITEM_ICONS) {
-        loadDataFile('item-icons.js', 'AE_ITEM_ICONS', function () {
-          if (state.tab === 'talents') ensureTalents(render);
-          else render();
-        });
+        loadDataFile('item-icons.js', 'AE_ITEM_ICONS', done);
         return;
       }
-      if (state.tab === 'talents') ensureTalents(render);
-      else render();
+      done();
     });
   };
+
+  /**
+   * 后台加载 app/rio-data.js（实测 849.3 KB），到了再重画一次。
+   *
+   * **故意不阻塞首屏**：它是可选数据，只多一个「实战分布」视角，
+   * 让 849 KB 拖住面板打开是不划算的。更要紧的是，早先的写法把 render()
+   * 放在它的回调里，于是「这份文件根本没被加载」这种情况会让整个面板
+   * 一片空白 —— 测试里正是这样炸的（桩没有 <script> 加载机制，回调永不触发，
+   * 182 个渲染断言全红）。可选数据的失败必须只影响它自己。
+   *
+   * 没加载成功的话 renderGear 里那个按钮不会出现（rioSpec() 恒为 null），
+   * 而不是出一个点了没反应的按钮。
+   */
+  function ensureRio() {
+    if (rioLoaded || rioLoading) return;
+    if (global.AE_RIO) { rioLoaded = true; return; }
+    rioLoading = true;
+    loadDataFile('rio-data.js', 'AE_RIO', function () {
+      rioLoading = false;
+      rioLoaded = true;
+      // 数据到了才值得重画；没到就保持现状（两个 BisData 视角照常能用）。
+      if (global.AE_RIO && gearLoaded) render();
+    });
+  }
 
   AE.rerenderBis = function () {
     if (gearLoaded) render();

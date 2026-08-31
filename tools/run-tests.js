@@ -61,9 +61,11 @@ function load(f) {
 
 // 数据文件。bis-data / talent-data / item-icons 在浏览器里是懒加载的，但测试里
 // 必须显式加载 —— 「因为没数据所以跳过」的测试报成通过，是最难发现的假绿。
+// rio-data.js 也在这里：它是**入库的产物**，不是可选下载物。缺了它就该红，
+// 而不是让「实战分布」视角悄悄不渲染 —— 那正是「跳过报成通过」的假绿。
 ['app/bis-data.js', 'app/talent-data.js', 'app/talent-tree.js',
- 'app/item-icons.js'].forEach(function (f) {
-  if (!load(f)) throw new Error('缺文件：' + f + '（先跑对应的 tools\\gen-*.js / fetch-icons.js）');
+ 'app/item-icons.js', 'app/rio-data.js'].forEach(function (f) {
+  if (!load(f)) throw new Error('缺文件：' + f + '（先跑对应的 tools\\gen-*.js / fetch-*.js）');
 });
 var haveScan = load('data/data.js');
 load('data/bagsync.js');
@@ -118,6 +120,7 @@ var B = g.AE_BIS;
 var specKeys = Object.keys(B.specs);
 var problems = [];
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
+              sn: 0, snBad: 0, rioRenders: 0, rioSlots: 0,
               // 天赋树
               tgrids: 0, tnodes: 0, tnodeOn: 0, tedges: 0, tedgeOn: 0,
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
@@ -181,6 +184,8 @@ function checkA11y(n, label) {
 
 function checkRender(label) {
   stats.renders++;
+  var isRio = /\/rio$/.test(label);
+  if (isRio) stats.rioRenders++;
   var sawItem = false;
   walk(body, function (n) {
     checkA11y(n, label);
@@ -205,13 +210,28 @@ function checkRender(label) {
         if (stats.trkBad < 4) problems.push(label + ' 轨道徽章文字不对：' + n.textContent);
       }
     }
-    // 覆盖率徽章。每个部位组都该有一个，形如「记录 95.9%」。
-    if (n.classList && n.classList.contains('slot-head')) stats.slots++;
+    // 部位头上的徽章有**两种**，按 class 分开验，不能共用一条正则：
+    //   · cov（BisData 视角）「记录 95.9%」—— 列表被截断，只能说覆盖率；
+    //   · cov sn（rio 视角）「N=97」—— 有真实样本量。
+    // 共用一条正则的话两边都验不住：要么 N= 被判不合格，要么正则松到什么都能过。
+    if (n.classList && n.classList.contains('slot-head')) {
+      stats.slots++;
+      if (isRio) stats.rioSlots++;
+    }
     if (n.classList && n.classList.contains('cov')) {
-      stats.cov++;
-      if (!/^记录 \d+(\.\d)?%$/.test(n.textContent)) {
-        stats.covBad++;
-        if (stats.covBad < 4) problems.push(label + ' 覆盖率徽章文字不对：' + n.textContent);
+      var isSn = n.classList.contains('sn');
+      if (isSn) {
+        stats.sn++;
+        if (!/^N=\d+$/.test(n.textContent)) {
+          stats.snBad++;
+          if (stats.snBad < 4) problems.push(label + ' 样本量徽章文字不对：' + n.textContent);
+        }
+      } else {
+        stats.cov++;
+        if (!/^记录 \d+(\.\d)?%$/.test(n.textContent)) {
+          stats.covBad++;
+          if (stats.covBad < 4) problems.push(label + ' 覆盖率徽章文字不对：' + n.textContent);
+        }
       }
     }
   });
@@ -221,7 +241,7 @@ function checkRender(label) {
 // openBis() 只在第一次调用时读设置（之后 gearLoaded 为真就直接 render），
 // 所以每换一个组合都要重新 eval bis.js，否则 80 次渲染画的是同一个专精。
 specKeys.forEach(function (key) {
-  ['raid', 'mplus'].forEach(function (view) {
+  ['raid', 'mplus', 'rio'].forEach(function (view) {
     settings.bisTab = 'gear';
     settings.bisSpec = key;
     settings.bisView = view;
@@ -497,13 +517,34 @@ if (stats.trk < 500) problems.push('轨道徽章只画了 ' + stats.trk + ' 个�
 if (stats.trkBad > 0) {
   problems.push(stats.trkBad + ' 个轨道徽章文字不合格式，例如 ' + stats.trkSample);
 }
-// 覆盖率徽章：每个部位组一个，不多不少。写成相等而不是「> 0」——
-// 「至少有一个」那种断言在只有一个部位画出来的时候也能过。
-if (stats.cov !== stats.slots) {
-  problems.push('覆盖率徽章 ' + stats.cov + ' 个，部位组 ' + stats.slots + ' 个，不一一对应');
+// 徽章：每个部位组头上**恰好一个**，两种加起来必须等于部位组数。
+// 写成相等而不是「> 0」—— 「至少有一个」那种断言在只有一个部位画出来的时候也能过。
+// 两种分开数再求和，才能同时抓住「rio 视角忘了给徽章」和「BisData 视角多给一个」。
+if (stats.cov + stats.sn !== stats.slots) {
+  problems.push('覆盖率徽章 ' + stats.cov + ' + 样本量徽章 ' + stats.sn
+    + ' = ' + (stats.cov + stats.sn) + '，部位组 ' + stats.slots + ' 个，不一一对应');
 }
 if (stats.covBad > 0) problems.push(stats.covBad + ' 个覆盖率徽章文字不合格式');
+if (stats.snBad > 0) problems.push(stats.snBad + ' 个样本量徽章文字不合格式');
 if (stats.slots < 1000) problems.push('只画了 ' + stats.slots + ' 个部位组，太少');
+
+// ---- 「实战分布」视角（rio）
+// 这一组是**独立的**，不能靠上面的总量断言兜着：rio 视角要是一个部位都没画，
+// 总量只会从 1264 掉到 1264 —— 因为它本来就没被算进去过。
+// 本轮加这个视角时正是这样：套件全绿，渲染次数一字未变，等于新代码从没跑过。
+if (stats.rioRenders !== specKeys.length) {
+  problems.push('实战分布视角只渲染了 ' + stats.rioRenders + ' 次，应该是 '
+    + specKeys.length + ' 个专精各一次');
+}
+// rio 的 40 个专精每个 15~17 个部位（副手/衬衫不是人人有），实测 636 组。
+if (stats.rioSlots < 600) {
+  problems.push('实战分布视角只画了 ' + stats.rioSlots + ' 个部位组，太少');
+}
+// 样本量徽章只在 rio 视角出，所以它的个数必须**正好等于** rio 的部位组数。
+if (stats.sn !== stats.rioSlots) {
+  problems.push('样本量徽章 ' + stats.sn + ' 个，实战分布部位组 ' + stats.rioSlots
+    + ' 个，不一一对应');
+}
 
 // ---- 天赋树渲染的总量断言
 // 本机实测（40 个专精 + 3 个类别 = 43 次渲染）：树 129，节点 4304，点亮 3198，

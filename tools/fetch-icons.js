@@ -98,10 +98,36 @@ function collectIds() {
     if (c.id && c.icon) ownIcon[String(c.id)] = c.icon;
   });
 
+  // raider.io 那份产物（app/rio-data.js）里每件装备**自带图标名**，所以这批
+  // 不需要去 wowhead 查名字，只需要下图。实测 2432 件里 1042 个图标名在
+  // app/icons/ 下没有文件 —— 面板换到「实战分布」视角后，那 1042 行全是占位块。
+  //
+  // 为什么不把它们塞进 ids：ids 是「要去 wowhead 查图标名的 itemId」，而这批
+  // 名字已经是现成的。混进去等于白跑 2432 次网络请求，而且 wowhead 给的变体名
+  // （实测 `..._white-`）还会盖掉 raider.io 从游戏客户端拿到的那个正确名字。
+  var rioNames = Object.create(null);
+  var rioFile = path.join(ROOT, 'app', 'rio-data.js');
+  if (fs.existsSync(rioFile)) {
+    var rg = { AE: {} };
+    rg.window = rg;
+    new Function('global', 'window', fs.readFileSync(rioFile, 'utf8')).call(rg, rg, rg);
+    var R = rg.AE_RIO;
+    if (!R || !R.items) throw new Error('app/rio-data.js 没有赋值 AE_RIO 或缺 items');
+    Object.keys(R.items).forEach(function (id) {
+      var nm = R.items[id] && R.items[id].i;
+      if (nm) rioNames[nm] = 1;
+    });
+  }
+
+  var extra = Object.create(null);
+  Object.keys(ownIcon).forEach(function (id) { extra[ownIcon[id]] = 1; });
+  Object.keys(rioNames).forEach(function (n) { extra[n] = 1; });
+
   return {
     ids: Object.keys(ids), kinds: kinds, bis: B,
     ownIcon: ownIcon,
-    extraNames: Object.keys(ownIcon).map(function (id) { return ownIcon[id]; })
+    rioNames: Object.keys(rioNames),
+    extraNames: Object.keys(extra)
   };
 }
 
@@ -402,6 +428,8 @@ if (LIMIT > 0) {
 }
 
 console.log('代理 ' + (PROXY || '(不用)') + '　图标尺寸 ' + ICON_SIZE);
+console.log('itemId ' + info.ids.length + '　额外图标名 ' + info.extraNames.length
+  + '（其中 raider.io ' + info.rioNames.length + ' 个）');
 console.log('');
 
 function step2() {
