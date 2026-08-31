@@ -36,6 +36,12 @@ var stub = require('./dom-stub.js');
 // 这一句必须在 makeEnv / load 之前 —— 一旦开始读文件就已经晚了。
 require('./mutate-lock.js').assertNotMutating();
 
+// 天赋串解码器。这里只用它的 toBits() 读串头里那 16 位 specID ——
+// 用来验「面板显示的串，头里写的专精和当前专精一致」。
+// 自己在这里重写一遍 base64→位 的转换是不行的：那样验的是我的第二份实现，
+// 而不是产品里那份。
+var DEC = require('./decode-talent-string.js');
+
 var ROOT = stub.ROOT;
 var env = stub.makeEnv(['bis', 'bis-sub', 'bis-body']);
 var g = env.g;
@@ -74,6 +80,18 @@ g.AE.openPanel = function () {};
 g.AE.closeAllPanels = function () {};
 g.AE.saveSettings = function () {};
 g.AE.toast = function () {};
+
+// 复制到剪贴板的桩：把真正交出去的那串记下来，而不是丢掉。
+// 记下来才能断言「按钮复制的就是屏幕上显示的那串」——这是天赋导入串唯一
+// 会致命的失败方式：显示对、复制错，用户粘进游戏得到「无效」，而界面上
+// 一切正常。丢掉参数的桩会让这种 bug 永远测不出来。
+//
+// 这个桩本身也坑过我一次：我一度写了两份声明，后一份只存字符串、把前一份
+// 存对象的覆盖掉，于是 copied[0].text 恒为 undefined，43 个专精全报
+// 「复制出去的串和框里显示的不是同一串」。看着像面板错了，其实是**桩错了**。
+// 所以这里只留一份，字段名写死成 text/label。
+var copied = [];
+g.AE.copyWithToast = function (text, label) { copied.push({ text: text, label: label }); };
 
 var settings = g.AE.defaultSettings ? g.AE.defaultSettings() : {};
 var model = { characters: [] };
@@ -127,11 +145,34 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               trenders: 0, tdup: 0, tnoId: 0, tgeo: 0, tSpill: 0, tOverlap: 0, thero: 0, theroEn: 0,
               tico: 0, tnoIco: 0, ticoBad: 0, ticoNoCls: 0, ticoMismatch: 0, ticoPair: 0,
               tmaxCol: 0, tmaxRow: 0, tCluster: 0,
+              // 天赋导入串。loSpecs 是**去重后的专精数**，loRenders 是渲染次数 ——
+              // 两者不同（40 个专精 + 3 次切类别 = 43 次渲染），混用会得到一条
+              // 永远不可能满足的断言。第一版正是把渲染次数当专精数，断言
+              // 「=== 40」于是恒报 43。
+              loSpecs: 0, loRenders: 0, loBoxes: 0, loCopy: 0, loPicks: 0,
+              loSpec: 0, loExact: 0,
               // 无障碍
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
               a11yCanvas: 0, a11yCanvasBad: 0 };
 var missingFiles = {};
+var loSeen = {};
 var body = doc.getElementById('bis-body');
+
+/**
+ * 导入串的问题登记，**按种类限流**：同一种问题最多留 2 条。
+ *
+ * 为什么不直接 problems.push：这一组要跑 43 次渲染，一个真实缺陷会一次性
+ * 灌进 43 条同样的消息，而末尾只打印前 20 条 —— 于是**后面所有种类的问题
+ * 都被挤出屏幕**。变异测试里这件事真的发生了：「真值恒为空」那个变异体
+ * 断言确实触发了，但消息排在第 44 条，输出里看不见，被判成「串了」。
+ *
+ * 限流按种类而不是按总数，保证每一类至少有一条能被看见。
+ */
+var loKinds = {};
+function loNote(kind, msg) {
+  loKinds[kind] = (loKinds[kind] || 0) + 1;
+  if (loKinds[kind] <= 2) problems.push(msg);
+}
 
 // 无障碍检查。这一组和渲染检查分开数，因为它们盯的是不同的东西：
 // 渲染检查问「画出来了吗」，这一组问「画出来的东西，看不见屏幕的人能不能用」。
@@ -269,16 +310,140 @@ var NODE_BOX = (function () {
 var GRID_TOL_EXPECT = 100;
 var TREE = g.AE_TALENT_TREE || null;
 
+// ------------------------------------------------------- 天赋导入串（照原样取）
+
+/**
+ * app/rio-data.js 里这个专精的官方导入串，按人数聚合降序。
+ *
+ * 这是**独立算的真值**，不是调 app/bis.js 里的 rioLoadouts() ——
+ * 拿被测代码算真值再去验被测代码，是个恒等式，永远通过。
+ * 排序规则必须和面板一致（人数降序，同人数按串本身），否则「#1」指的不是同一串。
+ */
+function rioLoadoutTruth(specId) {
+  var R = g.AE_RIO;
+  if (!R || !R.specs) return null;
+  var rs = R.specs[String(specId)];
+  if (!rs || !rs.loadouts || !rs.loadouts.length) return null;
+  var count = Object.create(null), total = 0;
+  rs.loadouts.forEach(function (s) {
+    if (!s) return;
+    count[s] = (count[s] || 0) + 1;
+    total++;
+  });
+  var list = Object.keys(count);
+  if (!list.length) return null;
+  list.sort(function (a, b) {
+    if (count[b] !== count[a]) return count[b] - count[a];
+    return a < b ? -1 : (a > b ? 1 : 0);
+  });
+  return { list: list, count: count, total: total };
+}
+
+/**
+ * 串头里的 specID。头是 8 位版本 + 16 位 specID，base64 每字符 6 位、低位在前。
+ * 8 个字符 = 48 位，取头 24 位够了。
+ */
+function headerSpec(s) {
+  var bits = DEC.toBits(String(s).slice(0, 8));
+  if (!bits) return null;
+  var v = 0;
+  for (var i = 0; i < 16; i++) v |= (bits[8 + i] || 0) << i;
+  return v;
+}
+
+/**
+ * 导入串这一块。这一组盯的是「显示的串和数据里的串是不是同一串」——
+ * 面板不编码、不改字符，所以这里能用最硬的判据：**字节相等**。
+ */
+function checkLoadouts(label, specId, boxes, texts, copies, picks) {
+  var truth = rioLoadoutTruth(specId);
+  if (!truth) {
+    // 没真值 = rio 里这个专精没有串，那面板就**不该**画这一块。
+    // 这一条反着抓：画出一个空框比不画更糟（用户会去复制一个空串）。
+    if (boxes.length) loNote('画了空框', label + ' rio 里没有导入串，却画出了导入串块');
+    return;
+  }
+  stats.loRenders++;
+  // 按 specId 去重。第一版这里写的是 loSpecs++，然后断言「loSpecs === 40」——
+  // 结果报 43，因为天赋树要额外画 3 次「切类别」（同一个专精换 raid/冲分/割草）。
+  // 数渲染次数和数专精是两件事，混用会让一条本来正确的断言报假错。
+  loSeen[String(specId)] = 1;
+  stats.loSpecs = Object.keys(loSeen).length;
+  if (boxes.length !== 1 || texts.length !== 1 || copies.length !== 1) {
+    loNote('块数不对', label + ' 导入串块 ' + boxes.length + ' 个 / 串框 ' + texts.length
+      + ' 个 / 复制按钮 ' + copies.length + ' 个，各应正好 1 个');
+    return;
+  }
+  stats.loBoxes++;
+
+  var shown = texts[0].value;
+
+  // 串头里的 specID 必须就是这个专精。导错专精游戏会直接拒绝，
+  // 而这种错在界面上完全看不出来 —— 串长、字符集、人数全都正常。
+  //
+  // **这一条必须排在「字节相等」之前，而且不能提前 return。**
+  // 第一版把它放在后面，于是「显示了另一个专精的串」这个变异体先撞上字节不等、
+  // 带着 return 走掉 —— specID 这条一次都没执行过。变异测试报的是「串了」：
+  // 抓到了，但不是它抓的。被更强的断言遮住的断言，等于没有被证明。
+  var hs = headerSpec(shown);
+  if (hs !== Number(specId)) {
+    loNote('专精不符', label + ' 导入串头里的 specID 是 ' + hs + '，不是本专精 ' + specId);
+  } else {
+    stats.loSpec++;
+  }
+
+  // 核心断言：显示的串必须和数据里那条**一个字节都不差**。
+  if (shown !== truth.list[0]) {
+    loNote('串不一致', label + ' 显示的导入串和 rio 数据里的第一条不一致：显示 '
+      + shown.length + ' 字符，数据 ' + truth.list[0].length + ' 字符');
+  } else {
+    stats.loExact++;
+  }
+  // 只读。用户在框里改一个字符再复制，导进游戏只会说「无效」，
+  // 而他会以为是这个面板给错了。
+  if (!texts[0].readOnly) {
+    loNote('可写', label + ' 导入串框不是只读的');
+  }
+  // 选串按钮：最多 6 个，有几种就画几个。
+  var wantPicks = Math.min(6, truth.list.length);
+  if (picks !== wantPicks) {
+    loNote('按钮数', label + ' 选串按钮 ' + picks + ' 个，应该是 ' + wantPicks + ' 个');
+  } else {
+    stats.loPicks += picks;
+  }
+  // 真点一次「复制」。这一条才是用户实际用到的路径：
+  // 前面全都在验 DOM 里的文字，而复制走的是另一个参数。
+  copied.length = 0;
+  copies[0].click();
+  if (copied.length !== 1) {
+    loNote('没调用', label + ' 点了复制按钮，copyWithToast 被调用 ' + copied.length + ' 次');
+  } else if (copied[0].text !== shown) {
+    loNote('复制不符', label + ' 复制出去的串和框里显示的不是同一串');
+  } else {
+    stats.loCopy++;
+  }
+}
+
 // 天赋树的渲染检查。以前这里只 renders++、什么都不断言 —— 那是假绿：
 // 树画不出来照样通过。现在每个专精都画一遍，并数出节点 / 连线 / 中文名。
-function checkTalents(label) {
+function checkTalents(label, specId) {
+  // specId 必传：下面要拿它去 AE_RIO 里取「这个专精真实的导入串集合」。
+  // 漏传的话每个专精都会取到 undefined，导入串那一组断言会全部静默跳过 ——
+  // 而「因为取不到数据所以跳过」报成通过，正是这个项目反复踩的假绿。
+  // 所以少参数硬抛：这是调用者的 bug，不是一种数据情况。
+  if (specId === undefined) throw new Error('checkTalents(label, specId)：specId 必传');
   stats.renders++;
   stats.trenders++;
   var nodes = 0, grids = 0, seen = {}, dup = 0, canvases = [];
+  var loBoxes = [], loTexts = [], loCopies = [], loPicks = 0;
   walk(body, function (n) {
     checkA11y(n, label);
     if (!n.classList) return;
     if (n.classList.contains('tree-canvas')) canvases.push(n);
+    if (n.classList.contains('bis-loadout')) loBoxes.push(n);
+    if (n.classList.contains('lo-text')) loTexts.push(n);
+    if (n.classList.contains('lo-copy')) loCopies.push(n);
+    if (n.classList.contains('lo-pick')) loPicks += n.children.length;
     if (n.classList.contains('tree-grid')) { grids++; stats.tgrids++; }
     if (n.classList.contains('tree-edge')) {
       stats.tedges++;
@@ -385,6 +550,8 @@ function checkTalents(label) {
       }
     }
   });
+  checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks);
+
   // 一个专精应该画出三棵（职业 / 专精 / 英雄）
   if (grids !== 3) problems.push(label + ' 只画出 ' + grids + ' 棵树，应该是 3 棵');
   if (!nodes) { stats.tEmpty++; problems.push(label + ' 一个天赋节点都没画出来'); }
@@ -478,7 +645,7 @@ specKeys.forEach(function (key) {
   load('app/bis.js');
   g.AE.openBis();
   stats.tspecs++;
-  checkTalents('天赋 ' + key);
+  checkTalents('天赋 ' + key, B.specs[key].specId);
 });
 
 // 三个类别各画一次，确认切类别不会崩
@@ -489,7 +656,7 @@ specKeys.forEach(function (key) {
   body.children.length = 0;
   load('app/bis.js');
   g.AE.openBis();
-  checkTalents('天赋 ' + specKeys[0] + '/' + cat);
+  checkTalents('天赋 ' + specKeys[0] + '/' + cat, B.specs[specKeys[0]].specId);
 });
 
 var IC = g.AE_ITEM_ICONS || {};
@@ -642,6 +809,51 @@ console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精�
   + '，方块尺寸 ' + NODE_BOX.w + '×' + NODE_BOX.h + '（读自 style.css）'
   + '，最大 ' + stats.tmaxCol + ' 列 × ' + stats.tmaxRow + ' 行，聚类越界 '
   + stats.tCluster + '）');
+
+// ---- 天赋导入串（rio 的 talentLoadoutText，照原样显示 / 复制）
+// 这一组必须有自己的下界，而且必须**打印出来**。上一版我把计数器加好了、
+// 断言也写了，但既不打印也没有下界 —— 于是「一个专精都没画出导入串块」
+// 会安静地全绿通过，因为 43 条断言全都在 truth 为空时提前 return 了。
+// 这就是这个项目反复踩的同一个坑：跳过报成通过。
+if (stats.loSpecs !== specKeys.length) {
+  problems.push('导入串只检查了 ' + stats.loSpecs + ' 个专精，应该是 '
+    + specKeys.length + ' 个（rio 里 40 个专精都有串）');
+}
+// 每一次渲染都必须真的画出一块，一个不少。基准是**渲染次数**而不是专精数：
+// 切类别那三次也各画一次，拿专精数比会差 3。
+if (stats.loBoxes !== stats.loRenders) {
+  problems.push('导入串块 ' + stats.loBoxes + ' 个，渲染 ' + stats.loRenders
+    + ' 次，不一一对应');
+}
+// 复制按钮必须每次渲染都真被点过一次、并且交出正确的串。
+// 写成相等而不是「> 0」：点一个专精成功也能让「> 0」过。
+if (stats.loCopy !== stats.loRenders) {
+  problems.push('复制按钮验过 ' + stats.loCopy + ' 次，渲染 ' + stats.loRenders
+    + ' 次，说明有渲染的复制路径没验到');
+}
+// 选串按钮：40 个专精 × 最多 6 个。实测每个专精都有 6 种以上不同的串，
+// 所以这里是 240。写成下界是为了容忍某个专精种类不足 6。
+if (stats.loPicks < specKeys.length * 3) {
+  problems.push('选串按钮总共只画了 ' + stats.loPicks + ' 个，太少');
+}
+// 下面两条是给**打印行里那两句话**做背书的。
+// 摘要里写着「复制内容与显示逐字节相同，串头 specID 全部与所属专精一致」——
+// 如果这两个计数器没有下界，那两句话就只是我自己写的一句宣传语：
+// 判定分支一次都没走到时它们照样是 0，摘要照样这么印。
+if (stats.loSpec !== stats.loRenders) {
+  problems.push('串头 specID 只验过 ' + stats.loSpec + ' 次，渲染 ' + stats.loRenders
+    + ' 次，摘要里「specID 全部一致」这句话没有依据');
+}
+if (stats.loExact !== stats.loRenders) {
+  problems.push('逐字节相等只验过 ' + stats.loExact + ' 次，渲染 ' + stats.loRenders
+    + ' 次，摘要里「逐字节相同」这句话没有依据');
+}
+console.log(pad('天赋导入串') + (stats.loSpecs === specKeys.length
+    && stats.loCopy === stats.loRenders && stats.loSpec === stats.loRenders
+    && stats.loExact === stats.loRenders ? '通过' : '有问题')
+  + '（' + stats.loSpecs + ' 个专精 / ' + stats.loRenders + ' 次渲染，串框 ' + stats.loBoxes
+  + '，选串按钮 ' + stats.loPicks + '，复制按钮真点过 ' + stats.loCopy
+  + ' 次且复制内容与显示逐字节相同，串头 specID 全部与所属专精一致）');
 
 // ---- 无障碍
 // 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。

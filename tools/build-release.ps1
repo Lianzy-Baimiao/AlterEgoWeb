@@ -81,6 +81,7 @@ $dropFromPkg = @(
     'tools\mutate-lock.js',     # the mutex those mutation suites share
     'tools\mutate-pkg.js',     # mutation suite for the packaging guard itself; needs run-tests.js
     'tools\mutate-icons.js',   # mutation suite for the talent-icon assertions
+    'tools\mutate-loadout.js', # mutation suite for the talent import-string assertions
     'tools\mutate-rio.js'      # mutation suite for the raider.io data assertions
 )
 foreach ($f in $dropFromPkg) {

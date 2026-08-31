@@ -1281,6 +1281,37 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
 .bis-encs { margin-top: 10px; }
 .bis-tree { margin-top: 10px; }
 
+/* 天赋导入串。串是 base64，长 70~120 字符（实测中位数 102），所以用等宽字体、
+   允许换行 —— 和备份箱那个 .vault-text 一个道理，只是这里的串短得多，
+   不需要 pre + 横向滚动，折行看全比拖动更省事。 */
+.bis-loadout {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin-top: 10px;
+  background: var(--bg);
+}
+.lo-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lo-head .n { color: var(--fg3); font-size: 11px; }
+.lo-pick { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.lo-text {
+  width: 100%;
+  resize: vertical;
+  margin-top: 2px;
+  background: var(--bg2);
+  color: var(--fg2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 7px;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  /* 串里没有空格，anywhere 才会在字符中间断行；normal 会让它整串溢出。 */
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.lo-act { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.lo-act .n { color: var(--fg3); font-size: 11px; }
+
 /* 天赋树。节点是绝对定位的方块，坐标由 app/bis.js 按网格算好写进 style，
    这里只管长相。方块宽 62px 是量出来的：3447 个天赋名里 2322 个正好 4 个字，
    而缩成 2 个字会有 496 个重名（「强化」能指两个不同天赋），所以必须放全名。 */

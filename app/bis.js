@@ -18,8 +18,13 @@
  * AE_TALENT_TREE 的格式见本文件末尾 TREE_FORMAT_DOC，权威定义在
  * tools\verify-talent-tree.js（可执行的那种）。
  *
- * 天赋导出串（那串复制到游戏里的 base64）**做不到**：它要 treeHash 和
- * serialVersion，两者都只有游戏运行时才有，raidbots 的结构里也没有。
+ * 天赋导入串（那串粘到游戏里的 base64）：**不自己编，直接用现成的。**
+ * 以前这里写的是「做不到，要 treeHash 和 serialVersion，只有游戏运行时才有」——
+ * 那句话对「自己编一串」是对的，但问题问错了。app/rio-data.js 里每个专精都躺着
+ * 94~100 条**真实玩家的官方串**（raider.io 的 talentLoadoutText），照原样显示、
+ * 照原样复制就行。自己编一串反而是最坏的选择：编错了游戏只会说「无效」，
+ * 而现成的串是从能进排行榜的角色身上抄来的，本来就能导入。
+ * 面板只做两件事：按「多少人用同一串」聚合，和一字不改地交给剪贴板。
  */
 (function (global) {
   'use strict';
@@ -40,7 +45,8 @@
     view: 'raid',       // 'raid' | 'mplus' | 'rio'（rio = raider.io 实战分布）
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
-    build: -1           // 天赋树画哪一套，-1 = 该类别里用得最多的那套
+    build: -1,          // 天赋树画哪一套，-1 = 该类别里用得最多的那套
+    loadout: 0          // 显示第几条官方导入串（rioLoadouts 排序后的下标）
   };
 
   var gearLoaded = false, gearLoading = false;
@@ -165,6 +171,32 @@
     var R = rio();
     if (!R || !R.items) return null;
     return R.items[String(itemId)] || null;
+  }
+
+  /**
+   * rio 里这个专精的官方天赋导入串，按「同一串多少人用」聚合后降序。
+   *
+   * 返回 {list: [串], count: {串: 人数}, total: 总人数, uniq: 种类数} 或 null。
+   * 同人数时按串本身排序 —— 不这样的话 Object.keys 的顺序一变，界面上
+   * 「#1 热门」指的就是另一串了，而这种不稳定在测试里表现为偶发失败。
+   */
+  function rioLoadouts(specId) {
+    var rs = rioSpec(specId);
+    if (!rs || !rs.loadouts || !rs.loadouts.length) return null;
+    var count = Object.create(null);
+    var total = 0;
+    rs.loadouts.forEach(function (str) {
+      if (!str) return;
+      count[str] = (count[str] || 0) + 1;
+      total++;
+    });
+    var list = Object.keys(count);
+    if (!list.length) return null;
+    list.sort(function (a, b) {
+      if (count[b] !== count[a]) return count[b] - count[a];
+      return a < b ? -1 : (a > b ? 1 : 0);
+    });
+    return { list: list, count: count, total: total, uniq: list.length };
   }
   function talents() { return global.AE_TALENTS || null; }
   function tree() { return global.AE_TALENT_TREE || null; }
@@ -1123,8 +1155,81 @@
     if (tree()) host.appendChild(renderTree(td));
     else host.appendChild(renderTreeMissing());
 
+    // 官方导入串。放在树后面、统计前面 —— 看完树才会想「怎么弄到我号上」。
+    var lo = renderLoadouts(s);
+    if (lo) host.appendChild(lo);
+
     host.appendChild(renderBuildStats(td));
     host.appendChild(renderEncounters(T, td));
+  }
+
+  /**
+   * 官方天赋导入串：显示 + 复制。没有 rio 数据时返回 null（整块不画）。
+   *
+   * 串是**照原样**从 app/rio-data.js 里取的，一个字符都不改 —— 它们是
+   * raider.io 给出的 talentLoadoutText，来自能进大秘境排行榜的真实角色。
+   * 面板不做任何编码：编一串出来只会得到游戏说「无效」的东西。
+   *
+   * 复制走 AE.copyWithToast（app/toast.js，早就有的那个，file:// 下会退到
+   * execCommand）。它可能没加载（测试环境就不加载 toast.js），所以先判断再用，
+   * 判断不到时退回「选中文本自己按 Ctrl+C」—— 文本框本来就是可选中的。
+   */
+  function renderLoadouts(s) {
+    if (!s || !s.specId) return null;
+    var lo = rioLoadouts(s.specId);
+    if (!lo) return null;
+
+    var idx = state.loadout;
+    if (!(idx >= 0) || idx >= lo.list.length) idx = 0;
+    var str = lo.list[idx];
+
+    var box = el('div', 'bis-loadout');
+    var head = el('div', 'lo-head');
+    head.appendChild(el('b', null, '天赋导入串'));
+    head.appendChild(el('span', 'n',
+      lo.total + ' 名玩家共 ' + lo.uniq + ' 种，下面是最热门的几种'));
+    box.appendChild(head);
+
+    // 选串。只列前 6 种 —— 再往后都是 1 人用的，列出来只是噪音。
+    var bar = el('div', 'lo-pick');
+    lo.list.slice(0, 6).forEach(function (t, i) {
+      var b = button('#' + (i + 1) + '·' + lo.count[t] + '人',
+        i === idx ? 'on' : null, function () {
+          state.loadout = i;
+          render();
+        });
+      b.setAttribute('data-tip', lo.count[t] + ' 名玩家用这一串，占 '
+        + pct(lo.count[t] * 100 / lo.total));
+      bar.appendChild(b);
+    });
+    box.appendChild(bar);
+
+    // 串本身放在 textarea 里：readOnly 但可选中，复制不成功时还能手动选。
+    var ta = el('textarea', 'lo-text');
+    ta.value = str;
+    ta.readOnly = true;
+    ta.setAttribute('rows', '3');
+    ta.setAttribute('spellcheck', 'false');
+    ta.setAttribute('aria-label', '天赋导入串，' + str.length + ' 个字符，只读');
+    box.appendChild(ta);
+
+    var act = el('div', 'lo-act');
+    var copy = button('复制', 'primary lo-copy', function () {
+      if (AE.copyWithToast) AE.copyWithToast(str, '天赋导入串');
+      else if (AE.toast) AE.toast({ title: '请手动选中下面的串按 Ctrl+C', kind: 'warn' });
+    });
+    copy.setAttribute('data-tip', '复制后在游戏里打开天赋界面，右下角「导入」粘贴');
+    act.appendChild(copy);
+    act.appendChild(el('span', 'n', lo.count[str] + ' 人用这一串　'
+      + str.length + ' 个字符'));
+    box.appendChild(act);
+
+    box.appendChild(el('p', 'note',
+      '这几串是 raider.io 上大秘境排行榜玩家身上原样取下来的官方串，'
+      + '面板没有改动一个字符，也没有自己编码 —— 所以它们本来就能导进游戏。'
+      + '导入的位置：游戏里 N 打开天赋界面，右下角「导入/导出」→「导入」。'
+      + '串里带着它自己的专精编号，导错专精游戏会直接拒绝。'));
+    return box;
   }
 
   var TCAT_TIP = {
@@ -1499,9 +1604,6 @@
     });
     box.appendChild(cols);
 
-    box.appendChild(el('p', 'note',
-      '节点上没有图标是故意的 —— 全部天赋图标要多带 2094 张图（约 4.6 MB，'
-      + '是现在整个包的三倍），而坐标 / 连线 / 中文名 / 点数不带图标也能看清楚。'));
     return box;
   }
 
