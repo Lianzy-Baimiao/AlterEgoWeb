@@ -1,0 +1,237 @@
+/*
+ * WowAltBoard - tools/mutate-mrtalents.js
+ *
+ * maxroll 天赋方案那一组断言的变异测试。
+ *
+ * 为什么这一组要单独做一份，而不是靠 mutate-loadout.js
+ * ---------------------------------------------------
+ * 那一组盯的是 raider.io 的导入串（能粘进游戏的那批）：判据是**字节相等**。
+ * 这一组盯的是 maxroll 的方案，而 maxroll 的串**不给用户** —— 实测它串头的
+ * 序列化版本号是 130，游戏只认 2，粘进去必然被拒。所以这一组的核心判据是
+ * 「画出来的那棵树就是高亮那一行的树」，和串没关系；两组混在一起，
+ * 哪一块坏了都分不出来。
+ *
+ * 这一组独有的失败方式，是插件那条路和 rio 那条路上都不存在的：
+ *   · 方案列表是竖着一排名字，**高亮错一行**时界面完全自洽（树、点数、名字
+ *     各自都对得上），只有「树上点亮的节点 == 高亮那一套解出来的节点」能抓；
+ *   · 「换方案 / 换英雄树 / 换团本大秘境」三个开关的 state 都不持久化，
+ *     不真去点的话它们在测试里等于不存在；
+ *   · maxroll 有「一套方案打包两条英雄天赋」的情况（实测去重后 167 套里 82 套），
+ *     游戏里只能选一条：选择条没画出来的话界面会给出一个游戏里做不到的形状，
+ *     而点数直接印产物里的 95 会给出一个谁也点不出来的数字；
+ *   · 同一条串在 maxroll 页面上挂在多个小节下面（每副本 / 每首领一个天赋图），
+ *     并成一套之后要说「通用 N 处」，否则用户会以为只适用于名字里那个副本。
+ *
+ * 严格程度和 mutate-loadout.js 一档：**每个变异体必须让指定的那句话出现在
+ * 输出里**，光「退出码非 0」不算抓到 —— 被别的断言抓走的话，被测的那条依然
+ * 可能是摆设。锚点在文件里出现次数不是 1，同样直接算失败。
+ *
+ * 用法：node tools\mutate-mrtalents.js
+ */
+'use strict';
+
+var fs = require('fs');
+var path = require('path');
+var cp = require('child_process');
+
+var lock = require('./mutate-lock.js');
+
+var ROOT = path.resolve(__dirname, '..');
+var BIS = path.join(ROOT, 'app', 'bis.js');
+var RUNNER = path.join(__dirname, 'run-tests.js');
+
+lock.acquire('mutate-mrtalents');
+process.on('exit', lock.release);
+
+function run() {
+  var r = cp.spawnSync(process.execPath, [RUNNER],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
+  return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+
+/** 见 mutate-loadout.js 的同名函数：锚点必须正好出现一次，否则算锚点失效。 */
+function textMutant(desc, file, from, to, want) {
+  return {
+    desc: desc, want: want,
+    apply: function () {
+      var orig = fs.readFileSync(file, 'utf8');
+      var n = orig.split(from).length - 1;
+      if (n !== 1) {
+        console.log('    锚点在文件里出现 ' + n + ' 次（必须正好 1 次）');
+        return null;
+      }
+      fs.writeFileSync(file, orig.replace(from, to));
+      return function () { fs.writeFileSync(file, orig); };
+    }
+  };
+}
+
+var MUTANTS = [
+  // 整块不画。这条抓的是「功能没了但套件不知道」，也就是下界断言的意义。
+  textMutant('maxroll 方案列表整块不画', BIS,
+    'host.appendChild(pickBox);',
+    '/* mutant: 方案列表没挂上去 */',
+    'maxroll 方案列表 0 个'),
+
+  // 天赋页整个退回插件那条路。第 15 轮的功能就是「天赋页按 maxroll 来」，
+  // 悄悄退回去必须报红，而不是「反正也画了一棵树」。
+  textMutant('天赋页退回插件那条统计路', BIS,
+    'var pick = tree() ? mrTalentPick(s.specId) : null;',
+    'var pick = null;',
+    'maxroll 方案列表 0 个'),
+
+  // 「这套串不能导进游戏」这句说明不见了。它是这一轮唯一留给用户的解释 ——
+  // 没有它，用户只会觉得「maxroll 这块怎么没有码」。
+  textMutant('「不给导入串」的说明不画', BIS,
+    "host.appendChild(el('p', 'mr-nostr',",
+    "if (false) host.appendChild(el('p', 'mr-nostr',",
+    '说明 0 个'),
+
+  // 反过来：又把 maxroll 的串给出去。版本号 130，游戏必拒 ——
+  // 「不给」是这一轮的决定，得有断言钉住，不然下次很容易「顺手加回来」。
+  textMutant('又把 maxroll 的串放进输入框', BIS,
+    "host.appendChild(el('p', 'mr-nostr',",
+    "var __ta = el('textarea', 'mr-str'); __ta.value = b.s; host.appendChild(__ta);\n"
+      + "    host.appendChild(el('p', 'mr-nostr',",
+    '又出现了 maxroll 的串'),
+
+  // 高亮错一行。这是这一组存在的理由：界面完全自洽，用户照着「Sunfury」那一行
+  // 点开，得到的却是「Spellslinger」那一套的树。
+  textMutant('方案列表高亮错一行', BIS,
+    "var btn = button('', 'mrb' + (i === pick.idx ? ' on' : ''), function () {",
+    "var btn = button('', 'mrb' + (i === (pick.idx + 1) % pick.list.length ? ' on' : ''), function () {",
+    '但画出来的树和它不一致'),
+
+  // 名字取错行。名字是用户唯一用来选方案的信息。
+  textMutant('方案名全都取第一套的', BIS,
+    "btn.appendChild(el('span', 'nm', t.n || '（这套没写名字）'));",
+    "btn.appendChild(el('span', 'nm', pick.list[0].n || '（这套没写名字）'));",
+    '产物里是「'),
+
+  // 点数印回产物里声明的 p。打包两条英雄天赋的方案那是 95 点 ——
+  // 游戏里一个角色只能选一条，95 点谁也点不出来。这一条就是这一轮那个 bug。
+  textMutant('点数印成打包两条的合计（95 点）', BIS,
+    "meta.appendChild(el('em', null, ptsText));",
+    "meta.appendChild(el('em', null, t.p + ' 点'));",
+    '但游戏里配得出来的只有'),
+
+  // 「通用 N 处」不说。名字里只留了第一个小节名，不说的话用户会以为
+  // 这套只适用于那一个副本。
+  textMutant('「多个小节共用」不说出来', BIS,
+    "if (t.c > 1) meta.appendChild",
+    "if (false) meta.appendChild",
+    '界面上没说'),
+
+  // 换方案的按钮不接线。点了没反应 —— 界面依然自洽，只是按钮是死的。
+  textMutant('「换方案」按钮写死成第 0 套', BIS,
+    'state.mrBuild = i;',
+    'state.mrBuild = 0;',
+    '高亮却在第 0 套'),
+
+  // 打包两条英雄天赋的方案不给选择条：界面会画出一个游戏里做不到的形状
+  // （两条英雄树叠在同一张网格上）。
+  textMutant('打包两条英雄天赋时不画选择条', BIS,
+    'if (subs.length > 1) {',
+    'if (false) {',
+    '英雄天赋选择条画了 0 个按钮'),
+
+  // 反过来：只有一条也画一个「选择器」。一个只有一个选项的选择器是在骗人。
+  textMutant('只有一条英雄天赋也画选择条', BIS,
+    'if (subs.length > 1) {\n      var sbar',
+    'if (subs.length > 0) {\n      var sbar',
+    '却画了 1 个选择按钮'),
+
+  // 换英雄树的按钮不接线。
+  textMutant('「换英雄树」按钮写死成第 0 条', BIS,
+    'state.mrSub = i;',
+    'state.mrSub = 0;',
+    '它没有变成高亮'),
+
+  // 只画选中那条英雄树的筛子被去掉：两条英雄树的节点会一起点亮，
+  // 界面上出现一个游戏里做不到的形状。字节比串的那一版抓不到这个 ——
+  // 串是对的，树才是错的。锚点带上前两行：同样的筛子在插件那条路上也有一份。
+  textMutant('两条英雄树的节点一起点亮', BIS,
+    '（实测）。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
+      + '      var n = TR.nodes[id];\n      return n && (!sub || n[6] === sub);',
+    '（实测）。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
+      + '      var n = TR.nodes[id];\n      return n && (!sub || !!n[6]);',
+    '和这一套的任一条子树都不吻合'),
+
+  // ---- 空转守卫。下面这些改的是**校验器自己**，用来证明「计数器的下界不是
+  // 摆设」：分支一次都没走到时，摘要照样会印那句话。
+  textMutant('真值恒为空（证明「跳过」不会报成通过）', RUNNER,
+    'function mrTalentTruth(specId) {',
+    'function mrTalentTruth(specId) {\n  if (true) return null;',
+    '个专精有 maxroll 天赋方案'),
+
+  // 声明复核那条有没有牙：把「只算本专精自己的节点」去掉，点数会多出 6~23 点
+  // （实测，正是生成器踩过的那个 bug），必须报「声明 N 点，现解出 M 点」。
+  textMutant('声明复核算上别的专精的节点（证明它真的在比）', RUNNER,
+    'if (!n.inSpec) return;',
+    '/* mutant: 不筛本专精 */',
+    '点，现解出'),
+
+  // 去重那条有没有牙：真值里塞一条重复的串，产物层面那条必须报出来。
+  textMutant('真值里塞一条重复的串（证明去重断言在看）', RUNNER,
+    'out.push({ kind: k, list: v.talents });',
+    'out.push({ kind: k, list: v.talents.concat([v.talents[0]]) });',
+    '去重没生效'),
+
+  // 三个计数器的下界：不真去点 / 不真去比的话它们在测试里等于不存在。
+  textMutant('换类型一次都不点（证明 mrtKindSw 下界不是空的）', RUNNER,
+    '      stats.mrtKindSw++;',
+    '      if (false) stats.mrtKindSw++;',
+    '「换团本 / 大秘境」只点过'),
+
+  textMutant('树比对一次都不算（证明 mrtTree 下界不是空的）', RUNNER,
+    '    stats.mrtTree++;',
+    '    if (false) stats.mrtTree++;',
+    '「画出来的树就是高亮那一套」只验过'),
+
+  textMutant('「没给串」一次都不算（证明 mrtNoStr 下界不是空的）', RUNNER,
+    '    stats.mrtNoStr++;',
+    '    if (false) stats.mrtNoStr++;',
+    '「页面上没有 maxroll 的串」只验过')
+];
+
+console.log('=== maxroll 天赋方案断言的变异测试 ===');
+
+var base = run();
+if (base.status !== 0) {
+  console.log('基线就是红的，变异测试没有意义。先把套件修绿。');
+  console.log(base.out.split('\n').slice(-12).join('\n'));
+  process.exit(1);
+}
+console.log('基线通过。');
+
+var caught = 0, missed = [], dead = [], wrong = [];
+
+MUTANTS.forEach(function (m) {
+  var restore = m.apply();
+  if (!restore) {
+    dead.push(m.desc);
+    console.log('  锚点失效  ' + m.desc);
+    return;
+  }
+  var r;
+  try { r = run(); } finally { restore(); }
+  if (r.status === 0) {
+    missed.push(m.desc);
+    console.log('  漏了  ' + m.desc);
+  } else if (r.out.indexOf(m.want) < 0) {
+    wrong.push(m.desc + '（没出现「' + m.want + '」）');
+    console.log('  串了  ' + m.desc + '：输出里没有「' + m.want + '」');
+  } else {
+    caught++;
+    console.log('  抓到  ' + m.desc + '　→「' + m.want + '」');
+  }
+});
+
+var after = run();
+console.log('\n变异 ' + MUTANTS.length + '，抓到 ' + caught + '，漏 ' + missed.length
+  + '，串 ' + wrong.length + '，锚点失效 ' + dead.length
+  + '；还原后套件 ' + (after.status === 0 ? '仍然通过' : '没恢复（有问题）'));
+missed.forEach(function (s) { console.log('  · 漏：' + s); });
+wrong.forEach(function (s) { console.log('  · 串：' + s); });
+dead.forEach(function (s) { console.log('  · 锚点失效：' + s); });
+process.exit(missed.length + wrong.length + dead.length || after.status !== 0 ? 1 : 0);

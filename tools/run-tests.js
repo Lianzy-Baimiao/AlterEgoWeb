@@ -61,7 +61,7 @@ function load(f) {
 ['app/class-names.js', 'app/lua-parser.js', 'app/parser-tests.js', 'app/labels.js',
  'app/model.js',
  'app/settings.js', 'app/columns.js', 'app/layouts.js', 'app/model-tests.js',
- 'app/export.js', 'app/bis.js', 'app/bis-tests.js'].forEach(function (f) {
+ 'app/export.js', 'app/talent-decode.js', 'app/bis.js', 'app/bis-tests.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f);
 });
 
@@ -155,11 +155,20 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 「=== 40」于是恒报 43。
               loSpecs: 0, loRenders: 0, loBoxes: 0, loCopy: 0, loPicks: 0,
               loSpec: 0, loExact: 0,
+              // maxroll 天赋方案（第 15 轮：天赋页也按 maxroll 来）。和上面那组
+              // 分开数：那组盯 raider.io 的官方串（能导入的那批），这组盯 maxroll
+              // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
+              // 所以这组的核心是「画出来的树 == 高亮那一套」，不是串。
+              mrtSpecs: 0, mrtRenders: 0, mrtBox: 0, mrtTree: 0, mrtBtns: 0,
+              mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtNoStr: 0,
+              mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
+              mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
               // 无障碍
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
               a11yCanvas: 0, a11yCanvasBad: 0 };
 var missingFiles = {};
 var loSeen = {};
+var mrSeen = {};
 var body = doc.getElementById('bis-body');
 
 /**
@@ -466,6 +475,316 @@ function checkLoadouts(label, specId, boxes, texts, copies, picks) {
   }
 }
 
+// maxroll 那批天赋方案的真值：产物里 specs[specId].views[kind].talents。
+// 面板的类型顺序是**大秘境在前**（app/bis.js 的 mrTalentKinds），这里照抄 ——
+// 顺序不一致的话下面「第几套」的下标就对不上，而错位的下标看起来像数据错。
+var MR = g.AE_MAXROLL;
+var MR_ORDER = DEC.loadOrder();
+function mrTalentTruth(specId) {
+  var sp = MR && MR.specs ? MR.specs[String(specId)] : null;
+  if (!sp || !sp.views) return null;
+  var out = [];
+  ['mplus', 'raid'].forEach(function (k) {
+    var v = sp.views[k];
+    if (v && v.talents && v.talents.length) out.push({ kind: k, list: v.talents });
+  });
+  return out.length ? out : null;
+}
+
+/**
+ * 独立解一遍这条串，返回验证用的一切：{err} 或
+ * {pts, subs, base, per, sel}。
+ *
+ * 用 tools/decode-talent-string.js 而不是 app/talent-decode.js：那份是面板正在用的，
+ * 拿它来验自己等于什么都没验。两份实现互相对账在 tools/verify-talent-decode.js
+ * 里已经做过，这里要的是「产物里那两个**声明**字段和串本身一致」，以及
+ * 「画出来的那棵树点亮的就是这条串点的节点」——
+ * 面板的方案列表直接显示 p 和 h，它们错了界面上完全看不出来。
+ *
+ * 只算**本专精自己的**节点（rec.inSpec）：nodeOrder 是按整个职业排的，
+ * 位流里混着同职业别的专精的节点，算进去点数会多 6~23 点（实测）。
+ *
+ * sel 收的是「位流里选了的」节点（买的 + 系统白给的），因为面板画高亮
+ * 用的就是这个集合（app/talent-decode.js 的 out.nr 也包含白给的）；
+ * base / per 只算买的，那是点数的判据。
+ */
+function mrDecode(specId, t) {
+  var out;
+  try { out = DEC.decode(t.s, MR_ORDER); } catch (e) { return { err: '解码抛错：' + e.message }; }
+  if (!out || out.err) return { err: '解不开：' + ((out && out.err) || '?') };
+  if (out.spec !== Number(specId)) {
+    return { err: '串头 specID ' + out.spec + ' != ' + specId };
+  }
+  var pts = 0, subs = {}, base = 0, per = {}, sel = {};
+  out.nodes.forEach(function (n) {
+    if (!n.inSpec) return;
+    sel[String(n.id)] = 1;
+    if (!n.purchased) return;              // 白给的不占点数
+    var r = (typeof n.rank === 'number' ? n.rank : 1);
+    pts += r;
+    var row = TREE && TREE.nodes ? TREE.nodes[n.id] : null;
+    var sub = row && row[6];
+    if (sub) { subs[sub] = 1; per[sub] = (per[sub] || 0) + r; }
+    else base += r;
+  });
+  return {
+    pts: pts, base: base, per: per, sel: sel,
+    subs: Object.keys(subs).map(Number).sort(function (a, b) { return a - b; })
+  };
+}
+
+/** 产物里声明的 p / h 和独立解码一致吗？不一致返回一句话。 */
+function mrDeclaredOk(t, d) {
+  if (d.err) return d.err;
+  if (d.pts !== t.p) return '声明 ' + t.p + ' 点，现解出 ' + d.pts + ' 点';
+  var got = d.subs.join(',');
+  var want = (t.h || []).slice().sort(function (a, b) { return a - b; }).join(',');
+  if (got !== want) return '声明英雄子树 [' + want + ']，现解出 [' + got + ']';
+  return null;
+}
+
+/**
+ * maxroll 天赋这一块。
+ *
+ * 判据换过一次，值得写清楚。第一版这里有个串框（显示 + 复制），核心断言是
+ * 「框里的串和产物里那条字节相等」。后来量出 maxroll 的串版本号是 130、
+ * 游戏只认 2，串块整块删了 —— 那条断言跟着没了着落，而它守的东西还在：
+ * **高亮的那一行和画出来的那棵树必须是同一套**。方案列表是竖着一排名字，
+ * 高亮错一行，用户就在照着别的方案点天赋，而树、点数、名字各自都自洽。
+ *
+ * 所以现在对着**树上点亮的节点**验：拿独立解码器解高亮那一套的串，
+ * 职业树 + 专精树点亮的节点必须和它**完全相同**（多一个少一个都算错），
+ * 英雄树点亮的必须恰好是「这一套点的某一条子树」的全部节点。
+ * 这比字节比串更贴近用户看到的东西 —— 他看的是树，不是串。
+ *
+ * 顺带守住「不给串」这个决定本身：页面上任何一个输入框里都不许出现这条串。
+ */
+function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals) {
+  var truth = mrTalentTruth(specId);
+  if (!truth) {
+    // 没方案（实测 3 个专精：战士武器、德鲁伊平衡、武僧织雾，它们的串全解不开）
+    // 就该整块不画，退回插件那份统计。画个空框比不画更糟。
+    if (boxes.length) loNote('mr 空框', label + ' maxroll 没有天赋方案，却画出了 maxroll 方案列表');
+    return;
+  }
+  stats.mrtRenders++;
+  mrSeen[String(specId)] = 1;
+  stats.mrtSpecs = Object.keys(mrSeen).length;
+  if (boxes.length !== 1 || notes.length !== 1) {
+    loNote('mr 块数', label + ' maxroll 方案列表 ' + boxes.length + ' 个 / 「不给导入串」'
+      + '说明 ' + notes.length + ' 个，各应正好 1 个');
+    return;
+  }
+  stats.mrtBox++;
+
+  // 现在画的是哪个类型？**从副标题读**，不从串反推。
+  //
+  // 第一版是「拿显示的串去两个类型的列表里找，找到就算」—— 那是错的判据：
+  // 同一条串在 mplus 和 raid 里都可能有（maxroll 两篇指南给同一套方案）。
+  // 于是「按钮 10 个 / 列表 9 套」「高亮第 1 个 / 串是第 0 套」这类假错各报了 2 条，
+  // 全是定位错，不是面板错。副标题里写着「大秘境指南 / 团本指南」，那是唯一的
+  // 权威读数。
+  var subText = (doc.getElementById('bis-sub') || {}).textContent || '';
+  var wantKind = subText.indexOf('大秘境指南') >= 0 ? 'mplus'
+    : (subText.indexOf('团本指南') >= 0 ? 'raid' : null);
+  if (!wantKind) {
+    loNote('mr 副标题', label + ' 副标题里看不出画的是团本还是大秘境：' + subText);
+    return;
+  }
+  var kind = null;
+  truth.forEach(function (kb) { if (kb.kind === wantKind) kind = kb; });
+  if (!kind) {
+    loNote('mr 类型不符', label + ' 副标题说画的是 ' + wantKind + '，但产物里这个专精没有这个类型');
+    return;
+  }
+
+  // 方案按钮：这个类型有几套就画几个，高亮的必须正好一个。
+  if (btns.length !== kind.list.length) {
+    loNote('mr 按钮数', label + ' 方案按钮 ' + btns.length + ' 个，'
+      + kind.kind + ' 有 ' + kind.list.length + ' 套');
+    return;
+  }
+  stats.mrtBtns += btns.length;
+  var on = [];
+  btns.forEach(function (b, i) { if (b.classList.contains('on')) on.push(i); });
+  if (on.length !== 1) {
+    loNote('mr 高亮', label + ' 高亮的方案有 ' + on.length + ' 个（' + on.join('/')
+      + '），应该正好 1 个');
+    return;
+  }
+  var idx = on[0];
+  var t = kind.list[idx];
+  var d = mrDecode(specId, t);
+
+  // 串头里的 specID。串虽然不给用户，但它决定了解出来的是谁的树。
+  var hs = headerSpec(t.s);
+  if (hs !== Number(specId)) {
+    loNote('mr 专精不符', label + ' maxroll 串头里的 specID 是 ' + hs + '，不是本专精 ' + specId);
+  } else {
+    stats.mrtSpec++;
+  }
+
+  // 产物声明的点数 / 英雄子树 vs 独立解码
+  var bad = mrDeclaredOk(t, d);
+  if (bad) loNote('mr 声明不符', label + ' 第 ' + idx + ' 套：' + bad);
+  else stats.mrtDecl++;
+
+  // 核心断言：画出来的树点亮的就是**高亮那一套**点的节点。
+  var why = d.err ? d.err : mrTreeLitOk(specId, t, d, lit);
+  if (why) {
+    loNote('mr 树不符', label + ' 高亮的是第 ' + idx + ' 套「' + (t.n || '(无名)') + '」，'
+      + '但画出来的树和它不一致：' + why);
+  } else {
+    stats.mrtTree++;
+  }
+
+  // 高亮那一行的名字也必须是这一套的。名字是用户唯一用来选的信息。
+  var nm = null, ems = [];
+  btns[idx].children.forEach(function (c) {
+    if (!c.classList) return;
+    if (c.classList.contains('nm')) nm = c;
+    if (c.classList.contains('mt')) {
+      c.children.forEach(function (e) { if (e.tagName === 'EM') ems.push(e); });
+    }
+  });
+  var wantNm = t.n || '（这套没写名字）';
+  if (!nm || nm.textContent !== wantNm) {
+    loNote('mr 名字', label + ' 高亮方案的名字是「' + (nm ? nm.textContent : '(没画)')
+      + '」，产物里是「' + wantNm + '」');
+  } else {
+    stats.mrtName++;
+  }
+
+  // 印出来的点数必须是**游戏里配得出来的**那个数。
+  //
+  // 这一条是这一轮的第二个真 bug 变成的断言：打包两条英雄天赋的方案，
+  // 产物里 p 是两条加起来的 95，而游戏里一个角色只能选一条 —— 列表上印 95
+  // 等于给了一个用户永远点不出来的点数。所以印的必须是「职业+专精 + 某一条
+  // 英雄树」的合计，而 95 这个数**恰好不在**允许的集合里。
+  var legal = {};
+  if (!d.err) {
+    (t.h && t.h.length ? t.h : [0]).forEach(function (sid) {
+      legal[d.base + (d.per[sid] || 0)] = 1;
+    });
+  }
+  var ptsEm = null;
+  ems.forEach(function (e) {
+    if (ptsEm || (e.classList && (e.classList.contains('hero') || e.classList.contains('many')))) return;
+    if (/^\d+( \/ \d+)* 点$/.test(e.textContent)) ptsEm = e;
+  });
+  if (!Object.keys(legal).length) {
+    // 解不开的串没有「合法点数」可言，跳过（上面 mr 声明不符 已经报过）
+  } else if (!ptsEm) {
+    loNote('mr 点数没画', label + ' 高亮那一行没印点数');
+  } else {
+    var shownPts = ptsEm.textContent.replace(' 点', '').split(' / ');
+    var bad2 = shownPts.filter(function (x) { return !legal[Number(x)]; });
+    if (bad2.length) {
+      loNote('mr 点数不合法', label + ' 印的是 ' + ptsEm.textContent
+        + '，但游戏里配得出来的只有 ' + Object.keys(legal).join(' / ')
+        + ' 点（产物声明 ' + t.p + ' 点）');
+    } else {
+      stats.mrtPts++;
+      if ((t.h || []).length > 1) stats.mrtPtsSplit++;
+    }
+  }
+
+  // 「通用 N 处」：同一条串在 maxroll 页面上挂在 N 个小节下面，生成器并成一套。
+  // 名字里只留了第一个小节，不说出来会以为这套只适用于那一个副本。
+  var many = null;
+  ems.forEach(function (e) { if (e.classList && e.classList.contains('many')) many = e; });
+  if (t.c > 1) {
+    stats.mrtManySeen++;
+    if (!many) loNote('mr 通用没画', label + ' 这套有 ' + t.c + ' 个小节共用，界面上没说');
+    else if (many.textContent !== '通用 ' + t.c + ' 处') {
+      loNote('mr 通用不符', label + ' 界面上写「' + many.textContent + '」，产物里 c = ' + t.c);
+    } else {
+      stats.mrtMany++;
+    }
+  } else if (many) {
+    loNote('mr 通用多画', label + ' 这套只有 1 个小节，却写了「' + many.textContent + '」');
+  }
+
+  // 打包了两条英雄天赋的方案必须给出选择条（游戏里只能选一条）。
+  // 只有一条的**不该**画那一条 —— 一个只有一个选项的选择器是在骗人。
+  if ((t.h || []).length > 1) {
+    stats.mrtBundle++;
+    if (subBtns !== t.h.length) {
+      loNote('mr 英雄条', label + ' 这套打包了 ' + t.h.length
+        + ' 条英雄天赋，英雄天赋选择条画了 ' + subBtns + ' 个按钮');
+    } else {
+      stats.mrtSubBar++;
+    }
+  } else if (subBtns) {
+    loNote('mr 英雄条', label + ' 这套只有 1 条英雄天赋，却画了 ' + subBtns + ' 个选择按钮');
+  }
+
+  // 「不给 maxroll 的串」这个决定本身。串版本号 130 游戏必拒，给出来就是害人；
+  // 所以页面上任何输入框里都不许出现它。这一条钉的是决定，不是实现。
+  if (taVals.indexOf(t.s) >= 0) {
+    loNote('mr 又给串了', label + ' 页面上又出现了 maxroll 的串（版本号 130，游戏会拒）');
+  } else {
+    stats.mrtNoStr++;
+  }
+}
+
+/**
+ * 「画出来的树 == 高亮那一套」的判据。lit = 树上点亮节点的 id 集合。
+ *
+ * 分三段，各有各的判法：
+ *   · 职业树 + 专精树：两条英雄树共用，所以必须**完全等于**串里选中的那些；
+ *   · 英雄树：面板只画选中的那一条，所以点亮的必须恰好是「某一条子树 ∩ 串」；
+ *   · 多余的：既不在这三棵树的节点集合里，又亮着 —— 那是取错了节点集合。
+ * 「选中」包含系统白给的节点（app/talent-decode.js 的 out.nr 也包含），
+ * 点数才只算买的 —— 两个集合不是一回事，混用会得到 8 个左右的差（实测）。
+ */
+function mrTreeLitOk(specId, t, d, lit) {
+  var sp = TREE && TREE.specs ? TREE.specs[String(specId)] : null;
+  if (!sp) return '天赋树数据里没有这个专精';
+  var cs = {}, hero = {};
+  (sp.classNodes || []).forEach(function (id) { cs[String(id)] = 1; });
+  (sp.specNodes || []).forEach(function (id) { cs[String(id)] = 1; });
+  (sp.heroNodes || []).forEach(function (id) { hero[String(id)] = 1; });
+
+  var litCs = [], litHero = [], litElse = [];
+  Object.keys(lit).forEach(function (id) {
+    if (cs[id]) litCs.push(id);
+    else if (hero[id]) litHero.push(id);
+    else litElse.push(id);
+  });
+  if (litElse.length) {
+    return '有 ' + litElse.length + ' 个点亮的节点不属于这个专精的三棵树（'
+      + litElse.slice(0, 3).join(',') + '）';
+  }
+
+  var wantCs = Object.keys(cs).filter(function (id) { return d.sel[id]; });
+  var missCs = wantCs.filter(function (id) { return !lit[id]; });
+  var extraCs = litCs.filter(function (id) { return !d.sel[id]; });
+  if (missCs.length || extraCs.length) {
+    return '职业树 + 专精树点亮 ' + litCs.length + ' 个，串里是 ' + wantCs.length
+      + ' 个（少 ' + missCs.length + '，多 ' + extraCs.length + '）';
+  }
+
+  // 英雄树：点亮的必须恰好是 t.h 里某一条子树在串里选中的全部节点。
+  var ok = false, want = [];
+  (t.h || []).forEach(function (sid) {
+    var ids = Object.keys(hero).filter(function (id) {
+      var row = TREE.nodes[id];
+      return row && row[6] === sid && d.sel[id];
+    });
+    want.push(sid + ' 条 ' + ids.length + ' 个');
+    if (ids.length !== litHero.length) return;
+    var all = true;
+    ids.forEach(function (id) { if (!lit[id]) all = false; });
+    if (all) ok = true;
+  });
+  if (!ok) {
+    return '英雄树点亮 ' + litHero.length + ' 个，和这一套的任一条子树都不吻合（'
+      + want.join('、') + '）';
+  }
+  return null;
+}
+
 // 天赋树的渲染检查。以前这里只 renders++、什么都不断言 —— 那是假绿：
 // 树画不出来照样通过。现在每个专精都画一遍，并数出节点 / 连线 / 中文名。
 function checkTalents(label, specId) {
@@ -478,14 +797,33 @@ function checkTalents(label, specId) {
   stats.trenders++;
   var nodes = 0, grids = 0, seen = {}, dup = 0, canvases = [];
   var loBoxes = [], loTexts = [], loCopies = [], loPicks = 0;
+  // maxroll 那一块的元素。类名故意和 lo-* 分开（.mr-builds / .mrb / .mr-nostr），
+  // 共用的话「导入串块正好 1 个」那条断言会被两块互相喂饱。
+  // mrLit 是树上点亮的节点，checkMrTalents 拿它验「画的树就是高亮那一套」；
+  // taVals 是页面上所有输入框里的字，用来钉住「不给 maxroll 的串」这个决定。
+  var mrBoxes = [], mrNotes = [], mrBtns = [], mrSubBtns = 0, mrLit = {}, taVals = [];
   walk(body, function (n) {
     checkA11y(n, label);
+    if (n.tagName === 'TEXTAREA' || n.tagName === 'INPUT') taVals.push(n.value);
     if (!n.classList) return;
     if (n.classList.contains('tree-canvas')) canvases.push(n);
     if (n.classList.contains('bis-loadout')) loBoxes.push(n);
     if (n.classList.contains('lo-text')) loTexts.push(n);
     if (n.classList.contains('lo-copy')) loCopies.push(n);
     if (n.classList.contains('lo-pick')) loPicks += n.children.length;
+    if (n.classList.contains('mr-builds')) mrBoxes.push(n);
+    if (n.classList.contains('mr-nostr')) mrNotes.push(n);
+    if (n.classList.contains('mrb')) mrBtns.push(n);
+    // 英雄天赋选择条。.tree-pick 这个类名两条路都在用（插件那条是「套路」），
+    // 所以按 .lb 的字认，不按类名 —— 认错的话「只有一条也画了选择条」那条
+    // 断言会被插件那条路的按钮喂饱，永远不报。
+    if (n.classList.contains('tree-pick')) {
+      var lb = null;
+      n.children.forEach(function (c) {
+        if (c.classList && c.classList.contains('lb')) lb = c;
+      });
+      if (lb && lb.textContent === '英雄天赋') mrSubBtns += n.children.length - 1;
+    }
     if (n.classList.contains('tree-grid')) { grids++; stats.tgrids++; }
     if (n.classList.contains('tree-edge')) {
       stats.tedges++;
@@ -495,6 +833,9 @@ function checkTalents(label, specId) {
       nodes++;
       stats.tnodes++;
       if (n.classList.contains('on')) stats.tnodeOn++;
+      if (n.classList.contains('on') && n.attrs['data-node']) {
+        mrLit[String(n.attrs['data-node'])] = 1;
+      }
       // 三棵树的节点必须互不相同。这一条比数总数强：把专精树错画成职业树时
       // 总数依然合理（职业树画了两遍），但节点 ID 会重复。
       var nid = n.attrs['data-node'];
@@ -593,6 +934,7 @@ function checkTalents(label, specId) {
     }
   });
   checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks);
+  checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals);
 
   // 一个专精应该画出三棵（职业 / 专精 / 英雄）
   if (grids !== 3) problems.push(label + ' 只画出 ' + grids + ' 棵树，应该是 3 棵');
@@ -699,6 +1041,98 @@ specKeys.forEach(function (key) {
   load('app/bis.js');
   g.AE.openBis();
   checkTalents('天赋 ' + specKeys[0] + '/' + cat, B.specs[specKeys[0]].specId);
+});
+
+// ---- maxroll 天赋页的三个开关：换类型 / 换方案 / 换英雄树 --------------------
+//
+// 上面那 43 次渲染**一次都没按过它们**：state.mrKind / mrBuild / mrSub 都不持久化，
+// 每次 load 都从「大秘境 第 0 套 第 0 条英雄树」开始。于是「换方案」这条路
+// 在测试里从来没被走过，而套件照样全绿 —— 又一次「没跑报成通过」。
+// 所以这里真去点：点完重新走一遍 checkTalents，让上面每条断言在**换过之后**
+// 的界面上再验一次（尤其是「高亮那一行和显示的串是同一套」）。
+function findBtns(cls) {
+  var out = [];
+  walk(body, function (n) {
+    if (n.classList && n.classList.contains(cls)) out.push(n);
+  });
+  return out;
+}
+function findSubPickBtns() {
+  var out = [];
+  walk(body, function (n) {
+    if (!n.classList || !n.classList.contains('tree-pick')) return;
+    var lb = null;
+    n.children.forEach(function (c) {
+      if (c.classList && c.classList.contains('lb')) lb = c;
+    });
+    if (lb && lb.textContent === '英雄天赋') {
+      n.children.forEach(function (c) { if (c !== lb) out.push(c); });
+    }
+  });
+  return out;
+}
+function findKindBtn(text) {
+  var out = null;
+  walk(body, function (n) {
+    if (out || !n.classList || !n.classList.contains('seg')) return;
+    n.children.forEach(function (c) {
+      if (!out && c.textContent === text && !c.classList.contains('on')) out = c;
+    });
+  });
+  return out;
+}
+specKeys.forEach(function (key) {
+  var specId = B.specs[key].specId;
+  if (!mrTalentTruth(specId)) return;
+  settings.bisTab = 'talents';
+  settings.bisSpec = key;
+  settings.bisTalentCat = 'raid';
+  body.children.length = 0;
+  load('app/bis.js');
+  g.AE.openBis();
+  if (!findBtns('mr-builds').length) return;   // 这个专精没走 maxroll 那条路
+
+  // 换方案：点第 2 套。只有 1 套的跳过（没有第 2 套可点，不是缺陷）。
+  //
+  // 点完必须**确认高亮真的挪过去了**。只点不看的话「按钮的 onClick 写死成
+  // state.mrBuild = 0」这种接线错完全测不出来：界面自洽（高亮第 0 套、串是第 0 套），
+  // 只是按钮不管用 —— 而按钮不管用正是用户第一眼就会撞上的东西。
+  var bs = findBtns('mrb');
+  if (bs.length > 1) {
+    bs[1].click();
+    var on2 = -1;
+    findBtns('mrb').forEach(function (b, i) { if (b.classList.contains('on')) on2 = i; });
+    if (on2 !== 1) {
+      loNote('mr 换方案没生效', '天赋 ' + key + ' 点了第 2 套，高亮却在第 ' + on2 + ' 套');
+    } else {
+      stats.mrtBuildSw++;
+    }
+    checkTalents('天赋 ' + key + '/第2套', specId);
+  }
+  // 换英雄树：打包了两条的才有这一条。
+  var subs = findSubPickBtns();
+  if (subs.length > 1) {
+    subs[1].click();
+    var sub2 = findSubPickBtns();
+    if (!sub2[1] || !sub2[1].classList.contains('on')) {
+      loNote('mr 换英雄树没生效', '天赋 ' + key + ' 点了第 2 条英雄天赋，它没有变成高亮');
+    } else {
+      stats.mrtSubSw++;
+    }
+    checkTalents('天赋 ' + key + '/换英雄树', specId);
+  }
+  // 换类型：默认是大秘境，点「团本」。两种都有的专精才点得到。
+  var kb = findKindBtn('团本');
+  if (kb) {
+    kb.click();
+    var st = (doc.getElementById('bis-sub') || {}).textContent || '';
+    if (st.indexOf('团本指南') < 0) {
+      loNote('mr 换类型没生效', '天赋 ' + key + ' 点了「团本」，副标题还是：' + st);
+    } else {
+      stats.mrtKindSw++;
+    }
+    checkTalents('天赋 ' + key + '/团本', specId);
+  }
 });
 
 var IC = g.AE_ITEM_ICONS || {};
@@ -904,6 +1338,132 @@ console.log(pad('天赋导入串') + (stats.loSpecs === specKeys.length
   + '（' + stats.loSpecs + ' 个专精 / ' + stats.loRenders + ' 次渲染，串框 ' + stats.loBoxes
   + '，选串按钮 ' + stats.loPicks + '，复制按钮真点过 ' + stats.loCopy
   + ' 次且复制内容与显示逐字节相同，串头 specID 全部与所属专精一致）');
+
+// ---- maxroll 天赋方案（第 15 轮：天赋页改成以 maxroll 为主）
+// 门槛全部写成「和渲染次数相等」，不是「> 0」：这一组的每条断言都在
+// truth 为空时提前 return，只要一个下界写松，「整块没画出来」就会安静地全绿。
+// 专精数写成实测的 37（40 个里战士武器 / 德鲁伊平衡 / 武僧织雾一条串都解不开，
+// 生成器一条都没收）—— 换赛季重抓之后这个数会变，那时该连带改这里，
+// 正是希望发生的事。
+var MRT_SPECS = 0;
+specKeys.forEach(function (k) {
+  if (mrTalentTruth(B.specs[k].specId)) MRT_SPECS++;
+});
+// 产物层面的去重：同一个类型的列表里不许有两条一样的串。
+//
+// 这一条是这一轮那个 bug 的直接封条：maxroll 每个副本 / 每个首领的小节各带一个
+// 天赋图，第一版生成器按「串 + 名字」去重，于是同一套方案照着 9~13 个小节名
+// 各留了一行 —— 界面上就是一排名字几乎一样的按钮，点开画的是同一棵树。
+// 现在按**串本身**去重，共用的小节数记进 c。这里对着产物再验一遍。
+var mrDup = 0, mrMax = 0, mrTotal = 0;
+specKeys.forEach(function (k) {
+  var truth = mrTalentTruth(B.specs[k].specId);
+  if (!truth) return;
+  truth.forEach(function (kb) {
+    var seen = {};
+    if (kb.list.length > mrMax) mrMax = kb.list.length;
+    mrTotal += kb.list.length;
+    kb.list.forEach(function (t) {
+      if (seen[t.s]) {
+        mrDup++;
+        if (mrDup < 4) {
+          problems.push('maxroll 产物里 ' + k + '/' + kb.kind + ' 有两套方案的串一样（「'
+            + t.n + '」）—— 去重没生效，界面上会出现一排点开是同一棵树的按钮');
+        }
+      }
+      seen[t.s] = 1;
+      if (!(t.c >= 1)) {
+        problems.push('maxroll 产物里 ' + k + '/' + kb.kind + '「' + t.n + '」没有 c（共用小节数）');
+      }
+    });
+  });
+});
+if (mrTotal < 100) problems.push('maxroll 产物里只有 ' + mrTotal + ' 套方案，取数路径不对');
+// 绝对下界。上面每条断言都是「和渲染次数相等」——**真值恒为空的时候它们全是
+// 0 = 0**，整组会安静地全绿，正是这个项目反复踩的那种假绿。所以先钉死
+// 「产物里确实有这么多专精有方案」和「确实画了这么多次」。
+if (MRT_SPECS < 30) {
+  problems.push('产物里只有 ' + MRT_SPECS + ' 个专精有 maxroll 天赋方案（实测 37），取数路径不对');
+}
+if (stats.mrtRenders < MRT_SPECS) {
+  problems.push('maxroll 天赋只渲染了 ' + stats.mrtRenders + ' 次，少于有方案的专精数 '
+    + MRT_SPECS);
+}
+if (stats.mrtSpecs !== MRT_SPECS) {
+  problems.push('maxroll 天赋只检查了 ' + stats.mrtSpecs + ' 个专精，产物里有 '
+    + MRT_SPECS + ' 个（有方案的专精必须都走到 maxroll 那条路）');
+}
+if (stats.mrtBox !== stats.mrtRenders) {
+  problems.push('maxroll 方案列表 + 说明只对上 ' + stats.mrtBox + ' 次，渲染 '
+    + stats.mrtRenders + ' 次，不一一对应');
+}
+if (stats.mrtTree !== stats.mrtRenders) {
+  problems.push('「画出来的树就是高亮那一套」只验过 ' + stats.mrtTree + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+if (stats.mrtSpec !== stats.mrtRenders) {
+  problems.push('maxroll 串头 specID 只验过 ' + stats.mrtSpec + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+if (stats.mrtName !== stats.mrtRenders) {
+  problems.push('「高亮方案的名字和产物一致」只验过 ' + stats.mrtName + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+if (stats.mrtDecl !== stats.mrtRenders) {
+  problems.push('产物声明的点数 / 英雄子树只独立解码复核过 ' + stats.mrtDecl + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+if (stats.mrtPts !== stats.mrtRenders) {
+  problems.push('「印出来的点数是游戏里配得出来的」只验过 ' + stats.mrtPts + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+// 打包两条英雄天赋的方案：那才是「印 95 点」这个 bug 的现场，一次都没走到
+// 等于这条断言不存在。
+if (stats.mrtPtsSplit < 10) {
+  problems.push('打包两条英雄天赋的方案里，点数只复核过 ' + stats.mrtPtsSplit + ' 次，太少');
+}
+if (stats.mrtNoStr !== stats.mrtRenders) {
+  problems.push('「页面上没有 maxroll 的串」只验过 ' + stats.mrtNoStr + ' 次，渲染 '
+    + stats.mrtRenders + ' 次');
+}
+// 「通用 N 处」：去重之后大部分方案都挂在多个小节下面（实测 167 套里绝大多数），
+// 一次都没遇到说明取的不是去重后的产物。
+if (stats.mrtMany !== stats.mrtManySeen) {
+  problems.push('有 ' + stats.mrtManySeen + ' 套方案是多个小节共用的，界面上只说对了 '
+    + stats.mrtMany + ' 次');
+}
+if (stats.mrtManySeen < 10) {
+  problems.push('只遇到 ' + stats.mrtManySeen + ' 套「多个小节共用」的方案，太少');
+}
+// 打包两条英雄天赋的方案：实测去重后 167 套里 82 套是这样，所以「一次都没遇到」
+// 说明这条路没走到，而它恰恰是 maxroll 独有、最容易画错的那一条。
+if (stats.mrtSubBar !== stats.mrtBundle) {
+  problems.push('打包多条英雄天赋的方案遇到 ' + stats.mrtBundle + ' 次，选择条只对上 '
+    + stats.mrtSubBar + ' 次');
+}
+if (stats.mrtBundle < 10) {
+  problems.push('只遇到 ' + stats.mrtBundle + ' 套「打包两条英雄天赋」的方案，太少');
+}
+// 三个开关必须真被按过。不按的话它们在测试里等于不存在（state 不持久化，
+// 每次渲染都是「大秘境 第 0 套 第 0 条」）。
+if (stats.mrtBuildSw < 20) problems.push('「换方案」只点过 ' + stats.mrtBuildSw + ' 次，太少');
+if (stats.mrtSubSw < 5) problems.push('「换英雄树」只点过 ' + stats.mrtSubSw + ' 次，太少');
+if (stats.mrtKindSw < 5) problems.push('「换团本 / 大秘境」只点过 ' + stats.mrtKindSw + ' 次，太少');
+console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
+    && stats.mrtBox === stats.mrtRenders && stats.mrtTree === stats.mrtRenders
+    && stats.mrtPts === stats.mrtRenders && stats.mrtDecl === stats.mrtRenders
+    && stats.mrtNoStr === stats.mrtRenders ? '通过' : '有问题')
+  + '（' + stats.mrtSpecs + '/' + specKeys.length + ' 个专精 / ' + stats.mrtRenders
+  + ' 次渲染，方案按钮 ' + stats.mrtBtns + '，画出来的树和高亮那一套同一套 '
+  + stats.mrtTree
+  + '，点数与英雄子树独立解码复核 ' + stats.mrtDecl
+  + '，印的点数游戏里配得出来 ' + stats.mrtPts + '（其中打包两条的 '
+  + stats.mrtPtsSplit + '）'
+  + '，多个小节共用说清楚 ' + stats.mrtMany
+  + '，产物里 ' + mrTotal + ' 套方案无重复串（一个专精最多 ' + mrMax + ' 套）'
+  + '，打包多条英雄树 ' + stats.mrtBundle + ' 套都给了选择条'
+  + '，真点过：换方案 ' + stats.mrtBuildSw + '、换英雄树 ' + stats.mrtSubSw
+  + '、换类型 ' + stats.mrtKindSw + '）');
 
 // ---- 无障碍
 // 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。
@@ -1218,7 +1778,7 @@ if (problems.length) {
 
 var bad = total.fail + problems.length;
 console.log(bad === 0
-  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + 无障碍 + 三项格式校验'
-    + ' + 天赋串解码对真值 + 并发池 + 打包一致性'
+  ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + maxroll 天赋方案'
+    + ' + 无障碍 + 三项格式校验 + 天赋串解码对真值 + 并发池 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

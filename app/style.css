@@ -1320,6 +1320,42 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
 .lo-act { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
 .lo-act .n { color: var(--fg3); font-size: 11px; }
 
+/* 「maxroll 这套不给导入串」那句说明。
+   这里一度是一块和 .bis-loadout 一样的串框（显示 + 复制）。量过版本号之后
+   整块删了：maxroll 的串版本号是 130，游戏只认 2，粘进去必然被拒 ——
+   留一句话指向下面 raider.io 那块能导入的串，比留一个按钮诚实。 */
+.mr-nostr {
+  margin: 10px 0 0;
+  padding: 6px 9px;
+  border-left: 2px solid var(--line);
+  color: var(--fg3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* maxroll 的方案列表。名字是页面上原样的英文长句（实测最长 62 字符，
+   中位 34），横排小按钮会挤成两行半读不出来，所以竖排一行一套。 */
+.mr-builds { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.mrb {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  text-align: left;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg2);
+  cursor: pointer;
+  font-size: 12px;
+}
+.mrb:hover { border-color: var(--accent); }
+.mrb.on { border-color: var(--accent); background: var(--bg3); color: var(--fg); }
+.mrb .nm { flex: 1 1 auto; }
+.mrb .mt { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; }
+.mrb .mt em { font-style: normal; color: var(--fg3); font-size: 11px; }
+.mrb .mt em.hero { color: var(--accent); }
+/* 「通用 N 处」：同一条串在 maxroll 页面上挂在 N 个小节下面。比点数更弱一档。 */
+.mrb .mt em.many { color: var(--fg3); opacity: .8; }
+
 /* 天赋树。节点是绝对定位的方块，坐标由 app/bis.js 按网格算好写进 style，
    这里只管长相。方块宽 62px 是量出来的：3447 个天赋名里 2322 个正好 4 个字，
    而缩成 2 个字会有 496 个重名（「强化」能指两个不同天赋），所以必须放全名。 */

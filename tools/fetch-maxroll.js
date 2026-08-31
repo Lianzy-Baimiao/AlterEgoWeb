@@ -379,6 +379,53 @@ function deriveTargets(RIO, listHtml, specIdx) {
 //   表 2  Rank|Trinkets        饰品分级
 //   表 3  第一格是槽位名        附魔
 // 坑 ③：按位置认，标签只做校验。
+/**
+ * 天赋方案。**每套方案是一个独立的 embed，各带自己的串** —— 这一点是实测出来的，
+ * 上一轮把整页的串混在一起统计，得到的结论全是废的。
+ *
+ *   <div class="wow-embed" data-wow-type="talents" data-wow-data="C6DAmxqme2N…">
+ *   <figcaption><span class="wow-trait" data-wow-id="123341">Sunfury</span>
+ *               <strong>… Arcane Mage Single-Target Raid Build</strong>
+ *
+ * 方案名取 figcaption 的纯文本。名字是这一步的**主要产物**：现在界面上只有
+ * 「团本 / 冲分 / 割草」三个笼统的类别，而 maxroll 给的是「Sunfury 奥法单目标团本」
+ * 这种一眼能选的名字。
+ *
+ * 串**原样保留**（只做 URL-safe → 标准 base64 的换字，见 normalizeB64 的注释），
+ * 不在这里解码：解码要整棵天赋树，那是 app/talent-tree.js 的活，浏览器端和
+ * 校验器各自解一遍还能互相对账。
+ */
+function talentBuilds(html) {
+  var out = [], seen = {};
+  var re = /<div class="wow-embed"[^>]*data-wow-type="talents"[^>]*data-wow-data="([^"]+)"[^>]*>/g;
+  var m;
+  while ((m = re.exec(html))) {
+    var str = m[1];
+    // 方案名在 embed **后面**的 figcaption 里。往后找一段就够 —— 实测同一个
+    // embed 和它的 figcaption 之间不到 2 KB；找太远会串到下一套方案的名字上。
+    var tail = html.slice(m.index, m.index + 4000);
+    var fc = /<figcaption[^>]*>([\s\S]*?)<\/figcaption>/.exec(tail);
+    var name = fc ? strip(fc[1]).replace(/\s+/g, ' ').trim() : '';
+    // 同一页会重复引用同一套方案（正文里讲一次、总结里再讲一次）。
+    // 去重的键是「串 + 名字」：同一串挂两个不同名字时两条都留着，
+    // 因为名字是给人看的主要信息，合并会丢掉其中一个。
+    var key = str + '|' + name;
+    if (seen[key]) continue;
+    seen[key] = 1;
+    out.push({ str: str, name: name });
+  }
+  return out;
+}
+
+/**
+ * maxroll 的串用 **URL-safe** base64（`-` `_`），游戏和 raider.io 用标准表（`+` `/`）。
+ * 这不是猜的：raider.io 那 3960 条串里出现 `-` 或 `_` 的是 0 条，出现 `+` `/` 的有 7 条；
+ * 不换字的话 207 条串会报「base64 表外的字符」，换完只剩真正解不开的那些。
+ */
+function normalizeB64(s) {
+  return String(s).replace(/-/g, '+').replace(/_/g, '/');
+}
+
 function parseGuide(html, slug) {
   var blk = gearBlock(html);
   if (!blk) return { error: '没有装备块' };
@@ -446,7 +493,11 @@ function parseGuide(html, slug) {
     }
   });
 
-  return { bis: bis, alt: alt, ench: ench, tiers: tiers, labels: blk.labels, warn: warn };
+  return {
+    bis: bis, alt: alt, ench: ench, tiers: tiers,
+    talents: talentBuilds(html),
+    labels: blk.labels, warn: warn
+  };
 }
 
 /* ------------------------------------------------------------------- 主流程 */
@@ -536,7 +587,87 @@ function main() {
 
 /* ------------------------------------------------------------------- 产物 */
 
+/**
+ * 把一页里的天赋方案筛成「面板真能画出来的那些」，并记下可校验的声明。
+ *
+ * 为什么在生成器里筛：面板要画树就得先解串，解不开的方案放进产物只会变成一条
+ * 点不动的按钮。所以**解不开的直接不收**，并把条数打出来 —— 静默丢弃会让
+ * 「上游改了编码」看起来像「maxroll 少写了几套」。
+ *
+ * 每套记 {n 方案名, s 串, p 点数, h 点亮的英雄子树 id}。p 和 h 是**声明**：
+ * 浏览器端会自己解一遍串，校验器拿它俩和自己解出来的对账，两边不一致就报错。
+ * 一份什么都不声明的数据文件是没法校验的。
+ *
+ * 实测（80 篇缓存）：833 套里 626 套解得开，207 套报「位读完了但节点还剩 1 个
+ * 没走到」—— 那批是照着**上一版天赋树**编的，跟本地这版差一个节点。
+ */
+function collectTalents(list, specId, dec, ORDER, subOf, stat) {
+  var out = [], byStr = {}, badStr = {};
+  list.forEach(function (b) {
+    var s = normalizeB64(b.str);
+    // **按串去重。**
+    //
+    // 同一套方案在一篇指南里会挂在很多小节下面：每个副本一个 embed、每个首领一个
+    // embed，而 maxroll 给的是同一条串。实测第一版产物 587 套里有 420 套是这种重复
+    // —— 界面上就是 9~13 行名字几乎一样的按钮（「… in Altar of Fangs」「… in
+    // Murder Row」…），点开画的是同一棵树。用户一眼看到的就是「这页怪怪的」。
+    //
+    // 所以去重的键是**串本身**，不是「串 + 名字」（那是上一版，它保留了每个小节的
+    // 名字，正是重复的来源）。名字只留第一个 —— 页面里通用那套排在最前面，
+    // 副本/首领专用的排在后面。共用同一条串的小节数记成 c，界面可以据此说清
+    // 「这一套通用于 9 个小节」，而不是把同一套画 9 遍。
+    if (byStr[s]) { byStr[s].c++; stat.dupe++; return; }
+    if (badStr[s]) { badStr[s]++; stat.dupe++; return; }
+
+    var o;
+    try { o = dec.decode(s, ORDER); } catch (e) { o = null; }
+    if (!o) { badStr[s] = 1; stat.threw++; return; }
+    if (o.err) { badStr[s] = 1; stat.undecodable++; return; }
+    if (o.spec !== specId) { badStr[s] = 1; stat.wrongSpec++; return; }
+    var pts = 0, subs = {};
+    o.nodes.forEach(function (n) {
+      if (!n.purchased) return;
+      // 只算**本专精自己的**节点。fullNodeOrder 是按整个职业排的，位流里会读到
+      // 同职业其他专精的节点；那些节点谁也不画，算进点数只会让声明值虚高。
+      // 实测：不筛的话 16 套方案的声明点数比浏览器端解出来的多 6～23 点，
+      // 而两边解出的节点表是逐个一致的 —— 差的全是专精外的节点。
+      if (!n.inSpec) return;
+      pts += (typeof n.rank === 'number' ? n.rank : 1);
+      var sub = subOf[String(n.id)];
+      if (sub) subs[sub] = 1;
+    });
+    var h = Object.keys(subs).map(Number).sort(function (x, y) { return x - y; });
+    if (!h.length) { badStr[s] = 1; stat.noHero++; return; }
+    if (h.length > 1) stat.bundle++;
+    stat.kept++;
+    var rec = { n: b.name, s: s, p: pts, h: h, c: 1 };
+    byStr[s] = rec;
+    out.push(rec);
+  });
+  return out;
+}
+
 function writeOut(parsed, slotMap, RIO, meta) {
+  // 解码器 + 天赋树。两个都是提交进仓库的，缺了就是仓库不完整，直接报错 ——
+  // 「跳过天赋」会让产物看起来正常而天赋页空着。
+  var dec = require('./decode-talent-string.js');
+  var TREE = dec.loadTree();
+  if (!TREE) throw new Error('读不到 app/talent-tree.js —— 天赋方案没法筛，先跑 tools\\fetch-talent-tree.js');
+  var ORDER = dec.loadOrder();
+  if (!ORDER) throw new Error('loadOrder() 返回空 —— app/talent-tree.js 里没有 nodeOrder');
+  // specId → {nodeId: subTreeId}。英雄节点的子树号在 nodeFormat 的第 [6] 格。
+  var subOfSpec = {};
+  Object.keys(TREE.specs).forEach(function (sid) {
+    var t = TREE.specs[sid], m = {};
+    (t.heroNodes || []).concat(t.subNodes || []).forEach(function (id) {
+      var n = TREE.nodes[id];
+      if (n && n[6]) m[String(id)] = n[6];
+    });
+    subOfSpec[sid] = m;
+  });
+  var tStat = { kept: 0, undecodable: 0, wrongSpec: 0, noHero: 0, bundle: 0, threw: 0, dupe: 0 };
+
+
   // 物品池：中文名 / 图标 / 品质 先复用 rio 已经查好的 2432 件。
   // rio 里没有的（实测 36 件，多是附魔和只在 maxroll 出现的替代件）从**暴雪 DB2**
   // 的 ItemSparse.csv 补中文名 —— 那份 CSV 已经是 fetch-rio.js 下好的本地缓存，
@@ -556,7 +687,11 @@ function writeOut(parsed, slotMap, RIO, meta) {
     var s = specs[sid] = specs[sid] || {
       cls: RIO.specs[sid].cls, specEn: RIO.specs[sid].specEn, views: {}
     };
-    var v = s.views[kind] = { slug: p.t.slug, bis: {}, alt: {}, ench: {}, tiers: [] };
+    var v = s.views[kind] = {
+      slug: p.t.slug, bis: {}, alt: {}, ench: {}, tiers: [],
+      talents: collectTalents(p.g.talents || [], sid, dec, ORDER,
+        subOfSpec[String(sid)] || {}, tStat)
+    };
 
     function put(target, rowList) {
       rowList.forEach(function (r) {
@@ -644,9 +779,23 @@ function writeOut(parsed, slotMap, RIO, meta) {
     note: '这是**编辑给出的推荐排序**，不是使用率统计 —— 没有样本量，'
       + 'bis / alt 两个列表都按 maxroll 表里的顺序排。槽位编号沿用暴雪 INVSLOT，'
       + '和 app/rio-data.js、app/bis-data.js 同一套。',
+    talentNote: '天赋方案是 maxroll 页面里每个 embed **原样**的串（只把 URL-safe base64 的 '
+      + '- _ 换回标准表的 + /），生成时用 tools\\decode-talent-string.js 解过一遍，'
+      + '解不开的不收；同一条串挂在多个小节下面（每副本 / 每首领各一个 embed）时并成一套，'
+      + 'c 记的是有几个小节共用它 —— 不并的话一个专精会列出 9~13 行名字几乎一样的方案，'
+      + '点开画的是同一棵树。'
+      + '**这些串不是游戏的导入串**：串头第一个字节（序列化版本）实测是 130，而本机游戏'
+      + '导出的 103 条、raider.io 的 306 条全是 2 —— 版本对不上，游戏会直接拒，所以 s '
+      + '只用来画树，不给复制；要能粘进游戏的串用 app/rio-data.js 里的 loadouts。'
+      + 'h 有两个子树号的是 maxroll 的「一套方案 + 两条英雄树」打包（点数 95 = 68 职业专精 '
+      + '+ 13 + 13，而单树的是 82），游戏里只能选一条，面板按英雄树分开画。'
+      + '树本身是可信的：职业树 + 专精树点亮的节点和 raider.io 榜一方案的 Jaccard 中位 0.83，'
+      + '而 raider.io 榜一 vs 榜二这个对照组是 0.82。',
     fmt: {
       specs: 'specId → {cls, specEn, views}',
-      views: 'raid | mplus → {slug, bis 槽位→[itemId…], alt 同, ench 槽位→[itemId…], tiers [[分级, [itemId…]]…]}',
+      views: 'raid | mplus → {slug, bis 槽位→[itemId…], alt 同, ench 槽位→[itemId…], '
+        + 'tiers [[分级, [itemId…]]…], talents [{n 方案名, s 串（画树用，不是游戏导入串）, '
+        + 'p 点数, h [英雄子树id…], c 有几个小节共用这一套}…]}',
       items: 'itemId → {n 中文名, i 图标名, q 品质}（名字空字符串 = rio 池里没有，待补）'
     },
     guides: parsed.length,
@@ -663,6 +812,18 @@ function writeOut(parsed, slotMap, RIO, meta) {
     + (Buffer.byteLength(body, 'utf8') / 1024).toFixed(1) + ' KB');
   console.log('  专精 ' + Object.keys(specs).length + ' / 40，物品池 '
     + Object.keys(items).length + ' 件');
+  // 天赋方案。**收了多少、丢了多少都要说**：只报收进去的条数，上游哪天把编码换了，
+  // 产物会静默变薄，而这行输出仍然是「一切正常」。
+  var tSpecs = Object.keys(specs).filter(function (sid) {
+    return Object.keys(specs[sid].views).some(function (k) {
+      return (specs[sid].views[k].talents || []).length;
+    });
+  }).length;
+  console.log('  天赋方案 收 ' + tStat.kept + ' 套（其中打包两条英雄树的 ' + tStat.bundle
+    + ' 套），覆盖 ' + tSpecs + ' / ' + Object.keys(specs).length + ' 个专精');
+  console.log('    丢：解不开 ' + tStat.undecodable + '，串头专精对不上 ' + tStat.wrongSpec
+    + '，一条英雄树都没点 ' + tStat.noHero + '，解码抛异常 ' + tStat.threw
+    + '；同一条串挂在多个小节下面被并成一套的 ' + tStat.dupe + ' 处');
   if (db2Want) {
     console.log('  rio 池里没有的 ' + db2Want + ' 件：'
       + (db2Skipped ? '跳过补名（本机没有 tools\\.db2-names\\ItemSparse.csv）'

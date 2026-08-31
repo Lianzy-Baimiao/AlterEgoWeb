@@ -54,7 +54,15 @@
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
     build: -1,          // 天赋树画哪一套，-1 = 该类别里用得最多的那套
-    loadout: 0          // 显示第几条官方导入串（rioLoadouts 排序后的下标）
+    loadout: 0,         // 显示第几条官方导入串（rioLoadouts 排序后的下标）
+    // 天赋页的 maxroll 那一路（第 15 轮：天赋也按 maxroll 来）。
+    // mrKind 是 'mplus' | 'raid'，mrBuild 是该类型里第几套方案，
+    // mrSub 是「打包了两条英雄树」时画哪一条（0 = 用方案里第一条）。
+    // 都不持久化：下标是生成时的数组位置，重抓数据后会指向另一套方案，
+    // 存下来只会让用户下次打开看到一套他没选过的天赋。
+    mrKind: '',
+    mrBuild: 0,
+    mrSub: 0
   };
 
   var gearLoaded = false, gearLoading = false;
@@ -1307,11 +1315,16 @@
     if (talLoading) return;
     talLoading = true;
     setSub('正在加载天赋数据…');
+    // maxroll 的方案也是天赋页要用的（第 15 轮：天赋按 maxroll 来）。
+    // 它自己带回调重画，所以这里只是**触发**，不等它 —— 等它的话
+    // 天赋页会为了一份可选数据多空一会儿。
+    ensureMaxroll();
     loadDataFile('talent-data.js', 'AE_TALENTS', function (err) {
       if (err && AE.toast) AE.toast(err, 'warn');
-      // 树结构是另一个文件（app/talent-tree.js，约 415 KB）。它是**可选的**：
-      // 加载不到就退回「只有统计、没有树」的旧样子，功能不受影响。
-      // 所以这里不把它的失败当错误，也不弹提示。
+      // 树结构是另一个文件（app/talent-tree.js，约 415 KB）。
+      // 以前它是**可选的**：加载不到就退回「只有统计、没有树」。
+      // 现在 maxroll 那条路要靠它解串，所以加载不到就只剩插件那份统计 ——
+      // 仍然不当错误（面板照样能用），但那时 renderTalents 会走 popular 那条。
       if (global.AE_TALENT_TREE) { talLoading = false; talLoaded = true; done(); return; }
       loadDataFile('talent-tree.js', 'AE_TALENT_TREE', function () {
         talLoading = false;
@@ -1323,10 +1336,280 @@
 
   var TCAT = [['raid', '团本'], ['mplusHigh', '冲分'], ['mplusFarm', '割草']];
 
+  /**
+   * maxroll 的天赋方案。
+   *
+   * 产物形状：specs[specId].views[raid|mplus].talents = [{n 方案名, s 导入串,
+   * p 点数, h [英雄子树id…]}…]。串是**原样**的（生成器只把 URL-safe base64 换成
+   * 标准表），点数和英雄子树是生成时**声明**的 —— 这里解出来的必须和声明一致，
+   * 不一致由 tools/verify-maxroll-data.js 判红，面板不负责发现这种事。
+   */
+  function mrTalents(specId, kind) {
+    var v = mrView(specId, kind);
+    var list = v && v.talents;
+    return (list && list.length) ? list : null;
+  }
+
+  /** 这个专精有天赋方案的类型，大秘境在前（面板别处也是以大秘境为主）。 */
+  function mrTalentKinds(specId) {
+    return ['mplus', 'raid'].filter(function (k) { return mrTalents(specId, k); });
+  }
+
+  /**
+   * 这次要画哪一套 maxroll 天赋。返回 null = 这个专精没有（实测 3 个：
+   * 战士武器、德鲁伊平衡、武僧织雾 —— 它们的串全是照着上一版天赋树编的，
+   * 一条都解不开，所以生成器一条都没收）。
+   *
+   * 下标越界一律**自纠正**回 0，不报错：state.mrKind / mrBuild 不持久化，
+   * 但同一次会话里换专精之后旧下标就可能指向不存在的方案。
+   */
+  function mrTalentPick(specId) {
+    var kinds = mrTalentKinds(specId);
+    if (!kinds.length) return null;
+    var kind = kinds.indexOf(state.mrKind) >= 0 ? state.mrKind : kinds[0];
+    var list = mrTalents(specId, kind);
+    var i = state.mrBuild;
+    if (!(i >= 0) || i >= list.length) i = 0;
+    return { kinds: kinds, kind: kind, list: list, idx: i, build: list[i] };
+  }
+
+  /**
+   * 把一套方案的点数按英雄树拆开：{base 职业树+专精树, per {子树id: 点数}}。
+   *
+   * 为什么需要这个：maxroll 有「一套方案打包两条英雄天赋」的（实测去重后 167 套
+   * 里 82 套），产物里声明的 p 是两条**加在一起**的（95 = 68 + 13 + 13）。
+   * 游戏里一个角色只能选一条，所以 95 这个数字在游戏里配不出来 —— 列表上直接
+   * 印 95，就是在给用户一个他永远点不出来的点数。界面上要印的是「选一条之后
+   * 真实的总点数」。
+   *
+   * 白给的节点（out.granted）不算点数，和 app/talent-decode.js 里 out.pts 同一个
+   * 判据；否则 82 点会变成 90 多，和游戏里对不上。解不开返回 null。
+   */
+  function mrSplit(out) {
+    var TR = tree();
+    if (!TR || !out || out.err || !out.nr) return null;
+    var base = 0, per = {};
+    Object.keys(out.nr).forEach(function (id) {
+      if (out.granted && out.granted[id]) return;
+      var row = TR.nodes[id];
+      var sub = row && row[6];
+      var r = out.nr[id].rank || 0;
+      if (sub) per[sub] = (per[sub] || 0) + r;
+      else base += r;
+    });
+    return { base: base, per: per };
+  }
+
+  /**
+   * 一套方案在界面上该印的点数：选一条英雄树之后真实的总点数。
+   * 两条英雄树点数不一样时印两个数（实测都是 13/13，所以基本只会印一个）。
+   * 解不开就退回产物声明的 p —— 那时树也画不出来，界面上有单独的警告。
+   */
+  function mrPtsText(t) {
+    var dec = AE.TalentDecode, TR = tree(), o = null;
+    if (dec && TR) {
+      try { o = dec.decode(t.s, TR); } catch (e) { o = null; }
+    }
+    var sp = mrSplit(o);
+    if (!sp) return t.p + ' 点';
+    var seen = {}, vals = [];
+    ((t.h && t.h.length) ? t.h : [0]).forEach(function (sid) {
+      var v = sp.base + (sp.per[sid] || 0);
+      if (!seen[v]) { seen[v] = 1; vals.push(v); }
+    });
+    return vals.length ? vals.join(' / ') + ' 点' : t.p + ' 点';
+  }
+
   function renderTalents(host) {
-    var T = talents();
     var s = currentSpec();
     if (!s) return;
+
+    // maxroll 优先 —— 第 15 轮定的：天赋页也按 maxroll 来。
+    // 它需要两份数据：maxroll 的方案（懒加载）和天赋树（画树用，也是懒加载）。
+    // 两份都在才走这条路，否则退回插件那份统计 —— 「退回」不是「出错」，
+    // 首屏那一瞬间就是这个状态。
+    var pick = tree() ? mrTalentPick(s.specId) : null;
+    if (pick) { renderMrTalents(host, s, pick); return; }
+    renderPopularTalents(host, s);
+  }
+
+  /**
+   * maxroll 天赋页。
+   *
+   * 和插件那份统计最大的差别是**选择的粒度**：那边只有「团本 / 冲分 / 割草」
+   * 三个笼统类别，选完还要在一堆「#3·5人」里猜；maxroll 每套方案自带名字
+   * （「Sunfury Arcane Mage Mythic+ Build in Altar of Fangs」），一眼能选。
+   * 方案名**原样显示英文** —— 那是从页面上取下来的字符串，翻译它就得自己编词。
+   */
+  function renderMrTalents(host, s, pick) {
+    var M = maxroll();
+    var b = pick.build;
+    var dec = AE.TalentDecode;
+    var out = dec ? dec.decode(b.s, tree()) : { err: '天赋解码器没加载（app/talent-decode.js）' };
+
+    setSub('天赋　' + specLabel(s) + '　maxroll.gg '
+      + ((M && M.updatedAt) || '?') + '　'
+      + (pick.kind === 'mplus' ? '大秘境指南' : '团本指南')
+      + ' 共 ' + pick.list.length + ' 套');
+
+    // 团本 / 大秘境。只有一种时也画出来 —— 少一个按钮比「为什么没有团本」好解释。
+    var bar = el('div', 'bis-bar');
+    var seg = el('span', 'seg');
+    [['mplus', '大秘境'], ['raid', '团本']].forEach(function (k) {
+      if (pick.kinds.indexOf(k[0]) < 0) return;
+      var btn = button(k[1], pick.kind === k[0] ? 'on' : null, function () {
+        state.mrKind = k[0];
+        state.mrBuild = 0;      // 换类型必须归零：两边套数不一样，留着下标会越界
+        state.mrSub = 0;
+        render();
+      });
+      btn.setAttribute('data-tip', mrTalents(s.specId, k[0]).length + ' 套方案');
+      seg.appendChild(btn);
+    });
+    bar.appendChild(seg);
+    host.appendChild(bar);
+
+    // 方案列表。名字长，所以竖着一行一个，不挤成一排小按钮。
+    var pickBox = el('div', 'mr-builds');
+    pickBox.setAttribute('role', 'group');
+    pickBox.setAttribute('aria-label', '天赋方案，共 ' + pick.list.length + ' 套');
+    pick.list.forEach(function (t, i) {
+      var btn = button('', 'mrb' + (i === pick.idx ? ' on' : ''), function () {
+        state.mrBuild = i;
+        state.mrSub = 0;        // 换方案，英雄树的选择跟着重置
+        render();
+      });
+      btn.appendChild(el('span', 'nm', t.n || '（这套没写名字）'));
+      var meta = el('span', 'mt');
+      var ptsText = mrPtsText(t);
+      // 印的是「选一条英雄树之后」的点数，不是产物里的 p —— 见 mrSplit 的注释。
+      meta.appendChild(el('em', null, ptsText));
+      // 一条串在 maxroll 页面上挂在多个小节下面（每副本 / 每首领各一个天赋图）时，
+      // 生成器并成一套，c 是共用它的小节数。这里得说出来：名字里只留了第一个
+      // 小节（「… in Altar of Fangs」），不说的话会以为这套只适用于那一个副本。
+      if (t.c > 1) meta.appendChild(el('em', 'many', '通用 ' + t.c + ' 处'));
+      // 英雄天赋名走 subTreeName()：那是 DB2 的中文名，不是我编的译名。
+      // 结构是 <em class="hero"><b>名字</b></em>，和插件那条路的 chip 一样 ——
+      // run-tests.js 的「英雄天赋名不许是英文」那条断言认的就是这个结构，
+      // 换个写法它就悄悄少验 40 个专精。
+      t.h.forEach(function (sid) {
+        var e = el('em', 'hero');
+        e.appendChild(el('b', null, subTreeName(sid)));
+        meta.appendChild(e);
+      });
+      btn.appendChild(meta);
+      btn.setAttribute('data-tip', (t.n || '(无名)') + '\n' + ptsText
+        + (t.h.length > 1
+          ? '（串里两条英雄天赋合计 ' + t.p + ' 点，游戏里只能选一条）' : '')
+        + '\n英雄天赋：' + t.h.map(subTreeName).join(' / ')
+        + (t.c > 1 ? '\nmaxroll 有 ' + t.c + ' 个小节用的是同一套' : ''));
+      pickBox.appendChild(btn);
+    });
+    host.appendChild(pickBox);
+
+    if (out.err) {
+      var w = el('div', 'bis-warn');
+      w.appendChild(el('b', null, '这套方案的串解不开'));
+      w.appendChild(el('p', null, out.err + ' —— 树画不出来。'));
+      host.appendChild(w);
+    } else {
+      host.appendChild(renderMrTree(s, b, out));
+    }
+
+    // 为什么这里**不给** maxroll 的串。
+    //
+    // 一开始是给的（显示 + 复制 + 一句「没验证过能不能导入」）。后来量过一遍：
+    // 串头第一个字节是序列化版本号，maxroll 那批 167 条全是 130，而本机游戏
+    // 导出的 103 条、raider.io 的 306 条全是 2。版本对不上游戏会直接拒 ——
+    // 那不是「没验证过」，是「确定不能用」。给一个粘进去必然报错的串比不给更糟，
+    // 所以现在只用它画树，能导入的串在下面 raider.io 那一块。
+    host.appendChild(el('p', 'mr-nostr',
+      'maxroll 这套只用来看树，不给导入串：它页面里那串的版本号是 130，'
+      + '游戏只认 2，粘进去会被直接拒。要能一键导入的串，用下面 raider.io 那一块'
+      + '（那是从排行榜角色身上原样取的，能导）。'));
+
+    // raider.io 的官方串放在后面：它是**验证过能导入**的那一批。
+    var lo = renderLoadouts(s);
+    if (lo) host.appendChild(lo);
+  }
+
+  /**
+   * 画 maxroll 这一套的三棵树。
+   *
+   * 英雄树那一棵有个 maxroll 特有的情况：**一个 embed 里点了两条英雄树**
+   * （实测 587 套里 275 套是这样，点数 95 = 68 职业专精 + 13 + 13，而正常的是 82）。
+   * 游戏里一个角色只能选一条，所以那是 maxroll 把「同一套配两条英雄树」打包成了
+   * 一个串。这里**分开画**并给出选择，而不是把两条挤在一起 —— 挤在一起的话
+   * 界面上会出现一个游戏里做不到的形状。
+   */
+  function renderMrTree(s, b, out) {
+    var TR = tree();
+    var box = el('div', 'bis-tree');
+    var sp = TR.specs[String(s.specId)];
+    if (!sp) {
+      box.appendChild(el('p', 'note', '天赋树数据里没有 specID ' + s.specId + '。'));
+      return box;
+    }
+
+    var subs = out.subs.length ? out.subs : b.h;
+    var si = (state.mrSub >= 0 && state.mrSub < subs.length) ? state.mrSub : 0;
+    var sub = subs[si] || 0;
+
+    if (subs.length > 1) {
+      var sbar = el('div', 'tree-pick');
+      sbar.appendChild(el('span', 'lb', '英雄天赋'));
+      subs.forEach(function (sid, i) {
+        var btn = button(subTreeName(sid), i === si ? 'on' : null, function () {
+          state.mrSub = i;
+          render();
+        });
+        btn.setAttribute('data-tip',
+          '这一套 maxroll 同时给了 ' + subs.length + ' 条英雄天赋。'
+          + '游戏里只能选一条，所以这里一条一条画。');
+        sbar.appendChild(btn);
+      });
+      box.appendChild(sbar);
+      var sp2 = mrSplit(out);
+      var mine = sp2 ? (sp2.base + (sp2.per[sub] || 0)) : null;
+      box.appendChild(el('p', 'note',
+        '这套方案里 maxroll 把 ' + subs.map(subTreeName).join(' 和 ')
+        + ' 两条英雄天赋写在同一个串里（串里合计 ' + out.pts + ' 点 —— '
+        + '游戏里配不出这个数，一个角色只能选一条）。上面选哪条，下面就画哪条'
+        + (mine ? '：现在这条是 ' + mine + ' 点' : '')
+        + '；职业树和专精树两条共用。'));
+    } else {
+      box.appendChild(el('p', 'note',
+        '共 ' + out.pts + ' 点，英雄天赋：' + (sub ? subTreeName(sub) : '这套没点')
+        + '。高亮的是点了的节点，鼠标放上去看详情。'));
+    }
+
+    // 只画选中那条英雄树的节点。不筛的话两条树的节点会摆在同一张网格上，
+    // 坐标是各自树内的 5×5，直接叠成一团（实测）。
+    var heroIds = (sp.heroNodes || []).filter(function (id) {
+      var n = TR.nodes[id];
+      return n && (!sub || n[6] === sub);
+    });
+    var cols = el('div', 'tree-cols');
+    [[sp.classNodes, '职业天赋'],
+     [sp.specNodes, '专精天赋'],
+     [heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')]
+    ].forEach(function (g) {
+      var grid = renderTreeGrid(sp, g[0] || [], out.nr, g[1]);
+      if (grid) cols.appendChild(grid);
+    });
+    box.appendChild(cols);
+    return box;
+  }
+
+  /**
+   * 插件那份「顶尖玩家实际在用什么」的统计。
+   *
+   * maxroll 没有这个专精的方案时走这条（实测 3 个专精），或者 maxroll / 天赋树
+   * 还没加载完的首屏那一瞬间。它保留下来不是为了兼容 —— 它回答的是另一个问题
+   * （「大家在用什么」而不是「推荐什么」），maxroll 那边没有这个量。
+   */
+  function renderPopularTalents(host, s) {
+    var T = talents();
 
     if (!T) {
       host.appendChild(el('p', 'note', '天赋数据还没加载好。'));
@@ -1346,6 +1629,14 @@
     }
 
     setSub('天赋　' + specLabel(s) + '　共 ' + td.builds.length + ' 套');
+
+    // maxroll 有数据、只是还没加载完时，说一句「在等什么」——
+    // 不说的话用户会以为这就是最终形态，而下一秒界面会自己换掉。
+    if (!tree() || !maxroll()) {
+      host.appendChild(el('p', 'note',
+        '下面是插件那份「顶尖玩家实际在用什么」的统计。maxroll 的推荐方案还在加载，'
+        + '到了会自动换过来。'));
+    }
 
     var bar = el('div', 'bis-bar');
     var seg = el('span', 'seg');

@@ -50,12 +50,17 @@
 <script src="app/layouts.js" charset="utf-8"></script>
 <script src="app/model-tests.js" charset="utf-8"></script>
 <script src="app/export.js" charset="utf-8"></script>
+<script src="app/talent-decode.js" charset="utf-8"></script>
 <script src="app/bis.js" charset="utf-8"></script>
 <script src="app/bis-tests.js" charset="utf-8"></script>
 <!-- 两份参照表。天赋表在正式页面里是懒加载的，测试页要显式载入 ——
      否则那几个测试会「跳过」，而跳过在统计里跟通过长得一样。 -->
 <script src="app/bis-data.js" charset="utf-8"></script>
 <script src="app/talent-data.js" charset="utf-8"></script>
+<!-- 天赋树 + maxroll 的天赋方案：天赋页的 maxroll 那条路要靠它俩，
+     不载入的话那条路在测试里从来没被走过，而套件照样全绿。 -->
+<script src="app/talent-tree.js" charset="utf-8"></script>
+<script src="app/maxroll-data.js" charset="utf-8"></script>
 <script src="app/item-icons.js" charset="utf-8"></script>
 <script src="data/data.js" charset="utf-8"></script>
 <script src="data/bagsync.js" charset="utf-8"></script>

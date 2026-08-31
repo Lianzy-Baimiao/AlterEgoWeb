@@ -210,6 +210,9 @@ window.__AE_PROBE.storage = (function () {
 <script src="app/vault.js" charset="utf-8"></script>
 <!-- app/bis-data.js 和 app/talent-data.js 不在这里：加起来 ~670 KB，只有点开
      「毕业装备」才按需加载（见 app/bis.js 的 loadDataFile）。 -->
+<!-- 天赋串解码器。7 KB，随包同步加载 —— 它是 bis.js 天赋页的硬依赖，
+     懒加载只会让天赋页多一次「先画错再换掉」。 -->
+<script src="app/talent-decode.js" charset="utf-8"></script>
 <script src="app/bis.js" charset="utf-8"></script>
 <script src="app/export.js" charset="utf-8"></script>
 <script src="app/main.js" charset="utf-8"></script>

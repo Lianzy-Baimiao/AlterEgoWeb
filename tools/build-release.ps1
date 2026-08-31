@@ -83,6 +83,7 @@ $dropFromPkg = @(
     'tools\mutate-icons.js',   # mutation suite for the talent-icon assertions
     'tools\mutate-loadout.js', # mutation suite for the talent import-string assertions
     'tools\mutate-rio.js',     # mutation suite for the raider.io data assertions
+    'tools\mutate-mrtalents.js', # mutation suite for the maxroll talent-build assertions
     'tools\mutate-pool.js'     # mutation suite for the fetch-rio pool() regression test
 )
 foreach ($f in $dropFromPkg) {
