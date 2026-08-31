@@ -456,7 +456,6 @@ var payload = {
   items: pool,
   srcs: srcs,
   tracks: tracksInfo.pool,
-  tracks: tracksInfo.pool,
   specs: outSpecs,
   consumables: outConsum
 };
