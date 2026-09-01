@@ -30,9 +30,17 @@ process.on('exit', lock.release);
 
 // [说明, 目标文件, 原文, 换成什么]
 var MUTANTS = [
-  ['图标不写 alt（读屏会去念文件名）', BIS,
-   "img.alt = '';",
-   "/* mutant: alt 没了 */"],
+  // alt 有**两个调用点**（天赋图标 / 装备图标），所以拆成两条、各带上下文。
+  // 合成一条的话 replace 只换第一处，另一处永远没被验过。
+  ['天赋图标不写 alt（读屏会去念文件名）', BIS,
+   "img.className = 'ti';\n    img.src = url;\n    img.alt = '';",
+   "img.className = 'ti';\n    img.src = url;\n    /* mutant: alt 没了 */"],
+
+  ['装备图标不写 alt（读屏会去念文件名）', BIS,
+   "if (!url) return null;\n    var img = doc.createElement('img');\n"
+     + "    img.src = url;\n    img.alt = '';",
+   "if (!url) return null;\n    var img = doc.createElement('img');\n"
+     + "    img.src = url;\n    /* mutant: alt 没了 */"],
 
   ['天赋树画布不给 role', BIS,
    "canvas.setAttribute('role', 'group');",
@@ -63,10 +71,19 @@ var caught = 0, missed = [], skipped = [];
 MUTANTS.forEach(function (m) {
   var file = m[1], from = m[2], to = m[3];
   var orig = fs.readFileSync(file, 'utf8');
-  if (orig.indexOf(from) < 0) {
-    // 锚点失效也是一种失败：它意味着这个变异什么都没测。
-    skipped.push(m[0]);
-    console.log('  锚点失效  ' + m[0] + '（源码里找不到：' + from.slice(0, 40) + '）');
+  // 锚点必须**正好出现一次**。
+  //
+  // 原来只判「找不到」。第 20 轮静态查了一遍全部 mutate-*.js 的锚点，
+  // 发现这个套件是唯一没照这条规矩来的，而且当场就有一条踩了：
+  // `img.alt = '';` 在 bis.js 里有**两处**（天赋图标 460 行、装备图标 524 行），
+  // String.replace 只换第一处 —— 于是「装备图标有没有 alt」这半边
+  // 从来没被变异过，而变异体照样报「抓到」（另一处触发了断言）。
+  // 被别的调用点喂饱的变异体，等于没有验证它想验的那一处。
+  var hits = orig.split(from).length - 1;
+  if (hits !== 1) {
+    skipped.push(m[0] + '（锚点出现 ' + hits + ' 次，必须正好 1 次）');
+    console.log('  锚点失效  ' + m[0] + '（出现 ' + hits + ' 次：'
+      + from.slice(0, 40) + '）');
     return;
   }
   fs.writeFileSync(file, orig.replace(from, to));

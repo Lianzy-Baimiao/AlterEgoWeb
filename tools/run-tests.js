@@ -3301,6 +3301,37 @@ VERIFIERS.forEach(function (v) {
         + ' 个缓存目录全在名单里，' + shipped.length + ' 个随包脚本的依赖没被误踢）'));
 })();
 
+// ------------------------------------------------------- 变异测试的锚点还活着吗
+// 跑一轮变异测试要十几分钟，所以平时不跑；但「锚点烂了」是纯文本问题，
+// 查一遍不到一秒。而锚点烂掉 = **那条断言根本没在验**，
+// 变异测试还会安静地报「抓到」（触发的是别的断言）。
+// 第 20 轮它当场抓到两条空转一整轮的断言，和一个匹配两次的锚点。
+(function () {
+  var script = path.join(ROOT, 'tools', 'check-anchors.js');
+  if (!fs.existsSync(script)) { console.log(pad('变异锚点') + '跳过（没有 check-anchors.js）'); return; }
+  var cp = require('child_process');
+  var r = cp.spawnSync(process.execPath, [script], { cwd: ROOT, encoding: 'utf8' });
+  var out = (r.stdout || '') + (r.stderr || '');
+  var m = /合计 (\d+) 个锚点，坏 (\d+)/.exec(out);
+  if (!m) {
+    problems.push('check-anchors.js 没给出「合计 N 个锚点，坏 M」那一行 —— 它自己坏了？');
+    console.log(pad('变异锚点') + '读不出结果');
+    return;
+  }
+  var total = Number(m[1]), bad = Number(m[2]);
+  // 下界：锚点总数不该突然掉下来（那意味着抽取逻辑认不出结构了，
+  // 而「认不出」会安静地报 0 坏）。实测 114 个。
+  if (total < 80) {
+    problems.push('只认出 ' + total + ' 个变异锚点（实测 114），check-anchors 的抽取逻辑没跑全');
+  }
+  if (bad) {
+    out.split('\n').filter(function (l) { return l.indexOf('✗') >= 0; })
+      .slice(0, 6).forEach(function (l) { problems.push('变异锚点坏了：' + l.trim()); });
+  }
+  console.log(pad('变异锚点') + (bad ? '有问题' : '通过')
+    + '（' + total + ' 个锚点，坏 ' + bad + ' —— 坏锚点等于那条断言没在验）');
+}());
+
 // ----------------------------------------------------------------------- 汇总
 
 console.log('');
@@ -3316,6 +3347,6 @@ if (problems.length) {
 var bad = total.fail + problems.length;
 console.log(bad === 0
   ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + maxroll 天赋方案'
-    + ' + 无障碍 + 四项格式校验 + 天赋串解码对真值 + 并发池 + 打包一致性'
+    + ' + 无障碍 + 四项格式校验 + 天赋串解码对真值 + 并发池 + 打包一致性 + 变异锚点'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);
