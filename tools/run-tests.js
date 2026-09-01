@@ -165,7 +165,8 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
               // 所以这组的核心是「画出来的树 == 高亮那一套」，不是串。
               mrtSpecs: 0, mrtRenders: 0, mrtBox: 0, mrtTree: 0, mrtBtns: 0,
-              mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtNoStr: 0,
+              mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtCopy: 0, mrtGameOk: 0,
+              mrtCopyClick: 0,
               mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
               // 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明
@@ -891,9 +892,25 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
   stats.mrtRenders++;
   mrSeen[String(specId)] = 1;
   stats.mrtSpecs = Object.keys(mrSeen).length;
-  if (boxes.length !== 1 || notes.length !== 1) {
-    loNote('mr 块数', label + ' maxroll 方案列表 ' + boxes.length + ' 个 / 「不给导入串」'
-      + '说明 ' + notes.length + ' 个，各应正好 1 个');
+  // 每次渲染：1 个方案列表 + 1 个导入串块（或 1 条「没有导入串」说明）。
+  // 上一轮这里数的是「不给导入串」那条说明 —— 那个决定第 16 轮末尾被推翻了：
+  // maxroll 每张卡片下面的 Export 按钮给的串是可导入的（版本 2），
+  // 所以现在要求的是「给了导入串块 + 复制按钮」。
+  var mrLoads = [], mrCopy = [], nostr = [];
+  walk(body, function (n) {
+    if (!n.classList) return;
+    if (n.classList.contains('mr-loadout')) mrLoads.push(n);
+    if (n.classList.contains('mr-copy')) mrCopy.push(n);
+    if (n.classList.contains('mr-nostr')) nostr.push(n);
+  });
+  if (boxes.length !== 1 || (mrLoads.length + nostr.length !== 1)) {
+    loNote('mr 块数', label + ' maxroll 方案列表 ' + boxes.length + ' 个 / 导入串块 '
+      + mrLoads.length + ' 个 / 「没有导入串」说明 ' + nostr.length + ' 个，各应正好 1 个');
+    return;
+  }
+  if (mrLoads.length && mrCopy.length !== 1) {
+    loNote('mr 块数', label + ' 导入串块 ' + mrLoads.length + ' 个 / 复制按钮 '
+      + mrCopy.length + ' 个，各应正好 1 个');
     return;
   }
   stats.mrtBox++;
@@ -1040,12 +1057,76 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
     loNote('mr 英雄条', label + ' 这套只有 1 条英雄天赋，却画了 ' + subBtns + ' 个选择按钮');
   }
 
-  // 「不给 maxroll 的串」这个决定本身。串版本号 130 游戏必拒，给出来就是害人；
-  // 所以页面上任何输入框里都不许出现它。这一条钉的是决定，不是实现。
-  if (taVals.indexOf(t.s) >= 0) {
-    loNote('mr 又给串了', label + ' 页面上又出现了 maxroll 的串（版本号 130，游戏会拒）');
-  } else {
-    stats.mrtNoStr++;
+  // **可导入的串（t.g）必须给，版本 130 的原始串（t.s）不许给。**
+  //
+  // 这一条上一轮是反的（「页面上不许出现 maxroll 的串」）。推翻它的依据：
+  // maxroll 每张天赋卡片下面有个 Export 按钮，那个串的版本字节是 2，能导入；
+  // 它和页面里那个 blob 的节点位逐位相同，只差串头两个字段。生成器现在照着改，
+  // 产出 t.g。t.s 仍然不许出现 —— 那个是版本 130 的，粘进去会被拒。
+  if (mrLoads.length) {
+    if (taVals.indexOf(t.g) < 0) {
+      loNote('mr 没给串', label + ' 画了导入串块，但输入框里没有产物那条可导入串（t.g）');
+    } else {
+      stats.mrtCopy++;
+    }
+    if (t.s && taVals.indexOf(t.s) >= 0) {
+      loNote('mr 又给 s 了', label + ' 页面上出现了 maxroll 的原始串（版本 130，游戏会拒）');
+    }
+    // **真点一次复制。** 上面验的都是 DOM 里的文字，而复制走的是另一个参数 ——
+    // 显示 t.g、复制 t.s 的话界面完全正常，只有粘进游戏那一刻才被拒。
+    // rio 那一路早就这么验了（见 checkLoadout），这一路第一版漏了：复制按钮
+    // 只数个数、从来没点过，于是那个变异体报「漏」。
+    var mrShown = null;
+    walk(mrLoads[0], function (n) {
+      if (n.tagName === 'TEXTAREA' || n.tagName === 'INPUT') mrShown = n.value;
+    });
+    copied.length = 0;
+    mrCopy[0].click();
+    if (copied.length !== 1) {
+      loNote('mr 没调用', label + ' 点了 maxroll 的复制按钮，copyWithToast 被调用 '
+        + copied.length + ' 次');
+    } else if (copied[0].text !== mrShown) {
+      loNote('mr 复制不符', label + ' 复制出去的串和框里显示的不是同一串');
+    } else {
+      stats.mrtCopyClick++;
+    }
+    // **这一条是整块的意义所在**：给出去的串必须真的能导入。
+    // 判据不是「有个串」，而是拿**另一份解码器**（tools/decode-talent-string.js，
+    // 面板用的是 app/talent-decode.js）解一遍，逐项对：
+    //   · 版本字节必须是 2 —— 130 会被游戏直接拒，那正是上一轮的状态；
+    //   · treeHash 必须全 0 —— raider.io 3960 条真实串、本机游戏导出 32 条都是 0；
+    //   · specID 必须是当前专精 —— 串头挂错专精，游戏拒；
+    //   · 点亮的节点必须和**产物里那条原始串**逐个相同 —— 串头改写不许动到节点位。
+    var gd = DEC.decode(t.g, MR_ORDER);
+    if (gd.err) {
+      loNote('mr 串解不开', label + ' 给出去的导入串解不开：' + gd.err);
+    } else {
+      if (gd.ver !== 2) {
+        loNote('mr 串版本', label + ' 给出去的串版本字节是 ' + gd.ver
+          + '，游戏只认 2 —— 粘进去会被拒');
+      }
+      if (!/^0+$/.test(gd.hash || '')) {
+        loNote('mr 串 hash', label + ' 给出去的串 treeHash 不是全 0：' + gd.hash);
+      }
+      if (gd.spec !== specId) {
+        loNote('mr 串专精', label + ' 给出去的串串头写着专精 ' + gd.spec
+          + '，当前是 ' + specId);
+      }
+      // 节点位有没有被动过：和原始串 t.s 解出来的节点表逐个比
+      var sd = DEC.decode(t.s, MR_ORDER);
+      if (!sd.err) {
+        function sig(o) {
+          return (o.nodes || []).filter(function (x) { return x.inSpec; })
+            .map(function (x) { return x.id + ':' + x.rank + ':' + x.entryIndex; })
+            .sort().join('|');
+        }
+        if (sig(gd) !== sig(sd)) {
+          loNote('mr 串节点变了', label + ' 串头改写之后节点表变了 —— 只该改前 152 位');
+        } else {
+          stats.mrtGameOk++;
+        }
+      }
+    }
   }
 
   // ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
@@ -2033,9 +2114,19 @@ if (stats.mrtPts !== stats.mrtRenders) {
 if (stats.mrtPtsSplit < 10) {
   problems.push('打包两条英雄天赋的方案里，点数只复核过 ' + stats.mrtPtsSplit + ' 次，太少');
 }
-if (stats.mrtNoStr !== stats.mrtRenders) {
-  problems.push('「页面上没有 maxroll 的串」只验过 ' + stats.mrtNoStr + ' 次，渲染 '
-    + stats.mrtRenders + ' 次');
+if (stats.mrtCopy !== stats.mrtRenders) {
+  problems.push('maxroll 导入串（.mr-copy + textarea 里是 t.g）只验过 ' + stats.mrtCopy
+    + ' 次，渲染 ' + stats.mrtRenders + ' 次，说明有渲染没给出可导入的串');
+}
+// 「给出去的串真的能导入」——版本 2 + treeHash 全 0 + specID 对 + 节点位没被动过。
+// 这一条是整块的意义所在：有个串不等于那个串能用。
+if (stats.mrtCopyClick !== stats.mrtRenders) {
+  problems.push('maxroll 的复制按钮只真点过 ' + stats.mrtCopyClick
+    + ' 次，渲染 ' + stats.mrtRenders + ' 次 —— 没点过就等于没验「复制的和显示的是同一串」');
+}
+if (stats.mrtGameOk !== stats.mrtRenders) {
+  problems.push('导入串「版本 2 + hash 全 0 + specID 对 + 节点位未变」只验过 '
+    + stats.mrtGameOk + ' 次，渲染 ' + stats.mrtRenders + ' 次');
 }
 // 「通用 N 处」：去重之后大部分方案都挂在多个小节下面（实测 167 套里绝大多数），
 // 一次都没遇到说明取的不是去重后的产物。
@@ -2156,7 +2247,8 @@ if (stats.mrtKindSaved !== stats.mrtKindSw) {
 console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
     && stats.mrtBox === stats.mrtRenders && stats.mrtTree === stats.mrtRenders
     && stats.mrtPts === stats.mrtRenders && stats.mrtDecl === stats.mrtRenders
-    && stats.mrtNoStr === stats.mrtRenders ? '通过' : '有问题')
+    && stats.mrtCopy === stats.mrtRenders
+    && stats.mrtCopyClick === stats.mrtRenders ? '通过' : '有问题')
   + '（' + stats.mrtSpecs + '/' + specKeys.length + ' 个专精 / ' + stats.mrtRenders
   + ' 次渲染，方案按钮 ' + stats.mrtBtns + '，画出来的树和高亮那一套同一套 '
   + stats.mrtTree
@@ -2166,6 +2258,8 @@ console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
   + '，多个小节共用说清楚 ' + stats.mrtMany
   + '，产物里 ' + mrTotal + ' 套方案无重复串（一个专精最多 ' + mrMax + ' 套）'
   + '，打包多条英雄树 ' + stats.mrtBundle + ' 套都给了选择条'
+  + '，复制按钮真点过 ' + stats.mrtCopyClick + ' 次且复制内容与框里显示逐字节相同'
+  + '，导入串可用（版本 2 / hash 全 0 / specID 对 / 节点位未变）' + stats.mrtGameOk
   + '，真点过：换方案 ' + stats.mrtBuildSw + '、换英雄树 ' + stats.mrtSubSw
   + '、换类型 ' + stats.mrtKindSw + '）');
 // 单独一行：第 16 轮加的三块。**必须打印** —— 「加了计数器、写了断言、

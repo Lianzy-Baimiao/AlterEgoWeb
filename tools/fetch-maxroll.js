@@ -51,6 +51,15 @@ var fs = require('fs');
 var path = require('path');
 var https = require('https');
 
+// 解码器提到模块作用域：toGameLoadout 要拿它当「削尾之后还能不能解开」的闸。
+// 放在 writeOut 里的局部变量拿不到（那个函数在后面）。
+var DEC_MOD = require('./decode-talent-string.js');
+var DEC_ORDER = null;
+function decOrder() {
+  if (!DEC_ORDER) DEC_ORDER = DEC_MOD.loadOrder();
+  return DEC_ORDER;
+}
+
 var ROOT = path.join(__dirname, '..');
 var CACHE = path.join(__dirname, '.maxroll-raw');
 var OUT = path.join(ROOT, 'app', 'maxroll-data.js');
@@ -600,6 +609,96 @@ function normalizeB64(s) {
   return String(s).replace(/-/g, '+').replace(/_/g, '/');
 }
 
+/* ---------------------------------------------- 串头改写：变成能导进游戏的串 */
+
+var B64_ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function b64ToBits(s) {
+  var out = [];
+  for (var i = 0; i < s.length; i++) {
+    var v = B64_ALPHA.indexOf(s.charAt(i));
+    if (v < 0) return null;
+    for (var b = 0; b < 6; b++) out.push((v >> b) & 1);
+  }
+  return out;
+}
+
+function bitsToB64(a) {
+  var s = '';
+  for (var i = 0; i < a.length; i += 6) {
+    var v = 0;
+    for (var b = 0; b < 6; b++) v |= (a[i + b] || 0) << b;
+    s += B64_ALPHA.charAt(v);
+  }
+  return s;
+}
+
+/**
+ * maxroll 页面里那个 blob → **能粘进游戏的导入串**。
+ *
+ * 这件事上一轮判断错了，记清楚为什么
+ * ------------------------------------
+ * 上一轮的结论是「maxroll 的串不能导入，因为版本字节是 130 而游戏只认 2」。
+ * 前半句的事实没错，**结论错了** —— 我只看了 `data-wow-data` 那个 blob（那是他们
+ * 编辑器的状态），没注意每张天赋卡片下面还有一个 `Export (12.1.0.69111)` 按钮，
+ * 那个按钮给的是另一串，而它的版本字节就是 2。
+ *
+ * 用户把惩戒骑 AOE 那一条 Export 出来给我，逐位比完发现：
+ *   **两串的节点位逐位相同，差别只有串头里两个字段** ——
+ *   版本字节 130 → 2，128 位 treeHash → **全 0**，再去掉尾部一个纯填充字符。
+ * 也就是说 Export 按钮就是在做这一次改写，不是另算一份数据。这也解释了为什么
+ * 用户说「点了立刻就复制好，没有等」：那一下根本不联网。
+ *
+ * treeHash 填 0 是对的，有两组本机数据作证：raider.io 的 3960 条真实玩家串、
+ * 本机游戏自己导出的 32 条，**treeHash 全都是 0**（版本也全都是 2）。
+ * 游戏不校验这个字段。
+ *
+ * 为什么是「改串头」而不是「解码后重新编码」
+ * --------------------------------------
+ * 因为**解码器还有一段没建模的位**：raider.io 3722 条里有 84 条（2.3%）在节点流
+ * 之后还有非零位，集中在 6 个专精（65/66/70 骑士三系、252 死骑邪恶、
+ * 254/255 猎人射击生存），`leftBits` 最多到 13 —— 纯填充用不了那么多。
+ * 那多半是这一版新加的 Apex Talents（maxroll 页面里有这一节），而
+ * app/talent-tree.js 比它旧。惩戒骑正好是 70。
+ *
+ * 解码后重编会把那段位**静默丢掉**（读不到就写不回）。而改串头只动前 152 位,
+ * 尾部原样留着 —— 实测 167 条改完之后，第 152 位往后**一位都没变**，
+ * 那 5 条尾部带非零位的也都保住了。所以这条路是无损的，重编不是。
+ */
+function toGameLoadout(s) {
+  var bits = b64ToBits(s);
+  if (!bits) return null;
+  for (var i = 0; i < 8; i++) bits[i] = (2 >> i) & 1;      // 版本字节 → 2
+  for (var j = 0; j < 128; j++) bits[24 + j] = 0;          // treeHash → 全 0
+  var out = bitsToB64(bits);
+  // 尾部纯填充字符（'A' = 6 个 0 位）去掉，和 Export 按钮的输出对齐。
+  //
+  // 两道闸，缺一不可：
+  //  ① 削掉的那些位必须真的全是 0（不然是在丢信息）；
+  //  ② **削完之后解码器还要能走完整个 nodeOrder**。
+  //
+  // ② 是被两个专精逼出来的（恶魔猎手 Fel-Scarred、恢复德 Keeper of the Grove）：
+  // 尾部那串 0 看着是填充，其实是「最后几个节点没选」——「没选」这件事本身
+  // 就是用 0 位表示的。削掉之后解码器读到一半位就用完了，报「位读完了但节点
+  // 还剩 2 个没走到」。只有 ① 的话这两个专精的串会被削坏，而产物看起来一切正常。
+  var order = decOrder();
+  while (out.length > 26 && out.charAt(out.length - 1) === 'A') {
+    var cut = (out.length - 1) * 6;
+    var allZero = true;
+    for (var k = cut; k < bits.length; k++) {
+      if (bits[k]) { allZero = false; break; }
+    }
+    if (!allZero) break;
+    var shorter = out.slice(0, -1);
+    if (order) {
+      var probe = DEC_MOD.decode(shorter, order);
+      if (probe.err) break;
+    }
+    out = shorter;
+  }
+  return out;
+}
+
 function parseGuide(html, slug) {
   var blk = gearBlock(html);
   if (!blk) return { error: '没有装备块' };
@@ -850,7 +949,13 @@ function collectTalents(list, specId, dec, ORDER, subOf, stat, scenMap) {
     if (!h.length) { badStr[s] = 1; stat.noHero++; return; }
     if (h.length > 1) stat.bundle++;
     stat.kept++;
+    // g = 能粘进游戏的导入串（串头改写，见 toGameLoadout 的注释）。
+    // s 留着不动：面板画树用的是它，而且它是产物和上游页面的对应关系，
+    // 换赛季重抓时对账要靠它。两个字段都存，各有各的用途。
+    var game = toGameLoadout(s);
     var rec = { n: b.name, s: s, p: pts, h: h, c: 1 };
+    if (game) { rec.g = game; stat.game++; }
+    else stat.gameFail++;
     // 场景（单体 / AOE / 顺劈 / 多目标）是**可选的**：实测 80 篇里只有 28 篇
     // 按场景分天赋，其余按英雄天赋或副本分。没有就不写这个字段 ——
     // 写个空串会让面板画出一个空标签，写 'st' 更糟（那是编的）。
@@ -869,7 +974,7 @@ function collectTalents(list, specId, dec, ORDER, subOf, stat, scenMap) {
 function writeOut(parsed, slotMap, RIO, meta) {
   // 解码器 + 天赋树。两个都是提交进仓库的，缺了就是仓库不完整，直接报错 ——
   // 「跳过天赋」会让产物看起来正常而天赋页空着。
-  var dec = require('./decode-talent-string.js');
+  var dec = DEC_MOD;
   var TREE = dec.loadTree();
   if (!TREE) throw new Error('读不到 app/talent-tree.js —— 天赋方案没法筛，先跑 tools\\fetch-talent-tree.js');
   var ORDER = dec.loadOrder();
@@ -885,7 +990,7 @@ function writeOut(parsed, slotMap, RIO, meta) {
     subOfSpec[sid] = m;
   });
   var tStat = { kept: 0, undecodable: 0, wrongSpec: 0, noHero: 0, bundle: 0, threw: 0, dupe: 0,
-    scen: 0, scenMulti: 0 };
+    scen: 0, scenMulti: 0, game: 0, gameFail: 0 };
   var nStat = { boss: 0, bossDupe: 0, prio: 0, prioDupe: 0, prioScen: 0 };
 
 
@@ -1009,18 +1114,30 @@ function writeOut(parsed, slotMap, RIO, meta) {
       + '解不开的不收；同一条串挂在多个小节下面（每副本 / 每首领各一个 embed）时并成一套，'
       + 'c 记的是有几个小节共用它 —— 不并的话一个专精会列出 9~13 行名字几乎一样的方案，'
       + '点开画的是同一棵树。'
-      + '**这些串不是游戏的导入串**：串头第一个字节（序列化版本）实测是 130，而本机游戏'
-      + '导出的 103 条、raider.io 的 306 条全是 2 —— 版本对不上，游戏会直接拒，所以 s '
-      + '只用来画树，不给复制；要能粘进游戏的串用 app/rio-data.js 里的 loadouts。'
+      + 's 是页面里那个 blob，串头第一个字节（序列化版本）是 130，**不能直接粘进游戏**；'
+      + 'g 是它改完串头的版本（版本字节 → 2、128 位 treeHash → 全 0），**能粘**。'
+      + '这个改写就是 maxroll 每张天赋卡片下面那个 Export 按钮做的事：用户导出一条'
+      + '惩戒骑 AOE 给我逐位比过，两串的节点位逐位相同，只有串头那两个字段不同。'
+      + 'treeHash 填 0 有两组本机数据作证：raider.io 的 3960 条真实玩家串、本机游戏'
+      + '导出的 32 条，treeHash 全是 0，版本全是 2 —— 游戏不校验它。'
+      + '为什么是改串头而不是解码后重编：解码器还有一段没建模的位（raider.io 3722 条里'
+      + '84 条在节点流之后还有非零位，集中在 6 个专精 65/66/70/252/254/255，'
+      + 'leftBits 最多 13，多半是这一版新加的 Apex Talents），重编会把它静默丢掉；'
+      + '改串头只动前 152 位，实测 167 条改完之后第 152 位往后一位都没变。'
       + 'h 有两个子树号的是 maxroll 的「一套方案 + 两条英雄树」打包（点数 95 = 68 职业专精 '
-      + '+ 13 + 13，而单树的是 82），游戏里只能选一条，面板按英雄树分开画。'
+      + '+ 13 + 13，而单树的是 82）。**那 82 套的 g 也是 95 点的**，而游戏里一个角色'
+      + '只能选一条英雄树 —— maxroll 的 Export 按钮导出来的就是这个样子（实测 raider.io '
+      + '3722 条真实串里两条子树的有 299 条，但全部低于 82 点、最高 78，那是没点满的'
+      + '角色在换树途中，没有一条是 95 点）。所以面板对这 82 套要说清「这串带着两条'
+      + '英雄树，导进去得自己删一条」，而不是假装它和单树那些一样。'
       + '树本身是可信的：职业树 + 专精树点亮的节点和 raider.io 榜一方案的 Jaccard 中位 0.83，'
       + '而 raider.io 榜一 vs 榜二这个对照组是 0.82。',
     fmt: {
       specs: 'specId → {cls, specEn, views}',
       views: 'raid | mplus → {slug, bis 槽位→[itemId…], alt 同, ench 槽位→[itemId…], '
-        + 'tiers [[分级, [itemId…]]…], talents [{n 方案名, s 串（画树用，不是游戏导入串）, '
+        + 'tiers [[分级, [itemId…]]…], talents [{n 方案名, s 串（画树用，版本 130 不能导入）, '
         + 'p 点数, h [英雄子树id…], c 有几个小节共用这一套, '
+        + 'g 能粘进游戏的导入串（s 改了串头：版本 130→2、treeHash→全 0）, '
         + 'sc [场景码…]（可选，st 单体 / aoe / cleave 顺劈 / multi 多目标）}…], '
         + 'boss [{n 首领或副本名, t 说明}…], prio [{n 小节名, s 场景码（可选）, t 正文}…]}',
       note2: 'boss 和 prio 的正文是**英文原文**：首领名 / 副本名 / 技能名都长在句子里，'
@@ -1054,6 +1171,9 @@ function writeOut(parsed, slotMap, RIO, meta) {
   console.log('    丢：解不开 ' + tStat.undecodable + '，串头专精对不上 ' + tStat.wrongSpec
     + '，一条英雄树都没点 ' + tStat.noHero + '，解码抛异常 ' + tStat.threw
     + '；同一条串挂在多个小节下面被并成一套的 ' + tStat.dupe + ' 处');
+  console.log('    带游戏导入串（g）的 ' + tStat.game + ' 套'
+    + (tStat.gameFail ? '，改写失败 ' + tStat.gameFail + ' 套' : '')
+    + ' —— 串头改写：版本字节 130→2、treeHash→全 0（和 Export 按钮一致）');
   console.log('    分了场景（单体/AOE/顺劈/多目标）的 ' + tStat.scen + ' 套'
     + '（同时属于多个场景的 ' + tStat.scenMulti + ' 套）'
     + ' —— maxroll 只有一部分专精按场景分天赋，其余按英雄天赋或副本分');

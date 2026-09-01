@@ -1898,11 +1898,20 @@
     // 下面那块是 raider.io 榜上最多人用的串，和你在上面选的这套方案没有关系
     // （实测拿一个专精比过：7 个节点树上有而串里没有，8 个反过来）。
     // 所以这里只说「这套没有可导入的串」，不把用户往一个他会以为等价的地方引。
-    host.appendChild(el('p', 'mr-nostr',
-      'maxroll 这套只用来看树，没有可导入的串：它页面里那串的版本号是 130，'
-      + '游戏只认 2，粘进去会被直接拒。'
-      + '下面那块 raider.io 的串是另一套天赋（榜上最多人用的那套），'
-      + '不是上面这套的可导入版本 —— 想照上面这套点，只能按着树自己点。'));
+    // ---- 这一套的导入串。
+    //
+    // 上一轮这里写的是「maxroll 这套没有可导入的串」，**那个结论是错的**。
+    // 我当时只看了页面里 data-wow-data 那个 blob（版本字节 130，游戏确实拒），
+    // 没注意每张天赋卡片下面还有一个 Export 按钮 —— 那个按钮给的串版本字节是 2。
+    // 用户导出一条惩戒骑 AOE 过来，逐位比完发现两串的节点位逐位相同，
+    // 差别只有串头两个字段（版本 130→2、treeHash→全 0）。生成器现在照着做，
+    // 产出的 g 和用户那条 Export 串逐字符相同（见 tools/fetch-maxroll.js
+    // 的 toGameLoadout）。
+    if (b.g) host.appendChild(renderMrLoadout(b, pick));
+    else {
+      host.appendChild(el('p', 'mr-nostr',
+        '这一套没有导入串（生成时串头改写失败）—— 树还是能看的。'));
+    }
 
     // 出手顺序（优先级列表）和每个首领 / 副本的说明。两块都是**英文原文**，
     // 见 renderMrNotes 的注释。
@@ -1919,6 +1928,73 @@
     // raider.io 的官方串放在后面：它是**验证过能导入**的那一批。
     var lo = renderLoadouts(s);
     if (lo) host.appendChild(lo);
+  }
+
+  /**
+   * maxroll 这一套的**游戏导入串**。
+   *
+   * 产物里 g 是页面那个 blob 改完串头的结果（版本 130→2、treeHash 全 0），
+   * 和 maxroll 每张卡片下面 Export 按钮给的串逐字符相同。
+   *
+   * 打包两条英雄天赋那 82 套要**单独说清楚**：它们的串是 95 点的（68 职业专精
+   * + 13 + 13），而游戏里一个角色只能选一条英雄树。这不是我们改坏的 ——
+   * maxroll 的 Export 按钮导出来就是这个样子。实测 raider.io 3722 条真实玩家串里
+   * 点亮两条子树的有 299 条，但**全部低于 82 点**（最高 78），那是没点满的角色
+   * 在换树途中，没有一条是 95 点。所以这串导进去之后得自己删掉一条英雄树,
+   * 界面上必须说，不能让它看着和单树那些一样。
+   */
+  function renderMrLoadout(b, pick) {
+    var bundled = (b.h || []).length > 1;
+    // class **不能沿用 bis-loadout** —— 那个类被「每次渲染恰好一个导入串块」
+    // 那条断言数着（它盯的是下面 raider.io 那一块），共用会让计数翻倍。
+    // 和 gap-sum 那次是同一个形状，都是断言当场抓出来的。
+    var box = el('div', 'mr-loadout');
+
+    var head = el('div', 'lo-head');
+    head.appendChild(el('b', null, '这一套的导入串'));
+    head.appendChild(el('span', 'n', b.g.length + ' 个字符'));
+    if (bundled) {
+      var warn = el('span', 'lo-warn', '带着 ' + b.h.length + ' 条英雄天赋');
+      warn.setAttribute('data-tip',
+        'maxroll 把这一套配了 ' + b.h.length + ' 条英雄天赋打包在一个串里（'
+        + b.p + ' 点），而游戏里一个角色只能选一条。\n'
+        + '它的 Export 按钮导出来就是这样 —— 不是面板改坏的。\n'
+        + '导进游戏之后自己把不要的那条英雄天赋清掉；上面的树已经按你选的那条画了。');
+      head.appendChild(warn);
+    }
+    box.appendChild(head);
+
+    // readOnly 但可选中：复制失败时还能手动选（file:// 下剪贴板 API 不总是可用）。
+    // class **不能带 lo-text** —— 那个类被 checkLoadouts 按「每次渲染恰好一个串框」
+    // 数着（它盯的是 raider.io 那一块）。这是同一个坑的第三次（前两次是 gap-sum
+    // 和 bis-loadout）：复用别人的 class 会把别人的计数弄乱。
+    var ta = el('textarea', 'mr-text');
+    ta.value = b.g;
+    ta.readOnly = true;
+    ta.rows = 2;
+    ta.setAttribute('aria-label', '天赋导入串，' + b.g.length + ' 个字符，只读');
+    box.appendChild(ta);
+
+    var act = el('div', 'lo-act');
+    var copy = button('复制', 'primary mr-copy', function () {
+      if (AE.copyWithToast) AE.copyWithToast(b.g, '天赋导入串');
+      else if (AE.toast) AE.toast({ title: '请手动选中上面的串按 Ctrl+C', kind: 'warn' });
+    });
+    copy.setAttribute('data-tip',
+      '复制后在游戏里打开天赋界面，右下角「导入」粘贴。\n'
+      + (bundled
+        ? '这一套带着 ' + b.h.length + ' 条英雄天赋，导进去后自己清掉不要的那条。'
+        : '这一套只有一条英雄天赋，导进去就是上面画的样子。'));
+    act.appendChild(copy);
+    act.appendChild(el('span', 'n', mrPtsText(b)
+      + (bundled ? '（串里合计 ' + b.p + ' 点）' : '')));
+    box.appendChild(act);
+
+    box.appendChild(el('p', 'note',
+      '这一串是 maxroll 页面里那个 blob 改了串头得到的（版本字节 130→2、'
+      + 'treeHash 全 0），和它每张卡片下面 Export 按钮给的串逐字符相同 —— '
+      + '节点位一个都没动。'));
+    return box;
   }
 
   // 场景码 → 中文。这四个词是**通用战斗术语**，不是游戏里的官方译名

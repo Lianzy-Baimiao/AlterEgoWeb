@@ -178,7 +178,7 @@ if (errors.length) { report(); }
 /* ----------------------------------------------------------------- items */
 var stat = { specs: 0, views: 0, bisRows: 0, altRows: 0, ench: 0, tiers: 0, noName: 0,
   talents: 0, tDecoded: 0, tSpecs: 0, tBundled: 0, tShared: 0, tMax: 0, tNoTalents: 0,
-  tVer2: 0,
+  tVer2: 0, tGame: 0,
   // 第 16 轮：场景码 / 出手顺序 / 首领说明
   tScen: 0, tScenMulti: 0, prio: 0, prioViews: 0, boss: 0, bossViews: 0, nScen: 0 };
 (function () {
@@ -420,10 +420,61 @@ function checkBuildStr(at, sid, t) {
       }
     });
   }
-  // 串头第一个字节是序列化版本。实测 maxroll 是 130，游戏和 raider.io 是 2 ——
-  // 面板据此明说「这套不给导入串」。上游哪天真改成 2 了那是好消息，但那个决定
-  // 得重看，所以显式提醒，不让它悄悄过去。
+  // 串头第一个字节是序列化版本。s 是页面里那个 blob，实测一直是 130（游戏会拒）。
+  // 上游哪天真改成 2 了，那 g 那一步就多余了 —— 显式提醒，别让它悄悄过去。
   if (d.ver === 2) stat.tVer2++;
+
+  // ---- g：能粘进游戏的那一条（串头改写的结果）
+  //
+  // 判据四条，逐条都是「不满足游戏就会拒」：
+  //   · 版本字节必须是 2（130 会被拒 —— 那正是 s 的状态）；
+  //   · treeHash 必须全 0（raider.io 3960 条真实串、本机游戏导出 32 条都是 0）；
+  //   · specID 必须和挂的专精一致；
+  //   · **节点表必须和 s 逐个相同** —— 串头改写只该动前 152 位，动到节点位
+  //     就是把方案改坏了，而界面上完全看不出来。
+  ck();
+  if (t.g === undefined) {
+    warn(at + ' 没有 g（可导入串）—— 面板那一套就只能看树，不能复制');
+    return;
+  }
+  ck();
+  if (typeof t.g !== 'string' || !t.g) { fail(at + '.g 不是非空串'); return; }
+  ck();
+  if (/[-_]/.test(t.g)) fail(at + '.g 里有 URL-safe base64 的 - 或 _');
+  var dg = DEC.decode(t.g, TR);
+  ck();
+  if (dg.err) { fail(at + '.g 解不开：' + dg.err + '（那它就不是能导入的串）'); return; }
+  ck();
+  if (dg.ver !== 2) {
+    fail(at + '.g 的版本字节是 ' + dg.ver + '，游戏只认 2 —— 粘进去会被拒');
+  }
+  ck();
+  if (!/^0+$/.test(dg.hash || '')) {
+    fail(at + '.g 的 treeHash 不是全 0：' + dg.hash
+      + '（实测能导入的串这一段全是 0）');
+  }
+  ck();
+  if (dg.spec !== Number(sid)) {
+    fail(at + '.g 串头写着专精 ' + dg.spec + '，却挂在专精 ' + sid + ' 下面');
+  }
+  ck();
+  if (dg.pts !== d.pts) {
+    fail(at + '.g 解出 ' + dg.pts + ' 点，而 s 解出 ' + d.pts
+      + ' 点 —— 串头改写动到了节点位');
+  }
+  ck();
+  if ((dg.subs || []).join(',') !== (d.subs || []).join(',')) {
+    fail(at + '.g 的英雄子树 [' + dg.subs + '] 和 s 的 [' + d.subs + '] 不一致');
+  }
+  ck();
+  var sigG = Object.keys(dg.nr || {}).sort().map(function (k) {
+    return k + ':' + dg.nr[k].rank + ':' + dg.nr[k].eid;
+  }).join('|');
+  var sigS = Object.keys(d.nr || {}).sort().map(function (k) {
+    return k + ':' + d.nr[k].rank + ':' + d.nr[k].eid;
+  }).join('|');
+  if (sigG !== sigS) fail(at + '.g 和 s 解出来的节点表不同 —— 串头改写不许动节点位');
+  else stat.tGame++;
 }
 
 /* ------------------------------------------------------------------ 空转守卫 */
@@ -442,6 +493,11 @@ function checkBuildStr(at, sid, t) {
   if (stat.talents === 0) fail('一套天赋方案都没有 —— 天赋页会是空的，而那组断言全在空转');
   ck();
   if (stat.tDecoded === 0) fail('一条天赋串都没解开，「声明的点数/英雄树对不对」这组等于没跑');
+  ck();
+  if (stat.talents > 0 && stat.tGame === 0) {
+    fail('一条可导入串（g）都没有 —— 那面板上的复制按钮就没东西可给'
+      + '（串头改写见 tools/fetch-maxroll.js 的 toGameLoadout）');
+  }
   // 第 16 轮那三块同理：checkNotes 里那些「非空 / 无重复 / 名字里没有 HTML」
   // 的判据在 list 为空时全是恒真的，所以要有下界证明它们真的走到过。
   // 实测：出手顺序 183 条、首领说明 252 条、带场景的方案 51 套。
@@ -492,6 +548,8 @@ function report() {
   console.log('槽位映射   ' + Object.keys(M.slotMap || {}).length + ' 个 maxroll 名字 → INVSLOT');
   console.log('天赋       ' + stat.talents + ' 套 / ' + stat.tSpecs + ' 个专精（单专精最多 '
     + stat.tMax + ' 套），打包两条英雄树 ' + stat.tBundled + ' 套，多小节共用 ' + stat.tShared + ' 套');
+  console.log('可导入串   ' + stat.tGame + ' / ' + stat.talents
+    + ' 条通过「版本 2 + treeHash 全 0 + specID 对 + 节点表和 s 逐个相同」');
   console.log('天赋复核   ' + stat.tDecoded + ' 条串重解一遍对声明的点数 / 英雄树'
     + '（解码器用 app/talent-decode.js，和生成器那份不是同一个实现）');
   console.log('场景 / 说明 ' + stat.tScen + ' 套方案带场景码（同时属于多个场景的 '

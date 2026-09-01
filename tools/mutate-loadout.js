@@ -72,9 +72,13 @@ var MUTANTS = [
   // 原因是 loRenders / loSeen 在「块数对不对」之前就记了，所以专精数照样是 40，
   // 真正触发的是块数那条。填错 want 的代价不是漏报而是**误判**：
   // 断言其实好的，变异测试却说它没被证明。
+  // 锚点带上前一行注释：第 16 轮末尾 maxroll 那一块也长出了同样形状的两行
+  // （var lo = renderLoadouts(s); if (lo) …），光凭这一行会命中两处，
+  // 而这一组盯的是 raider.io 那一块。
   textMutant('导入串块整块不画', BIS,
-    'if (lo) host.appendChild(lo);',
-    '/* mutant: 导入串块没挂上去 */',
+    'var lo = renderLoadouts(s);\n    if (lo) host.appendChild(lo);\n\n'
+      + '    host.appendChild(renderBuildStats(td));',
+    '/* mutant: 导入串块没挂上去 */\n    host.appendChild(renderBuildStats(td));',
     '各应正好 1 个'),
 
   // 显示的串被改一个字符。串长、字符集、人数全都正常，只有逐字节比对能抓。
@@ -92,9 +96,11 @@ var MUTANTS = [
     '复制出去的串和框里显示的不是同一串'),
 
   // 串框可写。用户改一个字符再复制，导进游戏只会说「无效」。
+  // 同上：maxroll 那一块也有一个只读串框（class 是 mr-text），
+  // 用它上一行的 lo-text 把两者分开。
   textMutant('串框改成可写', BIS,
-    'ta.readOnly = true;',
-    'ta.readOnly = false;',
+    "var ta = el('textarea', 'lo-text');\n    ta.value = str;\n    ta.readOnly = true;",
+    "var ta = el('textarea', 'lo-text');\n    ta.value = str;\n    ta.readOnly = false;",
     '不是只读的'),
 
   // 排序去掉。Object.keys 的顺序一变，「#1 热门」指的就是另一串了。

@@ -39,6 +39,10 @@ var lock = require('./mutate-lock.js');
 var ROOT = path.resolve(__dirname, '..');
 var BIS = path.join(ROOT, 'app', 'bis.js');
 var RUNNER = path.join(__dirname, 'run-tests.js');
+// 生成器。串头改写那三行在这里，改坏了产物就带着不能导入的串，
+// 而面板照样画得一切正常 —— 所以这一组也要盯生成器，不只盯面板。
+var GEN = path.join(__dirname, 'fetch-maxroll.js');
+var PROD = path.join(ROOT, 'app', 'maxroll-data.js');
 
 lock.acquire('mutate-mrtalents');
 process.on('exit', lock.release);
@@ -66,6 +70,49 @@ function textMutant(desc, file, from, to, want) {
   };
 }
 
+/**
+ * 生成器侧的变异体。
+ *
+ * 和上面那些不一样：改 tools/fetch-maxroll.js **不会**让 run-tests.js 变红 ——
+ * 套件读的是已经生成好的 app/maxroll-data.js。第一版就是这么写的，三个变异体
+ * 全部「漏」，因为它们压根没影响到被测的东西。
+ *
+ * 所以这一类走另一条路：改完生成器 → 用缓存重新生成产物（--report，不联网）
+ * → 跑 tools/verify-maxroll-data.js。校验器拿**面板那份解码器**把串重解一遍对账，
+ * 串头改坏了它必报。跑完把产物和源码一起还原。
+ */
+function genMutant(desc, from, to, want) {
+  return {
+    desc: desc, want: want, gen: true,
+    apply: function () {
+      var orig = fs.readFileSync(GEN, 'utf8');
+      var n = orig.split(from).length - 1;
+      if (n !== 1) {
+        console.log('    锚点在文件里出现 ' + n + ' 次（必须正好 1 次）');
+        return null;
+      }
+      var prod = fs.readFileSync(PROD);
+      fs.writeFileSync(GEN, orig.replace(from, to));
+      return function () {
+        fs.writeFileSync(GEN, orig);
+        fs.writeFileSync(PROD, prod);
+      };
+    }
+  };
+}
+
+/** 重生成产物（只用缓存，不联网），再跑格式校验器。 */
+function runGen() {
+  var r0 = cp.spawnSync(process.execPath, [GEN, '--report'],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
+  var out = (r0.stdout || '') + (r0.stderr || '');
+  if (r0.status !== 0) return { status: r0.status, out: out };
+  var r1 = cp.spawnSync(process.execPath,
+    [path.join(__dirname, 'verify-maxroll-data.js')],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
+  return { status: r1.status, out: out + (r1.stdout || '') + (r1.stderr || '') };
+}
+
 var MUTANTS = [
   // 整块不画。这条抓的是「功能没了但套件不知道」，也就是下界断言的意义。
   textMutant('maxroll 方案列表整块不画', BIS,
@@ -82,18 +129,41 @@ var MUTANTS = [
 
   // 「这套串不能导进游戏」这句说明不见了。它是这一轮唯一留给用户的解释 ——
   // 没有它，用户只会觉得「maxroll 这块怎么没有码」。
-  textMutant('「不给导入串」的说明不画', BIS,
-    "host.appendChild(el('p', 'mr-nostr',",
-    "if (false) host.appendChild(el('p', 'mr-nostr',",
-    '说明 0 个'),
+  // 导入串整块不画。**这一条盯的是本轮推翻的那个决定**：上一版这里只画一句
+  // 「不给导入串」的说明，理由是 maxroll 的串版本字节 130、游戏会拒。后来实测：
+  // 改写串头（版本 → 2、treeHash → 全 0）之后节点位一位不动，解出来的天赋完全一致，
+  // 于是生成器产出 t.g，面板给复制。悄悄退回「不给」必须报红。
+  textMutant('导入串整块不画', BIS,
+    // 锚点必须**连 else 一起换掉**：只换 if 那一行会留下一个孤立的 else，
+    // 文件解析不过 —— 变异体死在加载阶段，套件是报语法错而不是报断言，
+    // 那等于什么都没验到（第一版就是这样，被判「串了」）。
+    'if (b.g) host.appendChild(renderMrLoadout(b, pick));\n    else {\n'
+      + "      host.appendChild(el('p', 'mr-nostr',\n"
+      + "        '这一套没有导入串（生成时串头改写失败）—— 树还是能看的。'));\n    }",
+    '/* mutant: 导入串块和兜底说明都没挂上去 */',
+    '导入串块 0 个'),
 
-  // 反过来：又把 maxroll 的串给出去。版本号 130，游戏必拒 ——
-  // 「不给」是这一轮的决定，得有断言钉住，不然下次很容易「顺手加回来」。
-  textMutant('又把 maxroll 的串放进输入框', BIS,
-    "host.appendChild(el('p', 'mr-nostr',",
-    "var __ta = el('textarea', 'mr-str'); __ta.value = b.s; host.appendChild(__ta);\n"
-      + "    host.appendChild(el('p', 'mr-nostr',",
-    '又出现了 maxroll 的串'),
+  // 复制按钮没了：串在框里但复制不走。那是个 100+ 字符的 base64，
+  // 手选很容易漏头漏尾，粘进游戏只会说「无效」。
+  textMutant('复制按钮不画', BIS,
+    "var copy = button('复制', 'primary mr-copy', function () {",
+    "var copy = button('复制', 'primary mr-copy-x', function () {",
+    '复制按钮 0 个'),
+
+  // **框里放版本 130 的原始串。** 界面上一切正常，复制也「成功」，
+  // 只有粘进游戏那一刻才被拒 —— 那时用户会以为是自己弄错了。
+  // t.s 和 t.g 只差串头两个字段，肉眼分不出来。
+  textMutant('框里放的是版本 130 的原始串（游戏会拒）', BIS,
+    '    ta.value = b.g;',
+    '    ta.value = b.s;',
+    '版本 130，游戏会拒'),
+
+  // 复制交出去的和框里显示的不是同一条：显示对、复制错。
+  // 这是导入串唯一会致命又完全看不出来的失败方式。
+  textMutant('复制交出去的是原始串，框里却显示可导入串', BIS,
+    "if (AE.copyWithToast) AE.copyWithToast(b.g, '天赋导入串');",
+    "if (AE.copyWithToast) AE.copyWithToast(b.s, '天赋导入串');",
+    '复制出去的'),
 
   // 高亮错一行。这是这一组存在的理由：界面完全自洽，用户照着「Sunfury」那一行
   // 点开，得到的却是「Spellslinger」那一套的树。
@@ -189,10 +259,39 @@ var MUTANTS = [
     '    if (false) stats.mrtTree++;',
     '「画出来的树就是高亮那一套」只验过'),
 
-  textMutant('「没给串」一次都不算（证明 mrtNoStr 下界不是空的）', RUNNER,
-    '    stats.mrtNoStr++;',
-    '    if (false) stats.mrtNoStr++;',
-    '「页面上没有 maxroll 的串」只验过'),
+  // ---- 生成器那一侧：串头改写本身 ----
+
+  // 版本字节不改。产物里 167 条全留着 130，面板照样给复制 —— 用户全被拒。
+  genMutant('串头版本字节不改（留着 130）',
+    '  for (var i = 0; i < 8; i++) bits[i] = (2 >> i) & 1;      // 版本字节 → 2',
+    '  /* mutant: 版本不改 */',
+    '游戏只认 2'),
+
+  // treeHash 不清零。实测 raider.io 3960 条真实玩家串 + 本机游戏导出 32 条全是 0。
+  // 这一条钉的是「改写要改两个字段，不是一个」。
+  genMutant('treeHash 不清零',
+    '  for (var j = 0; j < 128; j++) bits[24 + j] = 0;          // treeHash → 全 0',
+    '  /* mutant: hash 不清零 */',
+    'treeHash 不是全 0'),
+
+  // 削尾那道「削完还能解开」的闸去掉。恶魔猎手 Fel-Scarred 和恢复德
+  // Keeper of the Grove 的串会被削坏 —— 尾部那串 0 不是填充，是「最后几个节点没选」。
+  genMutant('削尾不检查「削完还能不能解开」',
+    '      if (probe.err) break;',
+    '      if (false) break;',
+    '解不开'),
+
+  // ---- 空转守卫 ----
+
+  textMutant('「给了可导入串」一次都不算（证明 mrtCopy 下界不是空的）', RUNNER,
+    '      stats.mrtCopy++;',
+    '      if (false) stats.mrtCopy++;',
+    '只验过'),
+
+  textMutant('「串真的能导入」一次都不算（证明 mrtGameOk 下界不是空的）', RUNNER,
+    '          stats.mrtGameOk++;',
+    '          if (false) stats.mrtGameOk++;',
+    '只验过'),
 
   // ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
   //
@@ -292,7 +391,7 @@ MUTANTS.forEach(function (m) {
     return;
   }
   var r;
-  try { r = run(); } finally { restore(); }
+  try { r = m.gen ? runGen() : run(); } finally { restore(); }
   if (r.status === 0) {
     missed.push(m.desc);
     console.log('  漏了  ' + m.desc);
