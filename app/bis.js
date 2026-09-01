@@ -2524,13 +2524,22 @@
         + '想要样本大的，看另一类。');
       head.appendChild(thin);
     }
-    var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
-    warn.setAttribute('data-tip',
-      '这一块是排行榜上真实角色的天赋串，能一键导入。\n'
-      + '和下面 maxroll 那些方案不是同一套：拿一个专精逐节点比过，'
-      + '一边多 7 个节点，另一边多 8 个。\n'
-      + '要 maxroll 那一套，用它自己那一块的复制按钮。');
-    head.appendChild(warn);
+    // 「和下面 maxroll 的方案不是同一套」这句**只在下面真的有 maxroll 那一块时才画**。
+    //
+    // 实测 3 个专精（平衡德 102、织雾僧 270、武器战 71）的 maxroll 天赋图是照
+    // 上一版天赋树编的、串解不开，所以不收 —— 那 3 个专精走插件兜底那条路，
+    // 页面上根本没有 maxroll 方案列表，而这句话照样画着，指向下面一片空白。
+    // 这和用户第 19 轮报的那个 bug 是同一类（那次是版面调过之后「上面」变成了
+    // 「下面」）：**方位词和它指的那个东西必须一起判断，不能各写各的。**
+    if (tree() && mrTalentPick(s.specId)) {
+      var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
+      warn.setAttribute('data-tip',
+        '这一块是排行榜上真实角色的天赋串，能一键导入。\n'
+        + '和下面 maxroll 那些方案不是同一套：拿一个专精逐节点比过，'
+        + '一边多 7 个节点，另一边多 8 个。\n'
+        + '要 maxroll 那一套，用它自己那一块的复制按钮。');
+      head.appendChild(warn);
+    }
     box.appendChild(head);
 
     // 团本 / 大秘境。只有一类时也画 —— 它同时是「这批数据是哪来的」的标签，

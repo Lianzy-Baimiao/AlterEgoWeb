@@ -182,6 +182,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               loSpec: 0, loExact: 0,
               // 第 20 轮：团本 / 大秘境两类
               loKindBtn: 0, loKindOn: 0, loRaid: 0, loKindSw: 0, loSorted: 0, loKindSaved: 0, loHead: 0, loResetIdx: 0,
+              loWarnOk: 0, loNoMr: 0,
               // maxroll 天赋方案（第 15 轮：天赋页也按 maxroll 来）。和上面那组
               // 分开数：那组盯 raider.io 的官方串（能导入的那批），这组盯 maxroll
               // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
@@ -965,6 +966,23 @@ function checkLoadouts(label, specId, boxes, texts, copies, picks, kindBtns, hea
       + ' 里这个专精的 loadouts 不是人数降序 —— 面板不重排，所以产物必须自己排好');
   } else {
     stats.loSorted++;
+  }
+  // 「和下面 maxroll 的方案不是同一套」这句和 **maxroll 那一块本身**必须同时在、
+  // 同时不在。实测 3 个专精（平衡德 / 织雾僧 / 武器战）的 maxroll 串解不开、
+  // 不收进产物，那 3 个专精页面上没有 maxroll 方案列表 —— 那句话就指向空白。
+  // 用户第 19 轮报过同一类 bug（版面调过之后「上面」变成了「下面」），
+  // 所以这里钉死：**方位词和它指的东西必须一起判断**。
+  if (boxes.length) {
+    var sameWarn = (headTxt || '').indexOf('和下面 maxroll 的方案不是同一套') >= 0;
+    var hasMr = !!mrTalentTruth(specId);
+    if (sameWarn !== hasMr) {
+      loNote('方位词指空', label + ' 导入串标题里'
+        + (sameWarn ? '写着「和下面 maxroll 的方案不是同一套」，但这个专精没有 maxroll 方案'
+                    : '没写「和下面 maxroll 的方案不是同一套」，但下面确实有 maxroll 方案'));
+    } else {
+      stats.loWarnOk++;
+      if (!hasMr) stats.loNoMr++;
+    }
   }
   // 标题里那两个数：「N 名玩家共 M 种」。**必须对着产物的 n / loUniq 验** ——
   // 分母写错了每个数看起来都很合理，只有百分比悄悄偏高。真踩过的形状是
@@ -2603,6 +2621,16 @@ if (stats.loKindSaved < stats.loKindSw) {
 if (stats.loResetIdx < 20) {
   problems.push('「换类回到 #1」只验过 ' + stats.loResetIdx + ' 次，太少'
     + ' —— 测试得先挑一个非 #1 的串，否则那条代码是死的也测不出来');
+}
+if (stats.loWarnOk !== stats.loRenders) {
+  problems.push('「不是同一套」那句和 maxroll 块的在场一致性只核对过 '
+    + stats.loWarnOk + ' 次，渲染 ' + stats.loRenders + ' 次');
+}
+// 下界：**必须真的碰到过没有 maxroll 方案的专精**，否则那条断言只验了一半
+// （永远是「两个都在」，「两个都不在」那一支一次都没走）。实测有 3 个。
+if (stats.loNoMr < 3) {
+  problems.push('只碰到 ' + stats.loNoMr + ' 次「这个专精没有 maxroll 方案」，'
+    + '实测有 3 个（平衡德 / 织雾僧 / 武器战）—— 那条断言的另一半没被验过');
 }
 if (stats.loHead !== stats.loRenders) {
   problems.push('导入串标题里的人数 / 种类数只核对过 ' + stats.loHead + ' 次，渲染 '
