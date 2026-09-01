@@ -141,7 +141,11 @@ var B = g.AE_BIS;
 var specKeys = Object.keys(B.specs);
 var problems = [];
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
-              sn: 0, snBad: 0, rioRenders: 0, rioSlots: 0,
+              // rioRenders 数的是**所有**画过 rio 视角的渲染（专精循环 + 视角迁移
+              // + 对照角色那三组都算），mainRio 只数专精循环那一轮。
+              // 下面「每个专精各一次」那条断言必须用 mainRio：用总数的话，
+              // 后面任何一组多画一次 rio 都会把它顶红，而那不是缺陷。
+              sn: 0, snBad: 0, rioRenders: 0, mainRio: 0, rioSlots: 0,
               mr: 0, mrBad: 0,
               // 天赋树
               tgrids: 0, tnodes: 0, tnodeOn: 0, tedges: 0, tedgeOn: 0,
@@ -163,6 +167,12 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtNoStr: 0,
               mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
+              // 视角迁移（第 16 轮撤掉 GearInsight 那两个视角）
+              vmChecked: 0, vmMigrated: 0, vmWrote: 0,
+              // 装等差距（第 16 轮：maxroll 不给装等，从本机两份实测数据借）
+              ivGi: 0, ivRio: 0, ivNone: 0, ivZero: 0,
+              gapBadge: 0, gapBad: 0, gapMath: 0, gapTop: 0, gapTopBad: 0,
+              gapSum: 0, gapChars: 0, gapSlots: 0,
               // 无障碍
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
               a11yCanvas: 0, a11yCanvasBad: 0 };
@@ -274,6 +284,88 @@ function checkRender(label) {
       stats.slots++;
       if (isRio) stats.rioSlots++;
     }
+    // ---- 装等那一格（.sub2）。**这一条是这一轮那个 bug 的回归。**
+    //
+    // 上一版 maxroll 视角每一行的装等都写着「0」：mrSlots 从 rio 的物品池里取
+    // ri.ilvl，而那个池子只有 {n, i, q, sock}，没有 ilvl 这个字段 —— 取到
+    // undefined，`(undefined) || 0` 得 0，然后 String(0) 印成「0」。
+    // 判据是「装等那一格不许出现 0 或空」：装等是正整数，或者干脆不画那一格
+    // （查不到时画的是「装等 ?」，走 iv-none 那一支）。
+    if (n.classList && n.classList.contains('sub2')
+      && n.parentNode && n.parentNode.classList
+      && n.parentNode.classList.contains('im')) {
+      var t = n.textContent;
+      if (n.classList.contains('iv-none')) {
+        stats.ivNone++;
+        if (t !== '装等 ?') {
+          problems.push(label + ' 查不到装等那一格的文字是「' + t + '」，该是「装等 ?」');
+        }
+      } else {
+        if (n.classList.contains('iv-rio')) stats.ivRio++;
+        else if (n.classList.contains('iv-gi')) stats.ivGi++;
+        // 形如「703」或「690→703」。0 一律不合格 —— 那正是上一版的样子。
+        if (!/^[1-9]\d{1,3}(→[1-9]\d{1,3})?$/.test(t)) {
+          stats.ivZero++;
+          if (stats.ivZero < 4) {
+            problems.push(label + ' 装等那一格是「' + t + '」—— 装等该是正整数，'
+              + '查不到就别画（0 是「取了个不存在的字段」的样子）');
+          }
+        }
+      }
+    }
+    // ---- 装等差距徽章。形如「差 14」「高 3」「持平」，三种状态各有 class。
+    if (n.classList && n.classList.contains('gap')
+      && n.classList.contains('tag')) {
+      stats.gapBadge++;
+      var gt = n.textContent;
+      var okTxt = /^(差|高) [1-9]\d{0,2}$/.test(gt) || gt === '持平';
+      // 文字和 class 必须**互相对得上**。只验文字的话「差 14」配 ahead 这种
+      // 反着来的组合照样过 —— 而那正是「颜色对不上数字」的样子：
+      // 落后画成淡色、领先画成警告色，用户会照着颜色做反的决定。
+      var cls = n.classList.contains('behind') ? 'behind'
+        : n.classList.contains('ahead') ? 'ahead'
+          : n.classList.contains('even') ? 'even' : '';
+      var wantCls = gt.indexOf('差 ') === 0 ? 'behind'
+        : gt.indexOf('高 ') === 0 ? 'ahead' : 'even';
+      if (!okTxt || cls !== wantCls) {
+        stats.gapBad++;
+        if (stats.gapBad < 4) {
+          problems.push(label + ' 装等差距徽章「' + gt + '」配的是 class「' + cls
+            + '」，该是「' + wantCls + '」');
+        }
+      }
+      // ---- 差值本身对不对：**拿提示里的两个数自己减一遍**。
+      //
+      // 上面那条只验「文字和颜色一致」，抓不到**符号反了**：把 want - mine 写成
+      // mine - want，文字变「高 14」、class 跟着变 ahead，两者依然一致 ——
+      // 而界面上「你落后 14」就变成了「你领先 14」，正好指向反的行动。
+      // 提示里写的是「你 689.4　首选那件 703（…）」，两个数都是原始量，
+      // 所以这里能独立算出差值，再和徽章上那个数比。
+      var tip = n.attrs && n.attrs['data-tip'] || '';
+      var nums = tip.match(/你 ([\d.]+)　首选那件 (\d+)/);
+      if (!nums) {
+        stats.gapBad++;
+        if (stats.gapBad < 4) {
+          problems.push(label + ' 装等差距徽章的提示里没有「你 X　首选那件 Y」，'
+            + '差值就没法独立复核了：' + tip.slice(0, 60));
+        }
+      } else {
+        var want = Math.round(Number(nums[2]) - Number(nums[1]));
+        var shown = gt === '持平' ? 0
+          : (gt.indexOf('差 ') === 0 ? 1 : -1) * Number(gt.slice(2));
+        if (want !== shown) {
+          stats.gapBad++;
+          if (stats.gapBad < 4) {
+            problems.push(label + ' 装等差距徽章写「' + gt + '」，但提示里两个数（你 '
+              + nums[1] + '，首选 ' + nums[2] + '）算出来是 ' + want
+              + ' —— 符号或算式反了');
+          }
+        } else {
+          stats.gapMath++;
+        }
+      }
+    }
+    if (n.classList && n.classList.contains('gap-sum')) stats.gapSum++;
     if (n.classList && n.classList.contains('cov')) {
       if (n.classList.contains('mr')) {
         stats.mr++;
@@ -297,12 +389,78 @@ function checkRender(label) {
     }
   });
   if (!sawItem) problems.push(label + ' 一件装备都没画出来');
+  checkSlotGapTarget(label);
+}
+
+/**
+ * 装等差距**比的是哪一件**：必须是这个部位画在最前面的那一件。
+ *
+ * 为什么单独一条：徽章文字、颜色、提示里的两个数全都出自同一个 `top`，
+ * 所以「把 rows[0] 写成 rows[rows.length-1]」这种改动**处处自洽** ——
+ * 提示里写「首选那件 312」，徽章按 312 算，三者一致，只是那 312 是列表末尾
+ * 那件「可刷替代」的装等。实测这么改一下差距会凭空缩小，用户以为自己快毕业了。
+ *
+ * 判据只能从 DOM 里另找一个来源：这个部位**第一行**画出来的装等。
+ * 它和提示里的「首选那件 X」必须是同一个数。
+ */
+function checkSlotGapTarget(label) {
+  walk(body, function (n) {
+    if (!n.classList || !n.classList.contains('slot')) return;
+    var head = null, firstItem = null;
+    n.children.forEach(function (c) {
+      if (!c.classList) return;
+      if (!head && c.classList.contains('slot-head')) head = c;
+    });
+    // 部位组里的装备行：.slot > .item（渲染时是平铺的兄弟节点）
+    for (var i = 0; i < n.children.length && !firstItem; i++) {
+      if (n.children[i].classList && n.children[i].classList.contains('item')) {
+        firstItem = n.children[i];
+      }
+    }
+    if (!head || !firstItem) return;
+
+    var tip = '';
+    walk(head, function (h) {
+      if (h.classList && h.classList.contains('gap') && h.classList.contains('tag')) {
+        tip = (h.attrs && h.attrs['data-tip']) || '';
+      }
+    });
+    if (!tip) return;                       // 这个部位没画差距徽章
+    var m = tip.match(/首选那件 (\d+)/);
+    if (!m) return;                         // 提示格式那条断言已经在管了
+
+    var shownIlvl = null;
+    walk(firstItem, function (x) {
+      if (shownIlvl === null && x.classList && x.classList.contains('sub2')
+        && !x.classList.contains('iv-none')) {
+        var t = (x.textContent || '').match(/^(\d+)/);
+        if (t) shownIlvl = Number(t[1]);
+      }
+    });
+    if (shownIlvl === null) return;         // 第一行没画装等（查不到那 3 行）
+
+    stats.gapTop++;
+    if (Number(m[1]) !== shownIlvl) {
+      stats.gapTopBad++;
+      if (stats.gapTopBad < 4) {
+        problems.push(label + ' 装等差距说「首选那件 ' + m[1]
+          + '」，但这个部位第一行画的是 ' + shownIlvl
+          + ' —— 比的不是首选那一件');
+      }
+    }
+  });
 }
 
 // openBis() 只在第一次调用时读设置（之后 gearLoaded 为真就直接 render），
 // 所以每换一个组合都要重新 eval bis.js，否则 80 次渲染画的是同一个专精。
+//
+// **只走界面上真有的两个视角。** 第 16 轮撤掉了 GearInsight 的「团本视角 /
+// 大秘境视角」两个按钮，而上一版这个循环还在跑 'raid' / 'mplus' ——
+// openBis() 现在把这两个旧值迁到 maxroll，于是那两轮画的都是 maxroll，
+// 渲染次数一字不差、套件全绿，**但等于同一个视角画了三遍**。
+// 旧视角迁移单独验（见下面 checkViewMigration），不混在这里。
 specKeys.forEach(function (key) {
-  ['maxroll', 'raid', 'mplus', 'rio'].forEach(function (view) {
+  ['maxroll', 'rio'].forEach(function (view) {
     settings.bisTab = 'gear';
     settings.bisSpec = key;
     settings.bisView = view;
@@ -311,8 +469,134 @@ specKeys.forEach(function (key) {
     load('app/bis.js');
     g.AE.openBis();
     checkRender(key + '/' + view);
+    if (view === 'rio') stats.mainRio++;
   });
 });
+
+// ---- 撤掉的两个视角：按钮没了，老设置要迁走
+//
+// 这一条盯的是**升级上来的用户**：设置里存着 bisView='raid'，而界面上已经没有
+// 那个按钮了。不迁的话面板会停在一个渲染一切正常、却切不回去的视角里 ——
+// 界面自洽，谁也看不出为什么。所以判据有两条，都得成立：
+//   · 视角按钮**正好两个**，且没有「团本视角 / 大秘境视角」；
+//   · 存着旧值进来，画出来的必须是 maxroll（认 maxroll 的徽章「首选 N」）。
+(function checkViewMigration() {
+  var VIEW_LABELS = ['最佳推荐', '实战分布'];
+  var GONE = ['团本视角', '大秘境视角'];
+  ['raid', 'mplus', 'maxroll', 'rio'].forEach(function (saved) {
+    settings.bisTab = 'gear';
+    settings.bisSpec = specKeys[0];
+    settings.bisView = saved;
+    settings.bisChar = '';
+    body.children.length = 0;
+    load('app/bis.js');
+    g.AE.openBis();
+
+    var labels = [], mrBadge = 0, snBadge = 0, on = [];
+    walk(body, function (n) {
+      if (n.tagName === 'BUTTON' && n.parentNode && n.parentNode.classList
+        && n.parentNode.classList.contains('seg')
+        && n.parentNode.parentNode && n.parentNode.parentNode.classList
+        && n.parentNode.parentNode.classList.contains('bis-bar')) {
+        labels.push(n.textContent);
+        if (n.classList.contains('on')) on.push(n.textContent);
+      }
+      if (n.classList && n.classList.contains('cov')) {
+        if (n.classList.contains('mr')) mrBadge++;
+        else if (n.classList.contains('sn')) snBadge++;
+      }
+    });
+    stats.vmChecked++;
+
+    GONE.forEach(function (t) {
+      if (labels.indexOf(t) >= 0) {
+        problems.push('视角切换器里还有「' + t + '」按钮 —— 第 16 轮撤掉了它');
+      }
+    });
+    if (labels.length !== VIEW_LABELS.length) {
+      problems.push('视角按钮 ' + labels.length + ' 个（' + labels.join('/')
+        + '），应该正好 ' + VIEW_LABELS.length + ' 个：' + VIEW_LABELS.join('/'));
+    }
+    // 迁移：旧值和 maxroll 都该落在 maxroll 上（高亮 + maxroll 的徽章）。
+    var wantMr = (saved !== 'rio');
+    if (wantMr) {
+      if (on.indexOf('最佳推荐') < 0) {
+        problems.push('设置里存着 bisView=' + saved + '，高亮却在「' + on.join('/')
+          + '」—— 撤掉的视角没迁到「最佳推荐」，用户会卡在一个没有按钮的视角里');
+      }
+      if (!mrBadge) {
+        problems.push('设置里存着 bisView=' + saved + '，但一个 maxroll 徽章都没画出来');
+      }
+      stats.vmMigrated++;
+    } else if (!snBadge) {
+      problems.push('设置里存着 bisView=rio，却没画出样本量徽章');
+    }
+    // 迁移必须**写回设置**。只改 state.view 的话那段代码是死的：state.view 的
+    // 初值本来就是 'maxroll'，删掉整段行为一模一样 —— 没有这一条，
+    // 「迁移」这个功能是不是真的存在，测试分不出来。
+    if (saved === 'raid' || saved === 'mplus') {
+      if (settings.bisView !== 'maxroll') {
+        problems.push('设置里存着 bisView=' + saved + '（已撤掉的视角），'
+          + '读完设置后它还是「' + settings.bisView + '」—— 迁移没写回存档，'
+          + '下次打开又是这个不存在的视角');
+      } else {
+        stats.vmWrote++;
+      }
+    }
+  });
+})();
+
+// ---- 对照角色：装等差距那一组只有选了角色才画得出来
+//
+// 上面那些渲染全是 bisChar='' —— **一个装等差距徽章都不会出现**。
+// 这一组真的选上本机存档里的角色，按「职业对得上」挑，因为对着别的职业的
+// 毕业表比装等没有意义（面板自己也会画一条「职业不是本专精所属职业」的警告）。
+//
+// 判据分两层：徽章本身的文字/class 在 checkRender 里逐个验；这里验**下界** ——
+// 一个都没画出来说明这条路没走到，而上面那条「文字必须合格」在 0 个徽章的
+// 情况下照样成立（空集合上的全称命题恒真，这是本仓库反复踩到的假绿形状）。
+(function checkGearGap() {
+  var chars = (model.characters || []).filter(function (c) {
+    return c.equipment && Object.keys(c.equipment).length >= 10
+      && c.ilvl && c.ilvl.value > 50;
+  });
+  if (!chars.length) {
+    // 没有可用存档不算失败（克隆下来没有 data/data.js 的人也要能跑），
+    // 但要显式记 0，让摘要里那句「对照过 0 个角色」自己说出来。
+    stats.gapChars = 0;
+    return;
+  }
+  // 每个职业挑一个装备最全的，最多 6 个 —— 再多只是重复同一条路。
+  var byCls = {};
+  chars.forEach(function (c) {
+    var cur = byCls[c.classFile];
+    if (!cur || Object.keys(c.equipment).length > Object.keys(cur.equipment).length) {
+      byCls[c.classFile] = c;
+    }
+  });
+  var picks = Object.keys(byCls).map(function (k) { return byCls[k]; }).slice(0, 6);
+
+  picks.forEach(function (c) {
+    // 找一个同职业的专精 key，这样对照才有意义。
+    var key = null;
+    for (var i = 0; i < specKeys.length; i++) {
+      if (specKeys[i].split('/')[0] === c.classFile) { key = specKeys[i]; break; }
+    }
+    if (!key) return;
+    ['maxroll', 'rio'].forEach(function (view) {
+      settings.bisTab = 'gear';
+      settings.bisSpec = key;
+      settings.bisView = view;
+      settings.bisChar = c.key;
+      body.children.length = 0;
+      load('app/bis.js');
+      g.AE.openBis();
+      checkRender('对照/' + c.name + '/' + view);
+      stats.gapSlots++;
+    });
+    stats.gapChars++;
+  });
+})();
 
 // ---- 首屏兜底：默认视角是 maxroll，而 app/maxroll-data.js 是**懒加载**的。
 //
@@ -1171,20 +1455,100 @@ if (stats.cov + stats.sn + stats.mr !== stats.slots) {
 if (stats.covBad > 0) problems.push(stats.covBad + ' 个覆盖率徽章文字不合格式');
 if (stats.snBad > 0) problems.push(stats.snBad + ' 个样本量徽章文字不合格式');
 if (stats.mrBad > 0) problems.push(stats.mrBad + ' 个 maxroll 徽章文字不合格式');
-// 空转守卫：三种徽章都必须真的出现过。少了一种说明那个视角没被画到，
-// 而上面那条求和等式在「某个视角整个缺席」时照样成立 —— 加视角那一轮
+// 空转守卫：三种徽章都必须真的出现过。少了一种说明那条路没被画到，
+// 而上面那条求和等式在「某条路整个缺席」时照样成立 —— 加视角那一轮
 // 就是这么假绿的（渲染次数一个都没涨，套件却全绿）。
 if (stats.mr < 1) problems.push('一个 maxroll 徽章都没画出来，「最佳推荐」视角没被渲染');
 if (stats.sn < 1) problems.push('一个样本量徽章都没画出来，「实战分布」视角没被渲染');
-if (stats.cov < 1) problems.push('一个覆盖率徽章都没画出来，BisData 两个视角没被渲染');
+// 覆盖率徽章现在**只**出自 GearInsight 兜底那条路（第 16 轮撤掉了那两个视角按钮，
+// 但 maxroll 懒加载没到时还得靠它画）。所以这一条不再是「BisData 视角没渲染」，
+// 而是「首屏兜底没被走到」—— 实测 46 个，全部来自下面那 3 次兜底渲染。
+if (stats.cov < 1) {
+  problems.push('一个覆盖率徽章都没画出来 —— GearInsight 兜底那条路没被渲染'
+    + '（它只在 maxroll 数据还没加载时出现，见 checkFirstPaintFallback）');
+}
 if (stats.slots < 1000) problems.push('只画了 ' + stats.slots + ' 个部位组，太少');
+
+// ---- 视角迁移（第 16 轮撤掉 GearInsight 那两个视角按钮）
+if (stats.vmChecked !== 4) {
+  problems.push('视角迁移只验了 ' + stats.vmChecked + ' 个存档值，应该是 4 个'
+    + '（raid / mplus / maxroll / rio）');
+}
+if (stats.vmMigrated < 3) {
+  problems.push('只有 ' + stats.vmMigrated + ' 个存档值落在「最佳推荐」上，'
+    + '应该是 3 个（raid / mplus 迁过来，加上 maxroll 自己）');
+}
+if (stats.vmWrote !== 2) {
+  problems.push('只有 ' + stats.vmWrote + ' 个撤掉的视角名被写回成 maxroll，'
+    + '应该是 2 个（raid / mplus）—— 迁移只改了内存没落盘');
+}
+
+// ---- 装等那一格：这一轮那个 bug 的回归
+//
+// maxroll 不给装等，装等是从本机两份实测数据借的（见 app/bis.js 的 measuredGear）。
+// 三条路都必须真的画出来过，否则「文字必须合格」那条在空集合上恒真。
+// 实测：GearInsight 给出 1393 行、raider.io 补 15 行、两边都没有 3 行。
+if (stats.ivZero > 0) {
+  problems.push(stats.ivZero + ' 行装等印成了 0 或别的非正整数 —— '
+    + '上一版就是这样（从 rio 物品池取 ilvl，而那个字段不存在）');
+}
+if (stats.ivGi < 1000) {
+  problems.push('只有 ' + stats.ivGi + ' 行装等标着 GearInsight 来源，太少'
+    + '（实测 1393 行）—— 装等那一格没画出来，或者来源标记丢了');
+}
+// 下面两条是**小样本下界**。它们盯的是「另外两条分支真的会被画到」：
+// raider.io 补的那 15 行画的是虚下划线，两边都没有的 3 行画的是「装等 ?」。
+// 换赛季重抓后如果 GearInsight 恰好覆盖了全部引用，这两条会误红 ——
+// 那时把数字改成 0 并在这里记一句「本赛季没有这种物品」，别把断言删掉。
+if (stats.ivRio < 1) {
+  problems.push('没有一行装等来自 raider.io —— 那条兜底分支没被画到'
+    + '（实测有 15 行：GearInsight 里查不到、榜上有人穿过的物品）');
+}
+if (stats.ivNone < 1) {
+  problems.push('没有一行画出「装等 ?」—— 两份实测数据都查不到的物品那条分支没被画到'
+    + '（实测有 3 行）');
+}
+
+// ---- 装等差距
+//
+// 这一组只有**选了对照角色**才画得出来，所以下界是必须的：上面所有渲染
+// bisChar 都是空的，一个差距徽章都不会出现，而「徽章文字必须合格」那条
+// 在 0 个徽章时照样成立。
+if (stats.gapBad > 0) {
+  problems.push(stats.gapBad + ' 个装等差距徽章的文字和 class 对不上'
+    + '（「差 N」必须配 behind、「高 N」配 ahead、「持平」配 even）');
+}
+if (stats.gapChars > 0) {
+  // 有存档的机器上才验下界。克隆下来没有 data/data.js 的人跑到的是 0，
+  // 那不是缺陷 —— 摘要里会写「对照过 0 个角色」，看得见。
+  if (stats.gapBadge < 100) {
+    problems.push('装等差距徽章只画了 ' + stats.gapBadge + ' 个，太少'
+      + '（实测 ' + stats.gapChars + ' 个角色 × 2 个视角 = 183 个）');
+  }
+  // 复核过的必须**等于**画出来的：写成「> 0」的话，183 个徽章里只有 1 个
+  // 被复核也能过，而那意味着另外 182 个的差值从没验过。
+  if (stats.gapMath !== stats.gapBadge) {
+    problems.push('装等差距徽章 ' + stats.gapBadge + ' 个，差值独立复核过的只有 '
+      + stats.gapMath + ' 个，不一一对应');
+  }
+  if (stats.gapTopBad > 0) {
+    problems.push(stats.gapTopBad + ' 个装等差距比的不是这个部位首选那一件');
+  }
+  if (stats.gapTop < 100) {
+    problems.push('只有 ' + stats.gapTop + ' 个装等差距复核过「比的是首选那一件」，太少');
+  }
+  if (stats.gapSum !== stats.gapSlots) {
+    problems.push('装等差距汇总行 ' + stats.gapSum + ' 条，对照渲染 ' + stats.gapSlots
+      + ' 次，不一一对应 —— 每次对照渲染都该有一条汇总');
+  }
+}
 
 // ---- 「实战分布」视角（rio）
 // 这一组是**独立的**，不能靠上面的总量断言兜着：rio 视角要是一个部位都没画，
 // 总量只会从 1264 掉到 1264 —— 因为它本来就没被算进去过。
 // 本轮加这个视角时正是这样：套件全绿，渲染次数一字未变，等于新代码从没跑过。
-if (stats.rioRenders !== specKeys.length) {
-  problems.push('实战分布视角只渲染了 ' + stats.rioRenders + ' 次，应该是 '
+if (stats.mainRio !== specKeys.length) {
+  problems.push('实战分布视角在专精循环里只渲染了 ' + stats.mainRio + ' 次，应该是 '
     + specKeys.length + ' 个专精各一次');
 }
 // rio 的 40 个专精每个 15~17 个部位（副手/衬衫不是人人有），实测 636 组。
@@ -1282,6 +1646,16 @@ if (stats.tico !== stats.tnodes) {
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
   + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots + '）');
+// 这一行必须打印：装等和差距是第 16 轮加的，而「加了计数器、写了断言、
+// 既不打印也没下界」在本仓库出过一次 —— 那次整块功能没被画过，套件照样全绿。
+console.log(pad('装等 / 差距') + '通过（视角按钮 2 个，旧视角 '
+  + stats.vmMigrated + ' 个存档值迁到「最佳推荐」；装等来源 GearInsight '
+  + stats.ivGi + ' 行、raider.io ' + stats.ivRio + ' 行、查不到 ' + stats.ivNone
+  + ' 行、印成 0 的 ' + stats.ivZero + ' 行；对照 ' + stats.gapChars
+  + ' 个角色 × 2 个视角，差距徽章 ' + stats.gapBadge + ' 个（文字与颜色不符 '
+  + stats.gapBad + '，差值拿提示里的两个数独立复核 ' + stats.gapMath
+  + '，比的是首选那一件 ' + stats.gapTop + '（不符 ' + stats.gapTopBad
+  + '）），汇总行 ' + stats.gapSum + '）');
 console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精是空的' : '通过')
   + '（' + stats.tspecs + ' 个专精，' + stats.tgrids + ' 棵树，节点 ' + stats.tnodes
   + '，点亮 ' + stats.tnodeOn + '，连线 ' + stats.tedges + '，点亮 ' + stats.tedgeOn

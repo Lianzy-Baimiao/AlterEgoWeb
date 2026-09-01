@@ -42,14 +42,13 @@
   var state = {
     tab: 'gear',        // 'gear' | 'talents'
     key: '',            // 'DEATHKNIGHT/BLOOD/Deathbringer'
-    // 'maxroll' | 'raid' | 'mplus' | 'rio'
+    // 'maxroll' | 'rio'（第 16 轮：GearInsight 那两个视角撤了，见 renderGear 的 VIEWS）
     //   maxroll = maxroll.gg 的编辑推荐（**默认视角**，用户第 15 轮定的）
-    //   raid / mplus = GearInsight 的参照表
     //   rio = raider.io 实战分布
     //
-    // 默认给 maxroll 而不是 raid：它回答的是「我该穿什么」，那是打开这个面板
-    // 最常见的目的。但 app/maxroll-data.js 是**懒加载**的，首屏那一瞬间
-    // mrPick() 还是 null —— renderGear 里因此有一条兜底，见下面 fallbackView()。
+    // 界面上只有这两个按钮，但 effectiveView() 还会返回 'raid' / 'mplus' ——
+    // 那是 **GearInsight 兜底**，不是用户能选的视角：app/maxroll-data.js 是
+    // 懒加载的，首屏那一瞬间 mrPick() 还是 null，得有东西画。
     view: 'maxroll',
     tcat: 'raid',       // 'raid' | 'mplusHigh' | 'mplusFarm'
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
@@ -202,11 +201,82 @@
   }
 
   /**
+   * itemId → 实测装等 + 升级轨道。**maxroll 自己两样都不给。**
+   *
+   * 为什么要另找来源：maxroll 的 BiS 表只有「部位 / 物品名 / 掉落位置」三列，
+   * 装等是他们前端拿 `data-wow-item` 那个 blob 现算的，抓下来的 HTML 里没有
+   * （实测：81 篇缓存里 `Item Level` 只出现 2 次，都是一句提醒的正文；
+   * 那个 blob 里 97% 的串在 offset 2 处有个 9~11 位的字段落在装等区间，
+   * 但只有 16 个不同取值、257/259/261 占绝大多数 —— 那是标志位不是装等；
+   * 他们的 backend embed 接口要 OAuth，302 到 /oauth2/start，走不通）。
+   *
+   * 本机有两份**实测**值，都不用联网：
+   *   · GearInsight（app/bis-data.js）：顶尖玩家身上这件的装等 + 升级轨道，
+   *     实测覆盖 maxroll 的 1337/1358 次引用。同一件在不同专精 / 视角下
+   *     不一定一样（498 件里 274 件有分歧 —— 升级等级不同），这里取**最高**那条，
+   *     轨道和可升级上限跟着那条一起拿，免得三个数字来自三次不同的测量。
+   *   · raider.io（app/rio-data.js 的 slots[*].d[*][2]）：榜上玩家穿这件时的
+   *     **平均**装等，再补 15 次引用。
+   * 两边都有的 497 件里，GearInsight 的最高值比 rio 的均值中位高 10 点（p95 +23）
+   * —— 一个是「顶尖玩家升满的样子」，一个是「榜上平均的样子」，不是同一个量，
+   * 所以**不混着平均**：只记是哪个来源给的，界面上说清。
+   * 剩下 6 次引用两边都没有，那就不显示装等 —— 不猜。
+   */
+  var measuredCache = null;
+  function measuredGear() {
+    if (measuredCache) return measuredCache;
+    var out = {};
+    var B = bis();
+    if (B && B.specs) {
+      Object.keys(B.specs).forEach(function (k) {
+        var sp = B.specs[k];
+        ['raid', 'mplus'].forEach(function (v) {
+          var slots = sp[v] || {};
+          Object.keys(slots).forEach(function (sn) {
+            (slots[sn] || []).forEach(function (r) {
+              var iv = r[1];
+              if (!iv) return;
+              var cur = out[r[0]];
+              if (cur && cur.v >= iv) return;
+              out[r[0]] = { v: iv, mx: r[4] || 0, trk: r[5] || 0, src: 'g' };
+            });
+          });
+        });
+      });
+    }
+    var R = rio();
+    if (R && R.specs) {
+      var acc = {};
+      Object.keys(R.specs).forEach(function (sid) {
+        var slots = R.specs[sid].slots || {};
+        Object.keys(slots).forEach(function (sn) {
+          (slots[sn].d || []).forEach(function (r) {
+            if (!r[2]) return;
+            var a = acc[r[0]] || (acc[r[0]] = { w: 0, n: 0 });
+            a.w += r[2] * r[1];
+            a.n += r[1];
+          });
+        });
+      });
+      Object.keys(acc).forEach(function (id) {
+        if (out[id]) return;            // GearInsight 已经给了，不覆盖
+        out[id] = { v: Math.round(acc[id].w / acc[id].n), mx: 0, trk: 0, src: 'r' };
+      });
+    }
+    measuredCache = out;
+    return out;
+  }
+
+  /**
    * maxroll 的一个视角 -> 面板要的行形状。
    *
    * 产物里每个槽位是 `bis: [itemId…]` 和 `alt: [itemId…]` 两个**有序**列表
    * （顺序就是 maxroll 表里的顺序）。这里拼成面板的行形状：
-   *   `[itemId, 装等, 使用率, 来源下标, 可升级上限, 轨道码, 人数, 名次, 是不是替代件]`
+   *   `[itemId, 装等, 使用率, 来源下标, 可升级上限, 轨道码, 人数, 名次, 是不是替代件,
+   *     装等是谁测的]`
+   *
+   * 最后三位是 maxroll 独有的（rio 的行到第 7 位，BisData 的行到第 6 位）。
+   * 装等 / 可升级上限 / 轨道码来自 measuredGear() —— maxroll 自己不给，见那个函数的注释。
    *
    * 来源下标写 **-2** 当标记（rio 用 -1）。为什么不用 undefined：0 是合法下标，
    * 拿假值判断会把「来源下标为 0 的 BisData 行」一起吞掉 —— rio 那边就是这么定的，
@@ -224,17 +294,17 @@
     var ns = {};
     if (!v) return { rows: rows, n: ns };
     var ITEMS = (maxroll() || {}).items || {};
-    function ilvlOf(id) {
-      // maxroll 不给装等。rio 那边有「平均装等」，能对上就借来显示，
-      // 对不上就留 0 —— 不猜。
-      var R = rio();
-      var ri = R && R.items ? R.items[String(id)] : null;
-      return (ri && ri.ilvl) || 0;
-    }
+    var MEAS = measuredGear();
+    // 装等 / 可升级上限 / 轨道码都从 measuredGear() 借，第 10 位记**是谁给的**
+    // （'g' = GearInsight 顶尖玩家实测最高，'r' = raider.io 榜上均值，'' = 两边都没有）。
+    // 不记来源的话界面上「703」和「312」看着是同一种数，其实一个是升满的样子、
+    // 一个是榜上平均的样子。
+    function meas(id) { return MEAS[id] || { v: 0, mx: 0, trk: 0, src: '' }; }
     Object.keys(v.bis || {}).forEach(function (k) {
       var list = v.bis[k] || [];
       rows[k] = list.map(function (id, i) {
-        return [id, ilvlOf(id), null, -2, 0, 0, null, i + 1, false];
+        var m = meas(id);
+        return [id, m.v, null, -2, m.mx, m.trk, null, i + 1, false, m.src];
       });
     });
     // 可刷替代接在后面，标上 alt 位。同一件已经在 BiS 里就不重复列。
@@ -245,7 +315,8 @@
       into.forEach(function (r) { seen[r[0]] = 1; });
       list.forEach(function (id, i) {
         if (seen[id]) return;
-        into.push([id, ilvlOf(id), null, -2, 0, 0, null, i + 1, true]);
+        var m = meas(id);
+        into.push([id, m.v, null, -2, m.mx, m.trk, null, i + 1, true, m.src]);
       });
     });
     // ITEMS 只是拿来确认物品池在（校验器已经验过引用完整性），这里不再逐行查。
@@ -681,11 +752,13 @@
     // ---- 视角 + 角色对照
     var bar = el('div', 'bis-bar');
     var viewWrap = el('span', 'seg');
+    // 第 16 轮撤掉了 GearInsight 的「团本视角 / 大秘境视角」两个按钮（用户定的）。
+    // **数据文件 app/bis-data.js 留着**：它还喂着装等、升级轨道、掉落来源、
+    // 属性目标、宝石 / 附魔 / 消耗品，以及 maxroll 没加载时的兜底渲染 ——
+    // 删文件会让这些静默变空，而 maxroll 只能补回其中一部分。
     var VIEWS = [
       ['maxroll', '最佳推荐', 'maxroll.gg 的职业指南：编辑给出的 Best in Slot 排序 '
         + '+ 可刷替代。**没有样本量也没有使用率** —— 它是推荐，不是统计'],
-      ['raid', '团本视角', '来自 GearInsight 的团本参照表'],
-      ['mplus', '大秘境视角', '来自 GearInsight 的大秘境参照表'],
       ['rio', '实战分布', 'raider.io 大秘境排行榜上真实角色的装备统计，每个部位都带样本量']
     ];
     VIEWS.forEach(function (v) {
@@ -739,19 +812,27 @@
     var mr = view === 'maxroll' ? mrPick(s.specId) : null;
     var conv = rs ? rioSlots(rs) : (mr ? mrSlots(mr.v) : null);
 
-    host.appendChild(renderSpecMeta(s));
-    // 属性权重 / 达成度是 **GearInsight 独有的**，raider.io 的角色档案里没有。
-    // rio 视角下不画它 —— 脚注明写了「这个视角没有属性权重」，一边这么写一边
+    host.appendChild(renderSpecMeta(s, mr ? mr.kind : null));
+    // 属性权重 / 达成度是 **GearInsight 独有的**，raider.io 的角色档案里没有，
+    // 所以 rio 视角下不画 —— 脚注明写了「这个视角没有属性权重」，一边这么写一边
     // 把另一个数据源的权重摆在上面，那句话就成了假话。
-    // maxroll 同理：它的指南页有属性优先级的文字说明，但产物里没抓那部分，
-    // 所以这里也不画 —— 没抓到的东西不能借别的数据源的数字充。
-    if (!rs && !mr) host.appendChild(renderStatTargets(s));
+    //
+    // maxroll 视角**改成画**（第 16 轮）。上一版不画，理由是「maxroll 的属性
+    // 优先级是正文文字，产物里没抓，不能借别的来源的数字充」。但第 16 轮撤掉了
+    // GearInsight 那两个视角，于是这一块在界面上**一次都不会出现**了 ——
+    // 用「宁缺毋滥」换来的是整块功能消失。现在画出来，并在标题里写明是谁给的：
+    // 说清来源的借用不是撒谎，静默消失才是。
+    if (!rs) host.appendChild(renderStatTargets(s, mr ? mr.kind : null, !!mr));
 
     // ---- 部位
     var slots = conv ? conv.rows : (s[view] || {});
     var ch = currentChar();
     var list = el('div', 'bis-slots');
     var missing = 0, matched = 0, unknown = 0;
+    // 装等差距的汇总：能比的部位数、总差值、差最多的那个部位。
+    // 「能比的部位数」要单独记 —— 不记的话「差 168 装等」这个数没有分母，
+    // 而分母会变（存档稀疏、6 件推荐装两份实测数据都查不到装等）。
+    var gapN = 0, gapSum = 0, gapWorst = null;
 
     SLOT_ORDER.forEach(function (slotId) {
       var rows = slots[slotId];
@@ -771,6 +852,12 @@
         else if (hit) matched++;
         else missing++;
       }
+      var g = slotGap(rows, mine);
+      if (g) {
+        gapN++;
+        gapSum += g.d;
+        if (!gapWorst || g.d > gapWorst.d) gapWorst = { d: g.d, slot: slotId };
+      }
       // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
       list.appendChild(renderSlot(slotId, rows, mine, hit,
         conv && conv.n ? conv.n[slotId] : null));
@@ -787,6 +874,26 @@
         + (unknown ? '，' + unknown + ' 个部位存档里没记录' : '') + '。'));
       sum.appendChild(el('span', 'note',
         '　「对上」= 身上这件正好在该部位的推荐列表里。装等更高的同名替代品不算。'));
+      // ---- 装等差距汇总。「差 13 件」说不出**差多远**，这一行说。
+      // 分母写出来：能比的只有 gapN 个部位（存档没记的、推荐件查不到装等的都比不了）。
+      if (gapN) {
+        var gsum = el('p', 'bis-sum gap-sum');
+        var avg = Math.round(gapSum * 10 / gapN) / 10;
+        gsum.appendChild(el('b', null, '装等差距'));
+        gsum.appendChild(doc.createTextNode('　能比的 ' + gapN + ' 个部位合计 '
+          + (gapSum > 0 ? '差 ' + gapSum : gapSum < 0 ? '高 ' + (-gapSum) : '持平 0')
+          + ' 装等，平均 ' + avg + '。'));
+        if (gapWorst && gapWorst.d > 0) {
+          gsum.appendChild(doc.createTextNode('　差最多的是'
+            + (B.slotNames[gapWorst.slot] || ('部位 ' + gapWorst.slot))
+            + ' ' + gapWorst.d + ' 点。'));
+        }
+        gsum.appendChild(el('span', 'note',
+          '　比的是「你身上这件」和「这个部位首选那一件」的装等。'
+          + 'maxroll 不给装等，推荐件的装等取自本机两份实测数据（见每一行的提示）'
+          + '—— 所以这是个参考量级，不是精确到 1 点的承诺。'));
+        host.insertBefore(gsum, list);
+      }
       host.insertBefore(sum, list);
     }
 
@@ -795,7 +902,15 @@
     host.appendChild(renderFootnote(s));
   }
 
-  function renderSpecMeta(s) {
+  /**
+   * 专精那一行小字（毕业装等 / 英雄天赋 / 武器搭配）。
+   *
+   * kind 是当前看的是哪一篇 maxroll 指南（'raid' | 'mplus'），null = 不是 maxroll 视角。
+   * **武器分布按它取**，而不是按 state.view —— 第 16 轮撤掉「团本视角」按钮之后
+   * state.view 再也不会等于 'raid'，那个三元表达式于是恒取大秘境那一份，
+   * 看团本指南的人会拿到大秘境的武器搭配，界面上分不出来。
+   */
+  function renderSpecMeta(s, kind) {
     var wrap = el('div', 'bis-meta');
     function cell(k, v, tip) {
       var c = el('span', 'mcell');
@@ -809,7 +924,7 @@
     wrap.appendChild(cell('英雄天赋', s.hero || '(无)',
       '这套推荐是按这个英雄天赋统计的'));
 
-    var w = s.weapon && s.weapon[state.view === 'raid' ? 'raid' : 'mplusHigh'];
+    var w = s.weapon && s.weapon[kind === 'raid' ? 'raid' : 'mplusHigh'];
     if (w) {
       var parts = Object.keys(w).sort(function (a, b) { return w[b] - w[a]; })
         .map(function (k) { return (WEAPON_ZH[k] || k) + ' ' + pct(w[k]); });
@@ -826,13 +941,13 @@
     '1hOff': '单手+副手', 'ranged': '远程', 'titansGrip': '泰坦之握'
   };
 
-  function renderStatTargets(s) {
+  function renderStatTargets(s, kind, borrowed) {
     var B = bis();
     var wrap = el('details', 'sec bis-stats');
     var sum = el('summary', null, '属性目标');
     wrap.appendChild(sum);
 
-    var which = state.view === 'raid' ? 'raid' : 'high';
+    var which = kind === 'raid' ? 'raid' : 'high';
     var t = (s.target && s.target[which]) || {};
     var keys = ['crit', 'haste', 'mastery', 'versatility'];
     var total = 0;
@@ -844,6 +959,14 @@
 
     sum.textContent = '属性目标　' + keys.filter(function (k) { return t[k]; })
       .map(function (k) { return (B.statNames[k] || k) + ' ' + pct(t[k]); }).join('　');
+    if (borrowed) {
+      // 借来的数字必须自己说明是借来的，否则在「最佳推荐」这个标题下面，
+      // 它看起来就是 maxroll 给的。
+      var from = el('span', 'note', '　这一组来自 GearInsight（顶尖玩家统计，'
+        + (kind === 'raid' ? '团本' : '大秘境') + '），不是 maxroll —— '
+        + 'maxroll 的属性优先级是正文里的文字，产物里没抓');
+      sum.appendChild(from);
+    }
 
     var bars = el('div', 'bis-bars');
     keys.forEach(function (k) {
@@ -883,6 +1006,24 @@
     var c = m.color;
     function b(x) { return Math.round(Math.max(0, Math.min(1, x || 0)) * 255); }
     return 'rgb(' + b(c.r) + ',' + b(c.g) + ',' + b(c.b) + ')';
+  }
+
+  /**
+   * 这个部位的装等差距：`{d 差几点（正 = 你低）, mine 你的, want 首选那件的, srcText 谁测的}`
+   * 或 null（你没穿 / 存档没记 / 首选那件查不到装等）。
+   *
+   * **两边都得是真数字才算。** 缺一边就返回 null，界面上于是不画这个徽章 ——
+   * 把缺的一边当 0 会算出「差 689 装等」这种数，比不画糟得多。
+   */
+  function slotGap(rows, mine) {
+    if (!mine || !mine.itemLevel || !rows || !rows.length) return null;
+    var top = rows[0];
+    var want = top[1];
+    if (!want) return null;
+    var srcText = top[3] === -2
+      ? (top[9] === 'r' ? 'raider.io 榜上均值' : 'GearInsight 实测最高')
+      : (top[3] === -1 ? 'raider.io 榜上均值' : 'GearInsight 实测');
+    return { d: Math.round(want - mine.itemLevel), mine: mine.itemLevel, want: want, srcText: srcText };
   }
 
   /**
@@ -962,6 +1103,21 @@
         ? '你身上这件就在推荐列表里'
         : '你身上这件不在推荐列表里');
       head.appendChild(m);
+
+      // ---- 装等差距。「对上 / 没对上」只说了款式，说不了**差多远** ——
+      // 身上这件正好是推荐的第 3 选择、装等却低 20，界面上和「完全穿对了」长得一样。
+      // 判据用这个部位**首选那一件**的装等（rows[0]），因为那是「换到最好」要走的距离。
+      var gap = slotGap(rows, mine);
+      if (gap) {
+        var gb = el('span', 'tag gap' + (gap.d > 0 ? ' behind' : (gap.d < 0 ? ' ahead' : ' even')),
+          gap.d > 0 ? '差 ' + gap.d : (gap.d < 0 ? '高 ' + (-gap.d) : '持平'));
+        gb.setAttribute('data-tip',
+          '你 ' + gap.mine + '　首选那件 ' + gap.want + '（' + gap.srcText + '）\n'
+          + (gap.d > 0 ? '换上去等于这个部位 +' + gap.d + ' 装等'
+            : gap.d < 0 ? '你这件装等更高 —— 但款式不是推荐的那件，属性搭配可能不一样'
+              : '装等一样'));
+        head.appendChild(gb);
+      }
     } else if (currentChar()) {
       // 不能写「空着」——AlterEgo 的 equipment 是稀疏的，这里分不出
       // 「真没穿」和「插件没记这个部位」。本机实测有角色只存了 7 个部位。
@@ -990,7 +1146,7 @@
     var isRio = srcIdx === -1, people = r[6];
     // maxroll 视角：来源下标 -2，使用率恒为 null（它不是统计，没有这个量），
     // 第 7 位是名次，第 8 位标它是不是「可刷替代」。
-    var isMr = srcIdx === -2, rank = r[7], isAlt = r[8];
+    var isMr = srcIdx === -2, rank = r[7], isAlt = r[8], ivSrc = r[9] || '';
 
     // 物品元数据两边都有，但**各有各的洞**，所以按视角取，取不到再退到另一边：
     //   · rio 自带中文名 / 图标名 / 品质（2432 件，实测中文名 100%）；
@@ -1039,15 +1195,38 @@
       main.appendChild(sk);
     }
 
-    var sub = el('span', 'sub2');
-    sub.textContent = String(ilvl) + (mx && mx > ilvl ? '→' + mx : '');
-    main.appendChild(sub);
+    // 装等。**0 不能印出来** —— 上一版直接 String(ilvl)，maxroll 视角每一行
+    // 都写着「0」，因为那时候装等是从 rio 的物品池里取 ri.ilvl，而那个字段
+    // 根本不存在（物品池只有 {n, i, q, sock}）。现在装等从 measuredGear() 来，
+    // 真查不到就**什么都不写**，而不是写一个 0 让人以为这件装备装等是 0。
+    if (ilvl) {
+      var sub = el('span', 'sub2');
+      sub.textContent = String(ilvl) + (mx && mx > ilvl ? '→' + mx : '');
+      if (isMr) {
+        // maxroll 视角的装等是借来的，得说清是谁测的 —— 两个来源不是同一个量。
+        sub.classList.add(ivSrc === 'r' ? 'iv-rio' : 'iv-gi');
+        sub.setAttribute('data-tip', ivSrc === 'r'
+          ? '装等 ' + ilvl + '：maxroll 不给装等，这是 raider.io 榜上玩家'
+            + '穿这件时的**平均**装等'
+          : '装等 ' + ilvl + '：maxroll 不给装等，这是 GearInsight 记录的'
+            + '顶尖玩家身上这件的**最高**装等'
+            + (mx && mx > ilvl ? '，还能升到 ' + mx : ''));
+      }
+      main.appendChild(sub);
+    } else if (isMr) {
+      var noiv = el('span', 'sub2 iv-none', '装等 ?');
+      noiv.setAttribute('data-tip',
+        'maxroll 不给装等，而这一件在 GearInsight 和 raider.io 两份实测数据里都没出现'
+        + '（实测 1358 次引用里有 6 次这样）—— 所以这里不填，不猜一个数字上去');
+      main.appendChild(noiv);
+    }
 
     var tl = trackLabel(trk);
     if (tl) {
       var tb = el('span', 'tag trk', tl);
       tb.setAttribute('data-tip', '升级轨道，从装备的 bonusID 解出来的\n'
-        + '（' + tl + ' = 这条轨道的第 ' + (trk % 10) + ' 级，满级 6 级）');
+        + '（' + tl + ' = 这条轨道的第 ' + (trk % 10) + ' 级，满级 6 级）'
+        + (isMr ? '\nmaxroll 不给轨道，这一条和左边的装等是同一次测量（GearInsight）' : ''));
       main.appendChild(tb);
     }
 
@@ -2257,8 +2436,19 @@
     // 上次选的专精 / 视角
     var s = settings();
     if (s.bisSpec) state.key = s.bisSpec;
-    if (s.bisView === 'raid' || s.bisView === 'mplus' || s.bisView === 'rio'
-      || s.bisView === 'maxroll') state.view = s.bisView;
+    // 只认现在还存在的两个视角。'raid' / 'mplus' 是上一版存下来的
+    // GearInsight 视角，第 16 轮撤掉了 —— 老设置要**迁到 maxroll**，
+    // 不然升级上来的用户会停在一个界面上已经没有按钮的视角里，
+    // 而那个视角一切正常地渲染着，谁也看不出为什么切不回去。
+    //
+    // 迁移要**写回设置**，不能只改 state：state.view 的初值本来就是 'maxroll'，
+    // 光不赋值的话这段代码是死的（删掉行为一模一样，任何断言都抓不到）。
+    // 写回去才是真做了事 —— 存档里那个不存在的视角名被清掉了。
+    if (s.bisView === 'rio' || s.bisView === 'maxroll') state.view = s.bisView;
+    else if (s.bisView === 'raid' || s.bisView === 'mplus') {
+      state.view = 'maxroll';
+      persist({ bisView: 'maxroll' });
+    }
     if (s.bisTab === 'gear' || s.bisTab === 'talents') state.tab = s.bisTab;
     if (s.bisTalentCat) state.tcat = s.bisTalentCat;
     if (s.bisChar) state.charKey = s.bisChar;

@@ -1146,6 +1146,14 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
    两个元素都写 auto 的话剩余空间会被平分，「我身上这件」就不再贴右了。 */
 .slot-head .tag.cov { margin-left: 0; font-size: 10px; }
 
+/* 装等差距徽章。跟在「我身上这件」后面，所以也不能吃 margin-left: auto。
+   三种状态三个颜色：落后用警告色（这是要行动的信号），持平和领先用淡色 ——
+   领先不是好消息也不是坏消息（款式不对，属性搭配可能不一样），不该染成绿色。 */
+.slot-head .tag.gap { margin-left: 6px; font-size: 10px; }
+.slot-head .tag.gap.behind { color: var(--warn); border-color: var(--warn); }
+.slot-head .tag.gap.ahead { color: var(--fg2); }
+.slot-head .tag.gap.even { color: var(--fg3); }
+
 /* ---- 单件装备 */
 .item {
   display: flex;
@@ -1195,6 +1203,11 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   text-overflow: ellipsis;
 }
 .item .im .sub2 { display: block; color: var(--fg2); font-size: 11px; }
+/* 装等的来源在 maxroll 视角里有两种（GearInsight 实测最高 / raider.io 榜上均值）。
+   均值那一档画成虚下划线：提示里写着它是什么，但界面上也该有个「这个数不一样」
+   的记号，不然两种数混在一列里看着是同一种。 */
+.item .im .sub2.iv-rio { border-bottom: 1px dashed var(--line); display: inline-block; }
+.item .im .sub2.iv-none { color: var(--fg3); font-style: italic; }
 .item .im .stats { color: var(--fg3); font-size: 10.5px; }
 .item .usage { flex: none; width: 92px; }
 .item .usage .track {
@@ -1434,5 +1447,7 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
 /* 二选一的节点用虚线边，和「点了/没点」是两个维度，不能都用颜色表示。 */
 .tnode.ch { border-style: dashed; }
 .bis-sum { margin: 0 0 7px; font-size: 12px; }
+.bis-sum.gap-sum { color: var(--fg2); }
+.bis-sum.gap-sum b { color: var(--fg); }
 .bis-sum .warn { color: var(--warn); font-weight: 600; }
 .bis-foot { margin-top: 14px; color: var(--fg3); font-size: 11px; line-height: 1.6; }
