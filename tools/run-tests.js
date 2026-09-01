@@ -181,7 +181,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               loSpecs: 0, loRenders: 0, loBoxes: 0, loCopy: 0, loPicks: 0,
               loSpec: 0, loExact: 0,
               // 第 20 轮：团本 / 大秘境两类
-              loKindBtn: 0, loKindOn: 0, loRaid: 0, loKindSw: 0, loSorted: 0, loKindSaved: 0,
+              loKindBtn: 0, loKindOn: 0, loRaid: 0, loKindSw: 0, loSorted: 0, loKindSaved: 0, loHead: 0, loResetIdx: 0,
               // maxroll 天赋方案（第 15 轮：天赋页也按 maxroll 来）。和上面那组
               // 分开数：那组盯 raider.io 的官方串（能导入的那批），这组盯 maxroll
               // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
@@ -875,7 +875,7 @@ function headerSpec(s) {
  * 导入串这一块。这一组盯的是「显示的串和数据里的串是不是同一串」——
  * 面板不编码、不改字符，所以这里能用最硬的判据：**字节相等**。
  */
-function checkLoadouts(label, specId, boxes, texts, copies, picks, kindBtns) {
+function checkLoadouts(label, specId, boxes, texts, copies, picks, kindBtns, headTxt) {
   // ---- 第 20 轮：这一块分「团本 / 大秘境」两类，来源是两家
   //      （大秘境 raider.io，团本 Warcraft Logs）。
   //
@@ -965,6 +965,19 @@ function checkLoadouts(label, specId, boxes, texts, copies, picks, kindBtns) {
       + ' 里这个专精的 loadouts 不是人数降序 —— 面板不重排，所以产物必须自己排好');
   } else {
     stats.loSorted++;
+  }
+  // 标题里那两个数：「N 名玩家共 M 种」。**必须对着产物的 n / loUniq 验** ——
+  // 分母写错了每个数看起来都很合理，只有百分比悄悄偏高。真踩过的形状是
+  // 拿「留下来那 30 种的人数之和」当 total：团本奥法 1537 人只留 30 种，
+  // 和可能只有几百，于是「占 12%」变成「占 30%」。
+  if (headTxt) {
+    var wantHead = truth.total + ' 名玩家共 ' + truth.uniq + ' 种';
+    if (headTxt.indexOf(wantHead) < 0) {
+      loNote('标题人数不对', label + ' 导入串标题里该写「' + wantHead + '」，实际：'
+        + headTxt.replace(/s+/g, ' ').slice(0, 70));
+    } else {
+      stats.loHead++;
+    }
   }
   // 只读。用户在框里改一个字符再复制，导进游戏只会说「无效」，
   // 而他会以为是这个面板给错了。
@@ -1596,6 +1609,7 @@ function checkTalents(label, specId) {
   stats.trenders++;
   var nodes = 0, grids = 0, seen = {}, dup = 0, canvases = [];
   var loBoxes = [], loTexts = [], loCopies = [], loPicks = 0, loKindBtns = [];
+  var loHead = '';
   // maxroll 那一块的元素。类名故意和 lo-* 分开（.mr-builds / .mrb / .mr-nostr），
   // 共用的话「导入串块正好 1 个」那条断言会被两块互相喂饱。
   // mrLit 是树上点亮的节点，checkMrTalents 拿它验「画的树就是高亮那一套」；
@@ -1619,6 +1633,10 @@ function checkTalents(label, specId) {
     if (n.classList.contains('tree-grid-head')) {
       var hb = n.children[0];
       if (hb && hb.textContent) colOrder.push(hb.textContent.split('：')[0]);
+    }
+    // .lo-head 两块都在用（maxroll 那块带 mr-lo-head），这里只要 rio 那块的。
+    if (n.classList.contains('lo-head') && !n.classList.contains('mr-lo-head')) {
+      loHead = n.textContent;
     }
     if (n.classList.contains('lo-text')) loTexts.push(n);
     if (n.classList.contains('lo-copy')) loCopies.push(n);
@@ -1795,7 +1813,7 @@ function checkTalents(label, specId) {
       }
     }
   });
-  checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks, loKindBtns);
+  checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks, loKindBtns, loHead);
   checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals,
     mrScen, mrPrio, mrBoss);
 
@@ -2103,6 +2121,16 @@ specKeys.forEach(function (key) {
     });
   });
   if (lk) {
+    // **先挑一个非 #1 的串再换类。** 不这么做的话 state.loadout 本来就是 0，
+    // 「换类要回到 #1」那条代码是死的也测不出来 —— 变异测试里那个变异体
+    // 一开始就是「漏」，因为测试从没让下标离开过 0。
+    var pickBtns = [];
+    walk(body, function (n) {
+      if (!n.classList || !n.classList.contains('lo-pick')) return;
+      n.children.forEach(function (c) { pickBtns.push(c); });
+    });
+    var movedTo = -1;
+    if (pickBtns.length > 2) { pickBtns[2].click(); movedTo = 2; }
     lk.click();
     // 点完必须真的换过去：那一排里高亮的应该是「团本」了。
     var onTxt = '';
@@ -2116,6 +2144,24 @@ specKeys.forEach(function (key) {
       loNote('lo 换类没生效', '天赋 ' + key + ' 点了导入串那块的「团本」，高亮却是：' + onTxt);
     } else {
       stats.loKindSw++;
+    }
+    // 换类之后必须回到 #1。换过去那一类的串种类数可能更少，留着旧下标要么
+    // 越界被夹回 0（看起来没坏），要么**不越界** —— 那时显示的是新类里的
+    // 第 3 条，而用户以为自己点的是「换个类看最热门那条」。
+    if (movedTo >= 0) {
+      var onPick = -1;
+      walk(body, function (n) {
+        if (!n.classList || !n.classList.contains('lo-pick')) return;
+        n.children.forEach(function (c, ci) {
+          if (c.classList && c.classList.contains('on')) onPick = ci;
+        });
+      });
+      if (onPick !== 0) {
+        loNote('换类没回 #1', '天赋 ' + key + ' 换类前选的是 #' + (movedTo + 1)
+          + '，换完高亮还在 #' + (onPick + 1) + ' —— 换类应该回到最热门那条');
+      } else {
+        stats.loResetIdx++;
+      }
     }
     // 持久化：和 mrKind 同一个道理。
     if (settings.bisLoKind !== 'raid') {
@@ -2491,6 +2537,14 @@ if (stats.loKindSaved < stats.loKindSw) {
   problems.push('点了团本但只有 ' + stats.loKindSaved + '/' + stats.loKindSw
     + ' 次写回了设置 —— 换个专精又会跳回大秘境');
 }
+if (stats.loResetIdx < 20) {
+  problems.push('「换类回到 #1」只验过 ' + stats.loResetIdx + ' 次，太少'
+    + ' —— 测试得先挑一个非 #1 的串，否则那条代码是死的也测不出来');
+}
+if (stats.loHead !== stats.loRenders) {
+  problems.push('导入串标题里的人数 / 种类数只核对过 ' + stats.loHead + ' 次，渲染 '
+    + stats.loRenders + ' 次 —— 分母写错的话百分比会偏高，而每个数看起来都合理');
+}
 if (stats.loSorted !== stats.loRenders) {
   problems.push('产物顺序只核对过 ' + stats.loSorted + ' 次，渲染 ' + stats.loRenders
     + ' 次 —— 面板不重排，「#1 热门」是不是真的最热门全靠这一条');
@@ -2507,7 +2561,8 @@ console.log(pad('　团本/大秘境') + (stats.loRaid >= 30 && stats.loKindSw >
     && stats.loKindOn === stats.loRenders ? '通过' : '有问题')
   + '（类按钮 ' + stats.loKindBtn + ' 个，每次渲染都有一类高亮 ' + stats.loKindOn
   + '，团本那类逐字节验过 ' + stats.loRaid + ' 次，真点过「团本」' + stats.loKindSw
-  + ' 次（写回设置 ' + stats.loKindSaved + '）'
+  + ' 次（写回设置 ' + stats.loKindSaved + '，换类回到 #1 ' + stats.loResetIdx + '）'
+  + '，标题人数对过 ' + stats.loHead + ' 次'
   + '　大秘境来自 raider.io，团本来自 Warcraft Logs）');
 
 // ---- maxroll 天赋方案（第 15 轮：天赋页改成以 maxroll 为主）

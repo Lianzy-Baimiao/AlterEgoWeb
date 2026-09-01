@@ -2158,7 +2158,11 @@
     // 和 gap-sum 那次是同一个形状，都是断言当场抓出来的。
     var box = el('div', 'mr-loadout');
 
-    var head = el('div', 'lo-head');
+    // class 是 **mr-lo-head**，不和 raider.io 那一块的 .lo-head 共用 ——
+    // 第 20 轮加「标题里的人数必须对得上产物」那条断言时，测试按 .lo-head
+    // 找标题，两块共用于是取到了后画的那个（maxroll 这个），
+    // 152 次渲染里只核对到 3 次。样式沿用（见 style.css 里那条并列选择器）。
+    var head = el('div', 'lo-head mr-lo-head');
     head.appendChild(el('b', null, '这一套的导入串'));
     head.appendChild(el('span', 'n', b.g.length + ' 个字符'));
     if (bundled) {

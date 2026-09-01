@@ -29,6 +29,10 @@ var lock = require('./mutate-lock.js');
 var ROOT = path.resolve(__dirname, '..');
 var BIS = path.join(ROOT, 'app', 'bis.js');
 var RUNNER = path.join(__dirname, 'run-tests.js');
+// 生成器 + 它的产物。第 20 轮起「天赋串按人数降序」是**生成器**的责任
+// （产物里就是排好的，面板不重排），所以这一组也要能改生成器再重算产物。
+var GEN_RIO = path.join(__dirname, 'fetch-rio.js');
+var PROD_RIO = path.join(ROOT, 'app', 'rio-data.js');
 
 lock.acquire('mutate-loadout');
 process.on('exit', lock.release);
@@ -37,6 +41,44 @@ function run() {
   var r = cp.spawnSync(process.execPath, [RUNNER],
     { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
   return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+
+/**
+ * 生成器侧的变异体。改 tools/fetch-rio.js **不会**让 run-tests.js 变红 ——
+ * 套件读的是已经生成好的 app/rio-data.js。所以这一类走另一条路：
+ * 改完生成器 → 用缓存离线重算产物（--offline，一个请求都不发）→
+ * 跑 tools/verify-rio-data.js。跑完把产物和源码一起还原。
+ */
+function genMutant(desc, from, to, want) {
+  return {
+    desc: desc, want: want, gen: true,
+    apply: function () {
+      var orig = fs.readFileSync(GEN_RIO, 'utf8');
+      var n = orig.split(from).length - 1;
+      if (n !== 1) {
+        console.log('    锚点在文件里出现 ' + n + ' 次（必须正好 1 次）');
+        return null;
+      }
+      var prod = fs.readFileSync(PROD_RIO);
+      fs.writeFileSync(GEN_RIO, orig.replace(from, to));
+      return function () {
+        fs.writeFileSync(GEN_RIO, orig);
+        fs.writeFileSync(PROD_RIO, prod);
+      };
+    }
+  };
+}
+
+/** 重生成产物（只用缓存，不联网），再跑格式校验器。 */
+function runGen() {
+  var r0 = cp.spawnSync(process.execPath, [GEN_RIO, '--offline'],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
+  var out = (r0.stdout || '') + (r0.stderr || '');
+  if (r0.status !== 0) return { status: r0.status, out: out };
+  var r1 = cp.spawnSync(process.execPath,
+    [path.join(__dirname, 'verify-rio-data.js')],
+    { cwd: ROOT, encoding: 'utf8', env: lock.childEnv() });
+  return { status: r1.status, out: out + (r1.stdout || '') + (r1.stderr || '') };
 }
 
 /**
@@ -72,13 +114,16 @@ var MUTANTS = [
   // 原因是 loRenders / loSeen 在「块数对不对」之前就记了，所以专精数照样是 40，
   // 真正触发的是块数那条。填错 want 的代价不是漏报而是**误判**：
   // 断言其实好的，变异测试却说它没被证明。
-  // 锚点带上前一行注释：第 16 轮末尾 maxroll 那一块也长出了同样形状的两行
+  // 锚点带上后一行注释：maxroll 那一块也长出了同样形状的两行
   // （var lo = renderLoadouts(s); if (lo) …），光凭这一行会命中两处，
-  // 而这一组盯的是 raider.io 那一块。
+  // 而这一组盯的是**插件兜底那条路**上的这一处（后面紧跟 bis-bar，
+  // 不是 renderBuildStats —— 第 20 轮版面又动过一次，旧锚点匹配 0 次，
+  // 被 textMutant 判成锚点失效才发现）。
   textMutant('导入串块整块不画', BIS,
     'var lo = renderLoadouts(s);\n    if (lo) host.appendChild(lo);\n\n'
-      + '    host.appendChild(renderBuildStats(td));',
-    '/* mutant: 导入串块没挂上去 */\n    host.appendChild(renderBuildStats(td));',
+      + '    // 团本 / 大秘境。只有一种时也画出来',
+    '/* mutant: 导入串块没挂上去 */\n\n'
+      + '    // 团本 / 大秘境。只有一种时也画出来',
     '各应正好 1 个'),
 
   // 显示的串被改一个字符。串长、字符集、人数全都正常，只有逐字节比对能抓。
@@ -86,7 +131,7 @@ var MUTANTS = [
   textMutant('显示的串被改掉一个字符', BIS,
     'ta.value = str;',
     "ta.value = str.slice(0, -1) + (str.slice(-1) === 'A' ? 'B' : 'A');",
-    '和 rio 数据里的第一条不一致'),
+    '数据里的第一条不一致'),
 
   // 复制的和显示的不是同一串（复制第二热门的那条）。
   // 前面所有断言都在看 DOM 里的文字，只有真点一次按钮才能抓到这条。
@@ -103,12 +148,18 @@ var MUTANTS = [
     "var ta = el('textarea', 'lo-text');\n    ta.value = str;\n    ta.readOnly = false;",
     '不是只读的'),
 
-  // 排序去掉。Object.keys 的顺序一变，「#1 热门」指的就是另一串了。
-  // 这条抓的是「显示的第一条必须是真正最热门的那条」。
-  textMutant('热门排序去掉', BIS,
-    'if (count[b] !== count[a]) return count[b] - count[a];',
-    'if (false) return count[b] - count[a];',
-    '和 rio 数据里的第一条不一致'),
+  // 排序。**第 20 轮起排序搬到了生成器里** —— 产物就是人数降序，面板不重排
+  // （重排一遍等于把「产物排错了」这件事藏起来）。所以这条变异体也跟着搬到
+  // 生成器那一侧：改 tools/fetch-rio.js 的 topLoadouts()，用缓存重生成产物，
+  // 看校验器报不报「不是人数降序」。
+  //
+  // 旧版这条改的是面板里的 count[b] !== count[a]，而那行代码已经不存在了 ——
+  // 锚点匹配 0 次，也就是这条断言早就没在验了。textMutant 判「锚点失效」
+  // 就是这么把它揪出来的。
+  genMutant('生成器不给天赋串排序（产物顺序乱了）',
+    '    if (count[b] !== count[a]) return count[b] - count[a];',
+    '    if (false) return count[b] - count[a];',
+    '不是人数降序'),
 
   // 串头 specID 被换成别的专精的串。串长、字符集、只读、复制一致 —— 全过，
   // 只有「串头里的 specID 必须是本专精」能抓。导错专精游戏直接拒绝。
@@ -148,7 +199,66 @@ var MUTANTS = [
   textMutant('选串按钮不画', BIS,
     'bar.appendChild(b);\n    });\n    box.appendChild(bar);',
     'bar.appendChild(b);\n    });\n    /* mutant: 选串按钮整排没挂上去 */',
-    '选串按钮')
+    '选串按钮'),
+
+  // ---- 第 20 轮：团本 / 大秘境两类 ----
+  //
+  // 这一块现在有两个数据源（大秘境 raider.io、团本 Warcraft Logs），
+  // 于是多了一整族「界面完全自洽但指错数据」的失败方式。
+
+  // 类按钮整排不画。剩下的界面一切正常 —— 串在框里、能复制、字节也对，
+  // 只是用户不知道自己看的是团本还是大秘境，也换不过去。
+  textMutant('团本/大秘境那一排不画', BIS,
+    "    box.appendChild(kbar);",
+    "    /* mutant: 类按钮整排没挂上去 */",
+    '团本/大秘境按钮只数到'),
+
+  // **高亮一类、显示另一类的串。** 这是分两类之后最要命的一条：
+  // 按钮写着「团本」，框里是大秘境那串。字节比对本身抓不到（那串确实存在），
+  // 只有「按界面上高亮哪一类去挑真值」能抓 —— 那正是 checkLoadouts 改判据的理由。
+  textMutant('高亮团本却显示大秘境的串', BIS,
+    '    var cur = kinds[ki];\n    var lo = cur.lo;',
+    '    var cur = kinds[ki];\n    var lo = kinds[0].lo;',
+    '不一致'),
+
+  // 换类之后不回到 #1。上一类选的是 #5，换过去那一类可能只有 3 种串，
+  // 于是 idx 越界被夹回 0 —— 看起来「没坏」。真正的问题是它**有时**不越界：
+  // 那时显示的是新类里的第 5 条，而用户以为点的是「换个类看最热门那条」。
+  textMutant('换类之后不重置选串下标', BIS,
+    '          state.loKind = kd.k;\n          state.loadout = 0;',
+    '          state.loKind = kd.k;',
+    '不一致'),
+
+  // 类型不写回设置。换个专精就跳回大秘境，用户得反复点。
+  textMutant('换类不写回设置', BIS,
+    "          persist({ bisLoKind: kd.k });",
+    "          /* mutant: 不写回设置 */",
+    '写回了设置'),
+
+  // 分母用「留下来那 30 种的人数之和」而不是真实采样人数。
+  // 百分比会偏高（团本那边奥法 1537 人只留 30 种），而界面上每个数都很合理。
+  textMutant('百分比拿截断后的和当分母', BIS,
+    '      total: sp.n || list.length,',
+    '      total: list.reduce(function (a, k) { return a + count[k]; }, 0),',
+    '导入串标题里该写'),
+
+  // 空转守卫：团本那一类一次都不验。
+  textMutant('团本那类一次都不比（证明 loRaid 下界不是空的）', RUNNER,
+    "    if (onKind === 'raid') stats.loRaid++;",
+    "    if (false) stats.loRaid++;",
+    '团本那一类只逐字节验过'),
+
+  // 空转守卫：「点一下团本」一次都不点。
+  textMutant('「点团本」一次都不点（证明 loKindSw 下界不是空的）', RUNNER,
+    '      stats.loKindSw++;',
+    '      if (false) stats.loKindSw++;',
+    '「点一下团本」只真点过'),
+
+  // 空转守卫：产物顺序一次都不核对。
+  textMutant('产物顺序一次都不核（证明 loSorted 下界不是空的）', RUNNER,
+    '    stats.loSorted++;',
+    '    if (false) stats.loSorted++;',
+    '产物顺序只核对过')
 ];
 
 console.log('=== 天赋导入串断言的变异测试 ===');
@@ -171,7 +281,7 @@ MUTANTS.forEach(function (m) {
     return;
   }
   var r;
-  try { r = run(); } finally { restore(); }
+  try { r = m.gen ? runGen() : run(); } finally { restore(); }
   if (r.status === 0) {
     missed.push(m.desc);
     console.log('  漏了  ' + m.desc);
