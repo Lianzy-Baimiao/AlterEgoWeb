@@ -76,6 +76,8 @@ $dropFromPkg = @(
     'tools\.maxroll-spell-ids.json', # which spell IDs fetch-maxroll.js needs looked up; a byproduct
     'tools\.wcl-auth.json',      # the user's Warcraft Logs API credentials -- MUST NOT ship
 
+    'tools\check-anchors.js',    # static anchor check for the mutate-* suites -- which are
+                                 # themselves dropped below, so this would find nothing
     'tools\dom-stub.js',         # test harness
     'tools\run-tests.js',        # test harness
     'tools\mutate-a11y.js',     # mutation suite for the a11y assertions; needs run-tests.js
