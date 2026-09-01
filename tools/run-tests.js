@@ -177,7 +177,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
               // 所以这组的核心是「画出来的树 == 高亮那一套」，不是串。
               mrtSpecs: 0, mrtRenders: 0, mrtBox: 0, mrtTree: 0, mrtBtns: 0,
-              mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtCopy: 0, mrtGameOk: 0,
+              mrtName: 0, mrtNameShort: 0, mrtNameUniq: 0, mrtNameTag: 0, mrtSpec: 0, mrtDecl: 0, mrtCopy: 0, mrtGameOk: 0,
               mrtCopyClick: 0,
               mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
@@ -961,6 +961,44 @@ function mrDecode(specId, t) {
   };
 }
 
+/**
+ * short 的每个词是不是按原序出现在 full 里（只删词，不改词、不换序）。
+ *
+ * 判据故意是**子序列**而不是「子串」：面板删的是组内共有的词，删完两段会用
+ * 一个空格接起来，所以「Nek'zali」从 `Marksmanship Hunter Nek'zali Raid Talents`
+ * 里剩下来时，原文里它两边的字都没了 —— 子串判据会把这个正确结果判成错。
+ * 按词比对既容得下删词，又拦得住「拿别一套的名字来填」（那必然出现一个
+ * full 里没有的词）。
+ */
+function wordsSubseq(short, full) {
+  function words(s) { return String(s).split(/[^A-Za-z0-9']+/).filter(Boolean); }
+  var a = words(short), b = words(full), i = 0;
+  for (var k = 0; k < b.length && i < a.length; k++) {
+    if (a[i].toLowerCase() === b[k].toLowerCase()) i++;
+  }
+  return i === a.length;
+}
+
+/**
+ * 去掉面板为「重名行」补的那个括号后缀，留下名字本体。
+ *
+ * 为什么要它：上游自己有重名（实测 13 套没名字、4 组不同串共用一个名字），
+ * 面板给重名的行补一个能分辨的后缀（场景 / 英雄天赋 / 点数 / 第 N 套，
+ * 见 bis.js 的 mrUniqNames）。上面那条「只许删词」的判据要认这件事，
+ * 否则每个补过后缀的行都会被判成「名字取错了」。
+ *
+ * 只剥**最后一个**全角括号，且必须收在行尾 —— maxroll 自己的名字里也有括号
+ * （例如 `... (Single Target)`），那是半角的，不会被误剥。
+ *
+ * 括号前面必须还剩东西，否则不算后缀。少了这一条，没名字的那 13 套
+ * （显示成「（这套没写名字）」，整行就是一个括号组）会被当成「补过后缀」——
+ * 于是把 mrUniqNames 整个摘掉，计数器照样报 9，那条下界成了摆设。
+ */
+function mrBaseName(s) {
+  var m = /^(.+)（[^（）]*）$/.exec(String(s));
+  return m ? m[1] : String(s);
+}
+
 /** 产物里声明的 p / h 和独立解码一致吗？不一致返回一句话。 */
 function mrDeclaredOk(t, d) {
   if (d.err) return d.err;
@@ -1092,12 +1130,59 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
       c.children.forEach(function (e) { if (e.tagName === 'EM') ems.push(e); });
     }
   });
+  // 名字：面板显示的是**短名**（删掉了组内共有的词，见 bis.js 的 mrShortNames），
+  // 所以判据不能是「显示的字 === 产物里的 n」—— 那条在第 18 轮变成了假红。
+  //
+  // 改成两条，合起来仍然把「高亮那行 ↔ 那一套」钉死，而且比原来严：
+  //   ① 缩过名字的行，全名必须原样挂在 data-tip 上（**逐字节**和产物相等）——
+  //      信息不许丢，只许换地方；
+  //   ② 显示的短名必须是**产物那个名字的子序列**（按词），也就是只删词、
+  //      不许改词、不许换序、更不许拿别一套的名字来填。
+  // 光验 ① 会漏掉「短名取错行」（那是这一组存在的理由）；光验 ② 会漏掉
+  // 「全名悄悄丢了」。
   var wantNm = t.n || '（这套没写名字）';
-  if (!nm || nm.textContent !== wantNm) {
-    loNote('mr 名字', label + ' 高亮方案的名字是「' + (nm ? nm.textContent : '(没画)')
+  var shown = nm ? nm.textContent : null;
+  // 提示的第一行就是全名（后面几行是点数 / 英雄天赋 / 共用小节数）。
+  var tipRaw = btns[idx].attrs && btns[idx].attrs['data-tip'];
+  var tipNm = tipRaw ? String(tipRaw).split('\n')[0] : null;
+  if (shown === null) {
+    loNote('mr 名字', label + ' 高亮方案没画名字（产物里是「' + wantNm + '」）');
+  } else if (shown !== wantNm && tipNm !== wantNm) {
+    loNote('mr 名字', label + ' 高亮方案的名字缩成了「' + shown
+      + '」，而全名没挂在提示里（提示是「' + (tipNm || '(没有)')
+      + '」，产物里是「' + wantNm + '」）');
+  } else if (!wordsSubseq(mrBaseName(shown), wantNm)) {
+    loNote('mr 名字', label + ' 高亮方案的名字是「' + shown
       + '」，产物里是「' + wantNm + '」');
   } else {
     stats.mrtName++;
+    if (shown !== wantNm) stats.mrtNameShort++;
+    if (mrBaseName(shown) !== shown) stats.mrtNameTag++;
+  }
+
+  // 列表里**任意两行的短名不许相同**。
+  //
+  // 为什么单列一条，而不是靠 bis.js 里那道撞车守卫：那道守卫（撞了就整组退回全名）
+  // 在当前数据上一次都没触发，把它删掉套件照样全绿 —— 也就是说它的正确性
+  // 现在完全没人看着。而它保护的性质是用户能不能选：两行印着同一个「Cleave」，
+  // 点哪一行都不知道自己点的是什么。
+  //
+  // 所以判据放在**结果**上（列表里的名字互不相同），而不是放在实现上。
+  // 上游名字变了、阈值调了、守卫被删了，这一条都能报。
+  var seenNm = {}, dupNm = null;
+  btns.forEach(function (b) {
+    b.children.forEach(function (c) {
+      if (!c.classList || !c.classList.contains('nm')) return;
+      var k = String(c.textContent).toLowerCase();
+      if (seenNm[k] && !dupNm) dupNm = c.textContent;
+      seenNm[k] = 1;
+    });
+  });
+  if (dupNm) {
+    loNote('mr 名字撞车', label + ' 方案列表里有两行印着同一个名字「' + dupNm
+      + '」，点哪一行都分不出是哪一套');
+  } else {
+    stats.mrtNameUniq++;
   }
 
   // 印出来的点数必须是**游戏里配得出来的**那个数。
@@ -2218,6 +2303,22 @@ if (stats.mrtBox !== stats.mrtRenders) {
   problems.push('maxroll 方案列表 + 说明只对上 ' + stats.mrtBox + ' 次，渲染 '
     + stats.mrtRenders + ' 次，不一一对应');
 }
+// 缩名的下界。**上面那条「名字」断言两条腿都容得下「压根没缩」**（短名 === 全名
+// 时它直接过），所以缩名功能整个没了它一声不响 —— 那正是第 18 轮要修的毛病
+// （一个专精 10 行名字几乎一样，中位 45 字符）。实测 112 次渲染里 60 次的高亮行
+// 是缩过的，取 40 留出数据变动的余地。
+if (stats.mrtNameShort < 40) {
+  problems.push('方案名缩短过的只有 ' + stats.mrtNameShort + ' 次（实测 60），'
+    + '缩名那一步没在跑 —— 一个专精会列出 10 行几乎一样的长名字');
+}
+// 重名行补后缀那一步（见 bis.js 的 mrUniqNames）。**上游自己就有重名**：
+// 13 套没名字、4 组不同的串共用一个名字，缩名之前就在，退回全名也躲不掉。
+// 不补后缀的话那些行印着同一个名字，点哪一行都不知道点的是什么。
+// 实测 112 次渲染里 12 次的高亮行是补过后缀的，取 6 留余地。
+if (stats.mrtNameTag < 6) {
+  problems.push('补过「分辨后缀」的只有 ' + stats.mrtNameTag + ' 次（实测 12），'
+    + '重名行没被区分开 —— 上游有 13 套没名字、4 组同名不同串');
+}
 if (stats.mrtTree !== stats.mrtRenders) {
   problems.push('「画出来的树就是高亮那一套」只验过 ' + stats.mrtTree + ' 次，渲染 '
     + stats.mrtRenders + ' 次');
@@ -2385,6 +2486,8 @@ console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
   + '，印的点数游戏里配得出来 ' + stats.mrtPts + '（其中打包两条的 '
   + stats.mrtPtsSplit + '）'
   + '，多个小节共用说清楚 ' + stats.mrtMany
+  + '，方案名缩短 ' + stats.mrtNameShort + ' 次且全名原样留在提示里'
+  + '，重名行补分辨后缀 ' + stats.mrtNameTag + ' 次（列表内两行同名 0 组）'
   + '，产物里 ' + mrTotal + ' 套方案无重复串（一个专精最多 ' + mrMax + ' 套）'
   + '，打包多条英雄树 ' + stats.mrtBundle + ' 套都给了选择条'
   + '，复制按钮真点过 ' + stats.mrtCopyClick + ' 次且复制内容与框里显示逐字节相同'

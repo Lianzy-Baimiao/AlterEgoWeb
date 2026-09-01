@@ -1796,6 +1796,137 @@
     return vals.length ? vals.join(' / ') + ' 点' : t.p + ' 点';
   }
 
+  /**
+   * 方案列表的短名。**这一组名字唯一的区别在中间**，两头全是重复的。
+   *
+   * 实测（167 套）：maxroll 的方案名中位 45 字符、最长 72，而一个专精一个类型
+   * 下的 9~10 行长这样 ——
+   *   Marksmanship Hunter Nek'zali Raid Talents
+   *   Marksmanship Hunter Entombed Sentinels Raid Talents
+   *   Marksmanship Hunter Vashnik Raid Talents
+   * 而它们的点数、英雄天赋标签**全都一样**（都是 82 点 / 同一条英雄树），
+   * 于是每一行看上去完全相同，唯一的区别是夹在两段重复短语中间的首领名。
+   * 用户要在这十行里选一行，靠的正是那个词。
+   *
+   * 做法：**按组内词频删共有词**，不写死词表。「Marksmanship」「Hunter」
+   * 「Raid」「Talents」这些在组里几乎每行都出现，删掉；剩下的就是那一行
+   * 自己的东西。阈值取 2/3（实测中位 45 → 16 字符）：
+   *   · 取 1（必须每行都有）漏得掉 —— maxroll 自己有错别字，
+   *     「Destruction WarlockTwin Fangs」少一个空格，Warlock 就不再是「每行都有」，
+   *     于是整组的 Warlock 一个都删不掉；
+   *   · 取 1/2 反而更差（29 组退回全名）—— 半数以上的行会被删到撞车。
+   *
+   * **删完必须仍然两两不同**，否则整组退回全名：把两行不同的方案显示成同一个
+   * 名字，比名字长得多要糟 —— 用户会以为面板重复列了同一套。
+   * 全名不丢，挂在 data-tip 上。
+   */
+  function mrShortNames(list) {
+    var full = list.map(function (t) { return t.n || '（这套没写名字）'; });
+    if (list.length < 2) return full;
+    var cnt = {};
+    full.forEach(function (n) {
+      var seen = {};
+      mrWords(n).forEach(function (w) {
+        var k = w.toLowerCase();
+        if (!seen[k]) { seen[k] = 1; cnt[k] = (cnt[k] || 0) + 1; }
+      });
+    });
+    var need = Math.ceil(list.length * 2 / 3);
+    var out = full.map(function (n) {
+      var kept = mrWords(n).filter(function (w) { return cnt[w.toLowerCase()] < need; });
+      return kept.length ? kept.join(' ') : null;
+    });
+    var seen2 = {}, ok = true;
+    out.forEach(function (s) {
+      if (!s) { ok = false; return; }
+      var k = s.toLowerCase();
+      if (seen2[k]) ok = false;
+      seen2[k] = 1;
+    });
+    return mrUniqNames(ok ? out : full, list);
+  }
+
+  /**
+   * 把重名的行改成能分辨的。
+   *
+   * 为什么需要这一步：**上游自己就有重名**，缩名之前就有，退回全名也躲不掉
+   * （实测 167 套里）：
+   *   · 13 套**压根没有名字** —— 全都显示「（这套没写名字）」，一个专精能连着三行；
+   *   · 4 组不同的串**共用一个名字**，例如冰法团本有两行都叫
+   *     「Spellslinger Frost Mage cleave talents in Raids」（一条标 cleave、
+   *     一条标 aoe），而元素萨有两行同名却是 75 点和 81 点两套不同的树。
+   * 两行印着同一个名字，用户点哪一行都不知道自己点的是什么 —— 而这不是
+   * 显示的错，是数据本来就没给出区别。面板能做的是**把区别找出来印上**。
+   *
+   * 找区别的顺序，按「对用户有多少意义」排：
+   *   ① 场景（单体 / AOE / 顺劈 / 多目标）—— maxroll 自己标的，最能说明差别；
+   *   ② 英雄天赋名 —— 中文，来自天赋树；
+   *   ③ 点数 —— 元素萨那两行真正的区别就是它（75 vs 81）；
+   *   ④ 「第 N 套」—— 兜底。前三样都一样时只剩顺序，硬编一个也比两行同名好：
+   *      顺序至少和列表上下一致，用户能对上。
+   * 只给重名的行加后缀，没重名的一个字都不动。
+   */
+  function mrUniqNames(names, list) {
+    var cnt = {};
+    names.forEach(function (n) {
+      var k = String(n).toLowerCase();
+      cnt[k] = (cnt[k] || 0) + 1;
+    });
+    var dup = false;
+    Object.keys(cnt).forEach(function (k) { if (cnt[k] > 1) dup = true; });
+    if (!dup) return names;
+
+    return names.map(function (n, i) {
+      if (cnt[String(n).toLowerCase()] < 2) return n;
+      var t = list[i] || {};
+      var tags = [];
+      var sc = t.sc && t.sc.length ? t.sc[0] : null;
+      if (sc && SCEN_ZH[sc]) tags.push(SCEN_ZH[sc]);
+      if (t.h && t.h.length === 1) {
+        var hn = subTreeName(t.h[0]);
+        if (hn) tags.push(hn);
+      }
+      var pts = mrPtsText(t);
+      if (pts) tags.push(pts);
+      tags.push('第 ' + (i + 1) + ' 套');
+      // 逐个往上加，直到这一行和别人不一样了。加到「第 N 套」必然唯一。
+      for (var k = 1; k <= tags.length; k++) {
+        var cand = n + '（' + tags.slice(0, k).join(' · ') + '）';
+        var clash = false;
+        names.forEach(function (m, j) {
+          if (j !== i && String(m).toLowerCase() === String(cand).toLowerCase()) clash = true;
+        });
+        if (!clash && k === tags.length) return cand;
+        if (!clash) {
+          // 还要保证别的重名行加同样多的标签之后不会撞上来
+          var same = false;
+          names.forEach(function (m, j) {
+            if (j === i || cnt[String(m).toLowerCase()] < 2) return;
+            if (String(m).toLowerCase() !== String(n).toLowerCase()) return;
+            var t2 = list[j] || {};
+            var tg2 = [];
+            var sc2 = t2.sc && t2.sc.length ? t2.sc[0] : null;
+            if (sc2 && SCEN_ZH[sc2]) tg2.push(SCEN_ZH[sc2]);
+            if (t2.h && t2.h.length === 1) {
+              var hn2 = subTreeName(t2.h[0]);
+              if (hn2) tg2.push(hn2);
+            }
+            var p2 = mrPtsText(t2);
+            if (p2) tg2.push(p2);
+            tg2.push('第 ' + (j + 1) + ' 套');
+            if (tg2.slice(0, k).join(' · ') === tags.slice(0, k).join(' · ')) same = true;
+          });
+          if (!same) return cand;
+        }
+      }
+      return n + '（第 ' + (i + 1) + ' 套）';
+    });
+  }
+
+  function mrWords(n) {
+    return String(n).split(/[^A-Za-z0-9']+/).filter(Boolean);
+  }
+
   function renderTalents(host) {
     var s = currentSpec();
     if (!s) return;
@@ -1868,13 +1999,15 @@
     var pickBox = el('div', 'mr-builds');
     pickBox.setAttribute('role', 'group');
     pickBox.setAttribute('aria-label', '天赋方案，共 ' + pick.list.length + ' 套');
+    var shortNames = mrShortNames(pick.list);
     pick.list.forEach(function (t, i) {
       var btn = button('', 'mrb' + (i === pick.idx ? ' on' : ''), function () {
         state.mrBuild = i;
         state.mrSub = 0;        // 换方案，英雄树的选择跟着重置
         render();
       });
-      btn.appendChild(el('span', 'nm', t.n || '（这套没写名字）'));
+      var full = t.n || '（这套没写名字）';
+      btn.appendChild(el('span', 'nm', shortNames[i]));
       var meta = el('span', 'mt');
       var ptsText = mrPtsText(t);
       // 印的是「选一条英雄树之后」的点数，不是产物里的 p —— 见 mrSplit 的注释。
@@ -1901,7 +2034,10 @@
         meta.appendChild(e);
       });
       btn.appendChild(meta);
-      btn.setAttribute('data-tip', (t.n || '(无名)') + '\n' + ptsText
+      // 提示的**第一行是全名**，而且是产物里那个 n 一字不改的原文 ——
+      // 界面上显示的是删过共有词的短名（见 mrShortNames），全名只剩这一处。
+      // run-tests.js 的「名字」那条断言认的就是这一行，换个顺序它会报红。
+      btn.setAttribute('data-tip', full + '\n' + ptsText
         + (t.h.length > 1
           ? '（串里两条英雄天赋合计 ' + t.p + ' 点，游戏里只能选一条）' : '')
         + '\n英雄天赋：' + t.h.map(subTreeName).join(' / ')
