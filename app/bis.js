@@ -57,8 +57,13 @@
     // 天赋页的 maxroll 那一路（第 15 轮：天赋也按 maxroll 来）。
     // mrKind 是 'mplus' | 'raid'，mrBuild 是该类型里第几套方案，
     // mrSub 是「打包了两条英雄树」时画哪一条（0 = 用方案里第一条）。
-    // 都不持久化：下标是生成时的数组位置，重抓数据后会指向另一套方案，
-    // 存下来只会让用户下次打开看到一套他没选过的天赋。
+    //
+    // **mrKind 持久化，mrBuild / mrSub 不。** 两者性质不同：
+    //   · mrKind 是 'raid' / 'mplus' 两个**固定的字**，重抓数据也还是这两个。
+    //     一个人在准备打团本，那他每次打开天赋页要看的都是团本那一份 ——
+    //     不存的话每次都跳回大秘境，他得手动点回去（换个专精也要再点一次）。
+    //   · mrBuild / mrSub 是**数组下标**，重抓数据后会指向另一套方案。
+    //     存下来只会让用户下次打开看到一套他没选过的天赋，而界面上完全看不出来。
     mrKind: '',
     mrBuild: 0,
     mrSub: 0
@@ -619,9 +624,76 @@
     if (n) n.textContent = text || '';
   }
 
+  /**
+   * 面板标题。以前是写死在 index.html 里的「毕业装备」——
+   * 于是切到天赋页之后，标题还写着「毕业装备」而下面是一堆天赋树，
+   * 看起来像是点错了地方。
+   */
+  function setTitle() {
+    var n = doc.getElementById('bis-title');
+    if (n) n.textContent = state.tab === 'talents' ? '天赋' : '毕业装备';
+  }
+
+  /**
+   * 展开着的折叠块（`<details>`）。键是 secKey()，跨重建活着。
+   *
+   * 为什么需要它：render() 是**整块重建**（textContent = '' 再画一遍），
+   * 所以每次点击都会把所有 `<details>` 打回默认的折叠状态。用户展开
+   * 「各首领说明」看到一半，点一下别的方案，那一块就合上了 —— 而他点那一下
+   * 要的只是换个方案，没让面板把他刚打开的东西收起来。
+   */
+  var openSecs = {};
+
+  /**
+   * 一个折叠块的稳定标识。**不能用下标** —— 换专精 / 换视角之后块的数量和顺序
+   * 都会变，下标会指向另一块（用户展开「宝石」，切个专精变成「附魔」是开的）。
+   * 用 class 加标题文字里那段固定的前缀，两者都跟着内容走。
+   */
+  function secKey(node) {
+    var title = '';
+    // 走 children（元素）而不是 childNodes（含文本节点）：我只要 <summary>，
+    // 而且 children 在浏览器和测试脚手架里都在 —— 用 childNodes 的话在脚手架里
+    // 是 undefined，整个函数会静默变成空转（写完第一版就是这样，测试一片绿
+    // 而这个功能根本没被跑到）。
+    var kids = node.children || [];
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i] && kids[i].tagName === 'SUMMARY') { title = kids[i].textContent || ''; break; }
+    }
+    // 标题里带条数（「各首领说明　9 条」），条数会变而块还是同一块，所以切掉数字。
+    return (node.className || '') + '|' + title.replace(/[0-9]+/g, '#');
+  }
+
+  /** 记住这一块的展开状态，并接上 toggle 事件。renderSec 之后调用。 */
+  function trackSec(node) {
+    var k = secKey(node);
+    if (openSecs[k]) node.setAttribute('open', 'open');
+    node.addEventListener('toggle', function () {
+      // 读 open 状态要两条路都走：浏览器给 node.open（布尔属性），
+      // 测试脚手架只有 getAttribute。少一条这段在其中一边就是空转。
+      var isOpen = (node.open !== undefined)
+        ? node.open
+        : (node.getAttribute && node.getAttribute('open') != null);
+      if (isOpen) openSecs[k] = 1;
+      else delete openSecs[k];
+    });
+  }
+
+  /** 把这一次画出来的所有 <details> 都接上（render 末尾统一做，不用逐处改）。 */
+  function trackAllSecs(host) {
+    (function walk(n) {
+      if (n.tagName === 'DETAILS') trackSec(n);
+      var kids = n.children || [];
+      for (var i = 0; i < kids.length; i++) walk(kids[i]);
+    })(host);
+  }
+
   function render() {
     var host = body();
     if (!host) return;
+    // **重建前记住滚动位置。** #bis-body 是滚动容器，textContent = '' 会把
+    // scrollTop 打回 0 —— 面板很长（三棵天赋树 + 两块说明），用户在底下点一个
+    // 方案按钮，视线会被扔回顶部，然后得重新滚下来找刚点的那个。
+    var scroll = host.scrollTop || 0;
     host.textContent = '';
 
     var B = bis();
@@ -631,11 +703,36 @@
     }
     if (!byClass) buildClassIndex();
 
+    setTitle();
     host.appendChild(renderTabs());
     host.appendChild(renderPicker());
 
     if (state.tab === 'gear') renderGear(host);
     else renderTalents(host);
+
+    trackAllSecs(host);
+    // 还原滚动位置。**必须在内容画完之后** —— 空容器的 scrollTop 只能是 0，
+    // 先赋值会被静默丢掉。
+    if (scroll) host.scrollTop = scroll;
+  }
+
+  /**
+   * 换专精 / 换职业时，把「第几套」这类**下标型**状态归零。
+   *
+   * 为什么必须做：mrBuild / mrSub / build / loadout 都是数组下标，而每个专精的
+   * 数组是各自的。不归零的话，在 A 专精选了第 6 套，切到 B 专精会**落在 B 的
+   * 第 6 套**上 —— 那是一套用户没选过的天赋，而界面上完全看不出异常
+   * （高亮、点数、树全都自洽，只是这套不是他挑的）。实测毁灭术士和射击猎人
+   * 的团本方案都有 10 套，切过去正好命中一套按首领分的方案。
+   *
+   * mrKind 不在这里归零：它是 raid / mplus 两个**固定的字**，不是下标，
+   * 换专精之后含义不变（见 state 那段注释）。
+   */
+  function resetPicks() {
+    state.mrBuild = 0;
+    state.mrSub = 0;
+    state.loadout = 0;
+    state.build = -1;   // -1 = 该类别里用得最多的那套（插件那条路的默认）
   }
 
   function renderTabs() {
@@ -663,6 +760,7 @@
       var on = cur && cur.cls === cls;
       var b = button(L.classLabel(cls, settings().learnedClassNames), 'cls' + (on ? ' on' : ''), function () {
         state.key = byClass[cls][0];
+        resetPicks();
         persist({ bisSpec: state.key });
         render();
       });
@@ -686,6 +784,7 @@
         var label = specLabel(s);
         var b = button(label, 'spec' + (on ? ' on' : ''), function () {
           state.key = key;
+          resetPicks();
           persist({ bisSpec: key });
           render();
         });
@@ -758,7 +857,7 @@
     // 删文件会让这些静默变空，而 maxroll 只能补回其中一部分。
     var VIEWS = [
       ['maxroll', '最佳推荐', 'maxroll.gg 的职业指南：编辑给出的 Best in Slot 排序 '
-        + '+ 可刷替代。**没有样本量也没有使用率** —— 它是推荐，不是统计'],
+        + '+ 可刷替代。没有样本量也没有使用率 —— 它是推荐，不是统计'],
       ['rio', '实战分布', 'raider.io 大秘境排行榜上真实角色的装备统计，每个部位都带样本量']
     ];
     VIEWS.forEach(function (v) {
@@ -1061,7 +1160,7 @@
       mb2.setAttribute('data-tip',
         'maxroll 这个部位给了 ' + nBis + ' 件首选'
         + (nAlt ? '、' + nAlt + ' 件可刷替代' : '') + '。\n'
-        + '这份数据**没有样本量也没有使用率** —— 它是编辑的推荐排序，不是统计。\n'
+        + '这份数据没有样本量也没有使用率 —— 它是编辑的推荐排序，不是统计。\n'
         + '想看「多少人真的这么穿」，切到「实战分布」视角。');
       head.appendChild(mb2);
     } else if (sampleN) {
@@ -1207,9 +1306,9 @@
         sub.classList.add(ivSrc === 'r' ? 'iv-rio' : 'iv-gi');
         sub.setAttribute('data-tip', ivSrc === 'r'
           ? '装等 ' + ilvl + '：maxroll 不给装等，这是 raider.io 榜上玩家'
-            + '穿这件时的**平均**装等'
+            + '穿这件时的「平均」装等'
           : '装等 ' + ilvl + '：maxroll 不给装等，这是 GearInsight 记录的'
-            + '顶尖玩家身上这件的**最高**装等'
+            + '顶尖玩家身上这件的「最高」装等'
             + (mx && mx > ilvl ? '，还能升到 ' + mx : ''));
       }
       main.appendChild(sub);
@@ -1439,14 +1538,18 @@
       // 这一段是这个视角最要紧的一句话。maxroll 给的是排序，不是统计 ——
       // 界面上到处都没有百分比，脚注必须解释为什么没有，否则看起来像是数据缺了。
       p.appendChild(doc.createTextNode(
-        '这是 maxroll 编辑给出的**推荐排序**，不是使用率统计：'
+        '这是 maxroll 编辑给出的推荐排序，不是使用率统计：'
         + '它没有样本量，也没有「多少人这么穿」。所以这里画的是名次'
         + '（BiS #1 = 编辑的首选，替代 #1 = 可刷替代表里的第一个），不画使用率条 —— '
         + '那个数没人算过，画出来就是编的。'));
       p.appendChild(el('br'));
+      // 这一句以前写「想看属性权重 / 宝石 / 掉落来源，切到前两个视角」——
+      // 那两个视角第 16 轮撤掉了，照着找会找不到按钮。而且属性目标现在就画在
+      // 这个视角里（上面 renderStatTargets 那一块），话得改成实际情况。
       p.appendChild(doc.createTextNode(
-        '想看「榜上的人真的穿什么、多少人这么穿」，切到「实战分布」；'
-        + '想看属性权重 / 宝石 / 掉落来源，切到前两个视角。'
+        '想看「榜上的人真的穿什么、多少人这么穿」，切到「实战分布」。'
+        + '装等不是 maxroll 给的（它的表里没有），来自本机两份实测数据 —— '
+        + '每一行的装等上都写着是谁测的。'
         + '物品中文名来自暴雪 DB2。'));
       return p;
     }
@@ -1466,8 +1569,8 @@
         + '物品中文名来自暴雪 DB2（' + ((R && R.itemNameSource) || '?') + '）。'));
       p.appendChild(el('br'));
       p.appendChild(doc.createTextNode(
-        '这个视角没有属性权重 / 宝石 / 附魔 / 掉落来源 —— raider.io 的角色档案里没有这些，'
-        + '要看那些切到「团本视角」或「大秘境视角」。'));
+        '这个视角没有属性权重 / 宝石 / 附魔 / 掉落来源 —— raider.io 的角色档案里没有这些。'
+        + '要看那些切到「最佳推荐」。'));
       return p;
     }
 
@@ -1608,10 +1711,28 @@
 
     // maxroll 优先 —— 第 15 轮定的：天赋页也按 maxroll 来。
     // 它需要两份数据：maxroll 的方案（懒加载）和天赋树（画树用，也是懒加载）。
-    // 两份都在才走这条路，否则退回插件那份统计 —— 「退回」不是「出错」，
-    // 首屏那一瞬间就是这个状态。
+    // 两份都在才走这条路，否则退回插件那份统计。
     var pick = tree() ? mrTalentPick(s.specId) : null;
     if (pick) { renderMrTalents(host, s, pick); return; }
+
+    // **还在加载就说「在加载」，不要先画一版插件那份统计。**
+    //
+    // 这两条路画出来的东西**完全不一样**（一边是方案列表 + 三棵树 + 说明，
+    // 一边是「热门套路 + 点数分布」）。先画插件那份、等 maxroll 到了再
+    // render() 一次的话，用户正在读的整页会在他眼前换掉 ——
+    // 他刚点开的折叠块、刚选中的套路全没了。maxroll 那份现在 284 KB，
+    // 这个空档是看得见的。
+    //
+    // 加载**失败**时不留在这个状态：ensureMaxroll 无论成败都会置 mrLoaded,
+    // 那时这个分支不成立，自然落到下面插件那条路。
+    if (mrLoading || (!mrLoaded && !maxroll())) {
+      var wait = el('p', 'note', '正在加载 maxroll 的天赋方案…');
+      wait.appendChild(el('span', 'note',
+        '　加载不到的话会退回插件自带的天赋统计，功能不受影响。'));
+      host.appendChild(wait);
+      return;
+    }
+
     renderPopularTalents(host, s);
   }
 
@@ -1643,6 +1764,7 @@
         state.mrKind = k[0];
         state.mrBuild = 0;      // 换类型必须归零：两边套数不一样，留着下标会越界
         state.mrSub = 0;
+        persist({ bisMrKind: k[0] });
         render();
       });
       btn.setAttribute('data-tip', mrTalents(s.specId, k[0]).length + ' 套方案');
@@ -1713,10 +1835,16 @@
     // 导出的 103 条、raider.io 的 306 条全是 2。版本对不上游戏会直接拒 ——
     // 那不是「没验证过」，是「确定不能用」。给一个粘进去必然报错的串比不给更糟，
     // 所以现在只用它画树，能导入的串在下面 raider.io 那一块。
+    // 这句话的措辞很要紧。上一版写的是「要能一键导入的串，用下面 raider.io 那一块」——
+    // 读起来像「下面那串就是上面这套的可导入版本」，而**它们根本不是同一套天赋**：
+    // 下面那块是 raider.io 榜上最多人用的串，和你在上面选的这套方案没有关系
+    // （实测拿一个专精比过：7 个节点树上有而串里没有，8 个反过来）。
+    // 所以这里只说「这套没有可导入的串」，不把用户往一个他会以为等价的地方引。
     host.appendChild(el('p', 'mr-nostr',
-      'maxroll 这套只用来看树，不给导入串：它页面里那串的版本号是 130，'
-      + '游戏只认 2，粘进去会被直接拒。要能一键导入的串，用下面 raider.io 那一块'
-      + '（那是从排行榜角色身上原样取的，能导）。'));
+      'maxroll 这套只用来看树，没有可导入的串：它页面里那串的版本号是 130，'
+      + '游戏只认 2，粘进去会被直接拒。'
+      + '下面那块 raider.io 的串是另一套天赋（榜上最多人用的那套），'
+      + '不是上面这套的可导入版本 —— 想照上面这套点，只能按着树自己点。'));
 
     // 出手顺序（优先级列表）和每个首领 / 副本的说明。两块都是**英文原文**，
     // 见 renderMrNotes 的注释。
@@ -1883,12 +2011,30 @@
 
     setSub('天赋　' + specLabel(s) + '　共 ' + td.builds.length + ' 套');
 
-    // maxroll 有数据、只是还没加载完时，说一句「在等什么」——
-    // 不说的话用户会以为这就是最终形态，而下一秒界面会自己换掉。
+    // 为什么这一页长得和别的专精不一样，得说清楚。
+    //
+    // 两种情况都会落到这条路，而它们对用户的含义完全不同：
+    //   · 数据还没加载完 —— 等一下就会自己换过来；
+    //   · **maxroll 没有这个专精的天赋方案** —— 换不过来了，这就是最终形态。
+    //     实测 3 个专精是这样（它们指南里的天赋图是照上一版天赋树编的，解不开
+    //     所以不收）。上一版只写了第一种情况的话，这 3 个专精的用户会一直等一个
+    //     永远不会来的东西；而别的专精那一页是「方案列表 + 三棵树」，
+    //     他会以为自己这里坏了。
     if (!tree() || !maxroll()) {
       host.appendChild(el('p', 'note',
         '下面是插件那份「顶尖玩家实际在用什么」的统计。maxroll 的推荐方案还在加载，'
         + '到了会自动换过来。'));
+    } else {
+      var why = el('p', 'note');
+      why.appendChild(el('b', null, 'maxroll 没有这个专精的天赋方案。'));
+      why.appendChild(doc.createTextNode(
+        '下面是插件自带的「顶尖玩家实际在用什么」统计 —— 所以这一页和别的专精长得不一样,'
+        + '不是坏了。'));
+      why.setAttribute('data-tip',
+        'maxroll 这个专精的指南里，天赋图是照上一版天赋树编的，解不开所以没收进来'
+        + '（实测 40 个专精里有 3 个这样）。\n'
+        + '装备页不受影响，maxroll 的「最佳推荐」40 个专精都有。');
+      host.appendChild(why);
     }
 
     var bar = el('div', 'bis-bar');
@@ -1939,9 +2085,20 @@
 
     var box = el('div', 'bis-loadout');
     var head = el('div', 'lo-head');
-    head.appendChild(el('b', null, '天赋导入串'));
+    // 标题必须说清「这是榜上热门串，不是上面那套方案」。
+    // 天赋页上面是 maxroll 的方案（画树用，没有可导入的串），这一块是 raider.io
+    // 的串（能导入）—— 两者**不是同一套天赋**。上一版标题只写「天赋导入串」，
+    // 摆在 maxroll 那套树的正下方，读起来就是「上面那套的导入串」。
+    head.appendChild(el('b', null, '榜上热门天赋串'));
     head.appendChild(el('span', 'n',
       lo.total + ' 名玩家共 ' + lo.uniq + ' 种，下面是最热门的几种'));
+    var warn = el('span', 'lo-warn', '和上面的方案不是同一套');
+    warn.setAttribute('data-tip',
+      '这一块来自 raider.io 排行榜上真实角色的天赋串，能一键导入游戏。\n'
+      + '它和上面 maxroll 那套方案是两回事：实测同一个专精下，'
+      + '两边点亮的节点互有出入（一边多 7 个，另一边多 8 个）。\n'
+      + '想照上面那套点，得按着树自己点；想省事直接导入，就用这一块。');
+    head.appendChild(warn);
     box.appendChild(head);
 
     // 选串。只列前 6 种 —— 再往后都是 1 人用的，列出来只是噪音。
@@ -2525,6 +2682,8 @@
     }
     if (s.bisTab === 'gear' || s.bisTab === 'talents') state.tab = s.bisTab;
     if (s.bisTalentCat) state.tcat = s.bisTalentCat;
+    // 团本 / 大秘境：只认那两个字，别的一律当没存过（设置文件是用户能手改的）。
+    if (s.bisMrKind === 'raid' || s.bisMrKind === 'mplus') state.mrKind = s.bisMrKind;
     if (s.bisChar) state.charKey = s.bisChar;
 
     loadDataFile('bis-data.js', 'AE_BIS', function (err) {

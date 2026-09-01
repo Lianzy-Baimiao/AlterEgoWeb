@@ -38,6 +38,11 @@ function makeEl(tag) {
   var e = {
     tagName: String(tag).toUpperCase(),
     children: [], attrs: {}, style: {}, _text: '',
+    // 滚动容器（#bis-body）。面板重建时要先存后还原，见 app/bis.js 的 render()。
+    scrollTop: 0,
+    // <details> 的 open 是**布尔属性**：浏览器里 node.open 和 open 属性同步。
+    // 桩里只有 attrs，所以这里给一个 getter 让两边读法一致。
+    hasAttribute: function (k) { return e.attrs[k] != null; },
     parentNode: null,
     className: '',
     listeners: {},
@@ -93,7 +98,15 @@ function makeEl(tag) {
       if (e.children.length === 0) return e._text;
       return e.children.map(function (c) { return c.textContent; }).join('');
     },
-    set: function (v) { e._text = String(v == null ? '' : v); e.children.length = 0; }
+    set: function (v) {
+      e._text = String(v == null ? '' : v);
+      e.children.length = 0;
+      // **清空内容会把滚动位置打回 0** —— 浏览器就是这样：内容没了，
+      // 滚动条也就没地方可滚。桩不模拟这一条的话，「重建后还原滚动位置」
+      // 那个修复在测试里**永远看不出差别**（桩里 scrollTop 自己不会变，
+      // 于是断言在「有修复」和「没修复」两种情况下都通过）。
+      e.scrollTop = 0;
+    }
   });
   Object.defineProperty(e, 'innerHTML', {
     get: function () { return ''; },

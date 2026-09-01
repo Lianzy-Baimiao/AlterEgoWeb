@@ -169,6 +169,9 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
               // 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明
               mrtScen: 0, mrtScenSeen: 0, mrtScenBad: 0, mrtPrio: 0, mrtBoss: 0,
+              // 点一下之后位置有没有丢（滚动 / 折叠块展开状态）
+              posChecked: 0, posScroll: 0, posSec: 0, mrtKindSaved: 0,
+              switchChecked: 0, switchReset: 0,
               // 视角迁移（第 16 轮撤掉 GearInsight 那两个视角）
               vmChecked: 0, vmMigrated: 0, vmWrote: 0,
               // 装等差距（第 16 轮：maxroll 不给装等，从本机两份实测数据借）
@@ -1483,10 +1486,69 @@ specKeys.forEach(function (key) {
   settings.bisTab = 'talents';
   settings.bisSpec = key;
   settings.bisTalentCat = 'raid';
+  // **每个专精都从「跟着数据走」开始。** mrKind 现在是持久化的（一个人在准备打
+  // 团本时，不该每次打开天赋页都跳回大秘境让他手动点回去）。而这一组要的是
+  // 「从默认状态点一下团本」—— 不清的话第一个专精点完团本，后面 39 个进来就
+  // 已经是团本了，而 findKindBtn 只认「还没高亮的那个」，于是「点团本」这条路
+  // 只被走过 1 次。持久化本身另有一条断言专门验（下面的 mrtKindSaved）。
+  settings.bisMrKind = '';
   body.children.length = 0;
   load('app/bis.js');
   g.AE.openBis();
   if (!findBtns('mr-builds').length) return;   // 这个专精没走 maxroll 那条路
+
+  // ---- 点一下会不会把用户的位置弄丢（第 16 轮的两条友好度修复）----
+  //
+  // render() 是整块重建（textContent = '' 再画一遍），所以两件东西天然会丢：
+  //   · **滚动位置**：#bis-body 是滚动容器，清空内容 = scrollTop 回 0。
+  //     面板很长（三棵天赋树 + 两块说明），用户在底下点一个方案按钮，
+  //     视线被扔回顶部，然后得重新滚下来找刚点的那个。
+  //   · **折叠块的展开状态**：展开「各首领说明」看到一半，点一下别的方案就合上了。
+  //     用户点那一下要的只是换方案，没让面板把他打开的东西收起来。
+  //
+  // 这两条都**只在真去点一下之后**才看得出来，所以断言必须放在这里。
+  (function checkPositionKept() {
+    var bs0 = findBtns('mrb');
+    if (bs0.length < 2) return;             // 只有一套，点不出重建
+
+    // 先把一个折叠块展开，并把滚动位置挪到中间
+    var sec = null;
+    walk(body, function (n) {
+      if (!sec && n.tagName === 'DETAILS') sec = n;
+    });
+    if (sec) {
+      sec.setAttribute('open', 'open');
+      // 桩不会自己发 toggle，手动发一次 —— 浏览器里是用户点 <summary> 时发的
+      if (sec.dispatch) sec.dispatch('toggle');
+    }
+    body.scrollTop = 500;
+
+    findBtns('mrb')[1].click();
+
+    stats.posChecked++;
+    if (body.scrollTop !== 500) {
+      problems.push('天赋 ' + key + ' 点了一下方案，滚动位置从 500 变成 '
+        + body.scrollTop + ' —— 面板重建时没还原，用户会被扔回顶部');
+    } else {
+      stats.posScroll++;
+    }
+    if (sec) {
+      var still = null;
+      walk(body, function (n) {
+        if (!still && n.tagName === 'DETAILS') still = n;
+      });
+      if (!still) {
+        problems.push('天赋 ' + key + ' 重建后一个折叠块都没了');
+      } else if (still.getAttribute('open') == null) {
+        problems.push('天赋 ' + key + ' 展开的折叠块在点了一下方案之后合上了'
+          + ' —— 展开状态没跨重建保住');
+      } else {
+        stats.posSec++;
+      }
+    }
+    // 复位，别影响后面那些断言
+    body.scrollTop = 0;
+  })();
 
   // 换方案：点第 2 套。只有 1 套的跳过（没有第 2 套可点，不是缺陷）。
   //
@@ -1528,6 +1590,15 @@ specKeys.forEach(function (key) {
       stats.mrtKindSw++;
     }
     checkTalents('天赋 ' + key + '/团本', specId);
+    // 「团本 / 大秘境」这个选择要**存进设置**：一个人在准备打团本，每次打开
+    // 天赋页都该落在团本那一份，而不是跳回大秘境让他手动点回去。
+    // 这一条盯的是「真的写回去了」—— 只改内存的话换个专精就没了。
+    if (settings.bisMrKind !== 'raid') {
+      loNote('mr 类型没存', '天赋 ' + key + ' 点了「团本」，设置里 bisMrKind 还是「'
+        + settings.bisMrKind + '」—— 换个专精或重开面板又会跳回大秘境');
+    } else {
+      stats.mrtKindSaved++;
+    }
   }
 });
 
@@ -1955,9 +2026,79 @@ if (stats.mrtBoss < 50) {
     + '（产物里 252 条）—— 那一块没画，或者正文被加工过');
 }
 
+// ---- 换专精之后会不会落在「别人的第 6 套」上（第 16 轮友好度修复）
+//
+// mrBuild / mrSub / loadout / build 都是**数组下标**，每个专精的数组各自不同。
+// 不归零的话：在 A 专精选了第 6 套，切到 B 专精就落在 B 的第 6 套上 ——
+// 那是用户没选过的一套天赋，而界面上完全看不出异常（高亮、点数、树全自洽）。
+// 实测毁灭术士和射击猎人的团本方案都有 10 套，切过去正好命中一套按首领分的。
+//
+// 判据：先在 A 专精点到第 2 套，再点 B 专精的按钮，B 的高亮必须回到第 1 套。
+(function checkSpecSwitchResets() {
+  // 找两个都有 >=2 套 maxroll 方案的专精
+  var cands = specKeys.filter(function (k) {
+    var t = mrTalentTruth(B.specs[k].specId);
+    return t && t[0] && t[0].list.length >= 2;
+  });
+  if (cands.length < 2) return;
+
+  settings.bisTab = 'talents';
+  settings.bisSpec = cands[0];
+  settings.bisMrKind = '';
+  body.children.length = 0;
+  load('app/bis.js');
+  g.AE.openBis();
+
+  var bs = findBtns('mrb');
+  if (bs.length < 2) return;
+  bs[1].click();                       // 在 A 专精选第 2 套
+
+  // 找 B 专精的按钮并点它（专精按钮的 class 是 spec）
+  var target = null;
+  walk(body, function (n) {
+    if (target || !n.classList || !n.classList.contains('spec')) return;
+    if (n.classList.contains('on')) return;   // 跳过当前那个
+    target = n;
+  });
+  if (!target) return;
+  target.click();
+
+  stats.switchChecked++;
+  var after = findBtns('mrb');
+  if (!after.length) return;           // 换到的专精没走 maxroll 那条路
+  var on = -1;
+  after.forEach(function (b, i) { if (b.classList.contains('on')) on = i; });
+  if (on !== 0) {
+    problems.push('在一个专精选了第 2 套，切到另一个专精后高亮落在第 ' + (on + 1)
+      + ' 套 —— 换专精没把「第几套」归零，用户会看到一套他没选过的天赋');
+  } else {
+    stats.switchReset++;
+  }
+})();
+
+// 点一下之后位置有没有丢。**下界必须有** —— 上面那两条断言只在真去点了
+// 之后才成立，一次都没点的话它们等于不存在。
+if (stats.posChecked < 10) {
+  problems.push('只在 ' + stats.posChecked + ' 个专精上验过「点一下会不会把位置弄丢」，太少');
+}
+if (stats.posScroll !== stats.posChecked) {
+  problems.push('验过 ' + stats.posChecked + ' 次，滚动位置只保住了 ' + stats.posScroll + ' 次');
+}
+if (stats.switchChecked && stats.switchReset !== stats.switchChecked) {
+  problems.push('换专精归零验过 ' + stats.switchChecked + ' 次，只成功 '
+    + stats.switchReset + ' 次');
+}
+if (stats.posSec < 10) {
+  problems.push('折叠块的展开状态只在 ' + stats.posSec + ' 个专精上保住，太少');
+}
+
 if (stats.mrtBuildSw < 20) problems.push('「换方案」只点过 ' + stats.mrtBuildSw + ' 次，太少');
 if (stats.mrtSubSw < 5) problems.push('「换英雄树」只点过 ' + stats.mrtSubSw + ' 次，太少');
 if (stats.mrtKindSw < 5) problems.push('「换团本 / 大秘境」只点过 ' + stats.mrtKindSw + ' 次，太少');
+if (stats.mrtKindSaved !== stats.mrtKindSw) {
+  problems.push('点过「团本」' + stats.mrtKindSw + ' 次，写回设置只成功 '
+    + stats.mrtKindSaved + ' 次 —— 这个选择要能跨专精 / 跨重开活下来');
+}
 console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
     && stats.mrtBox === stats.mrtRenders && stats.mrtTree === stats.mrtRenders
     && stats.mrtPts === stats.mrtRenders && stats.mrtDecl === stats.mrtRenders
@@ -1979,6 +2120,9 @@ console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通�
   + '（场景标签 ' + stats.mrtScen + ' 个（字与 class 不符 ' + stats.mrtScenBad
   + '），出手顺序逐条对过 ' + stats.mrtPrio + ' 行，各首领 / 副本说明 '
   + stats.mrtBoss + ' 行　正文与产物逐字节相同，英文原文不加工）');
+console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked ? '通过' : '有问题')
+  + '（' + stats.posChecked + ' 个专精上真点了一下：滚动位置保住 ' + stats.posScroll
+  + '，折叠块展开状态保住 ' + stats.posSec + '）');
 
 // ---- 无障碍
 // 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。

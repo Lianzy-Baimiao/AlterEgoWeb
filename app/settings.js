@@ -132,9 +132,16 @@
       // 毕业装备 / 天赋面板: last selection, so reopening lands where you left.
       bisTab: 'gear',                // 'gear' | 'talents'
       bisSpec: '',                   // 'DEATHKNIGHT/BLOOD/Deathbringer'
-      bisView: 'raid',               // 'raid' | 'mplus'
+      // 'maxroll' | 'rio'。第 16 轮撤掉了 GearInsight 的两个视角（'raid' / 'mplus'）,
+      // 默认值也跟着换 —— 留着 'raid' 的话新用户第一次打开时存的是一个界面上
+      // 已经没有按钮的视角名，靠 openBis() 的迁移兜着，能用但不该这么绕。
+      bisView: 'maxroll',
       bisTalentCat: 'raid',          // 'raid' | 'mplusHigh' | 'mplusFarm'
       bisChar: '',                   // which character's gear to compare against
+      // 天赋页看团本还是大秘境那一份 maxroll 指南。'' = 跟着数据走（有大秘境
+      // 就用大秘境）。同页的 mrBuild / mrSub 是数组下标，**故意不存**，
+      // 原因见 app/bis.js 里 state 那段注释。
+      bisMrKind: '',                 // '' | 'mplus' | 'raid'
 
       // Optional data sources for the 毕业装备 panel. Both are empty by default:
       // everything the panel needs to work ships inside the release, and an
