@@ -2405,19 +2405,18 @@
 
     var box = el('div', 'bis-loadout');
     var head = el('div', 'lo-head');
-    // 标题必须说清「这是榜上热门串，不是上面那套方案」。
-    // 天赋页上面是 maxroll 的方案（画树用，没有可导入的串），这一块是 raider.io
-    // 的串（能导入）—— 两者**不是同一套天赋**。上一版标题只写「天赋导入串」，
-    // 摆在 maxroll 那套树的正下方，读起来就是「上面那套的导入串」。
+    // 标题里「不是同一套」这句是必需的，而且**方位词跟着版面走**：
+    // 第 18 轮把这一块提到了 maxroll 上面，原来写的「和上面的方案不是同一套」
+    // 就指向了页面顶端的空白处。这一块现在在上，maxroll 在下。
     head.appendChild(el('b', null, '榜上热门天赋串'));
     head.appendChild(el('span', 'n',
       lo.total + ' 名玩家共 ' + lo.uniq + ' 种，下面是最热门的几种'));
-    var warn = el('span', 'lo-warn', '和上面的方案不是同一套');
+    var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
     warn.setAttribute('data-tip',
-      '这一块来自 raider.io 排行榜上真实角色的天赋串，能一键导入游戏。\n'
-      + '它和上面 maxroll 那套方案是两回事：实测同一个专精下，'
-      + '两边点亮的节点互有出入（一边多 7 个，另一边多 8 个）。\n'
-      + '想照上面那套点，得按着树自己点；想省事直接导入，就用这一块。');
+      '这一块是 raider.io 排行榜上真实角色的天赋串，能一键导入。\n'
+      + '和下面 maxroll 那些方案不是同一套：拿一个专精逐节点比过，'
+      + '一边多 7 个节点，另一边多 8 个。\n'
+      + '要 maxroll 那一套，用它自己那一块的复制按钮。');
     head.appendChild(warn);
     box.appendChild(head);
 

@@ -2598,6 +2598,66 @@ console.log(pad('无障碍') + (stats.a11yImg + stats.a11yBtnBad + stats.a11yTip
   + stats.a11yCanvas + ' 个天赋树画布全有 role=group + 说明，'
   + '文案提到数据出自哪个插件 ' + stats.srcLeak + ' 处）');
 
+// ---- 进度条：span 做的条子必须自己声明 display -------------------------------
+//
+// 第 19 轮用户报「属性目标的进度条没有正常显示」。真在浏览器里量过：
+//   .bar-row .track   557×9  —— 有尺寸
+//   .bar-row .fill      0×0  —— 没尺寸
+// 两个都是 el('span', …) 建的。span 默认 display:inline，而 **inline 元素的
+// width / height 一律不生效**，所以 fill.style.width = '25%' 是个空操作，条子
+// 永远画不出来。外面那个 track 只是**侥幸**有尺寸：它在 flex 容器里被 flex:1
+// 撑成了 flex item，被隐式 blockify 了。装备行的使用率条连这份运气都没有
+// （.item .usage 不是 flex 容器），track 和 fill 一起 0×0。
+//
+// 这一条为什么必须写在这里：这个 bug 整套测试一次都没抓到，也抓不到 ——
+// tools/dom-stub.js 没有布局引擎，style.width 存进去就存进去了，
+// getBoundingClientRect 是我们自己编的。DOM 断言在这个失败形状上是瞎的。
+// 所以改成从**样式表文本**里查规则，和上面 NODE_BOX 读 .tnode 尺寸是同一招。
+(function () {
+  var css = fs.readFileSync(path.join(ROOT, 'app', 'style.css'), 'utf8');
+  var src = fs.readFileSync(path.join(ROOT, 'app', 'bis.js'), 'utf8');
+
+  // 面板里用 style.width 撑出来的条子，逐个列出来：[选择器, 给它宽度的那句 JS]。
+  // 新加一个条子而忘了写 display，这一条不会自动发现 —— 但只要沿用
+  // el('span', 'fill') 这个形状，下面那条「有几个 fill 就得有几条规则」会兜住。
+  var BARS = [
+    { sel: '.bar-row .track .fill', why: '属性目标的进度条' },
+    { sel: '.bar-row .track', why: '属性目标进度条的外框' },
+    { sel: '.item .usage .track .fill', why: '装备行的使用率条' },
+    { sel: '.item .usage .track', why: '使用率条的外框' }
+  ];
+  var bad = [];
+  BARS.forEach(function (b) {
+    // 取这个选择器那一条规则的声明块。选择器里的 . 要转义，不然 '.' 会去匹配任意字符。
+    var re = new RegExp(b.sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      + '\\s*(?:,[^{]*)?\\{([^}]*)\\}');
+    var m = re.exec(css);
+    if (!m) { bad.push(b.why + '（' + b.sel + '）在 style.css 里没有规则'); return; }
+    var decl = m[1];
+    if (!/display\s*:\s*(block|flex|inline-block)/.test(decl)) {
+      bad.push(b.why + '（' + b.sel + '）没有声明 display'
+        + ' —— 它是 span，默认 inline，width / height 不生效，条子会是 0×0');
+    }
+    if (!/(height|min-height)\s*:/.test(decl)) {
+      bad.push(b.why + '（' + b.sel + '）没有高度 —— 空的 inline 内容撑不出高度');
+    }
+  });
+
+  // 下界 + 配平：面板里 el('span', 'fill') 有几处，上面就得有几条 fill 规则。
+  // 少了的话是「新加了条子却没加样式」，多了的话是这份名单在盯已经不存在的东西。
+  var fillsInJs = (src.match(/el\('span',\s*'fill'\)/g) || []).length;
+  var fillRules = BARS.filter(function (b) { return /\.fill$/.test(b.sel); }).length;
+  if (!fillsInJs) bad.push('bis.js 里一个 span.fill 都没有，这一组在验空气');
+  if (fillsInJs !== fillRules) {
+    bad.push('bis.js 里有 ' + fillsInJs + ' 处 span.fill，但这一组只盯了 '
+      + fillRules + ' 个 —— 新加的条子没人管它有没有 display');
+  }
+  console.log(pad('进度条样式') + (bad.length ? '有问题' : '通过')
+    + '（' + BARS.length + ' 条规则都声明了 display 和高度，'
+    + 'bis.js 里 ' + fillsInJs + ' 处 span.fill 都有对应规则）');
+  bad.forEach(function (p) { problems.push(p); });
+}());
+
 // ----------------------------------------------------------------------- 格式校验
 // 两个校验器分别是 app/bis-data.js 和 app/talent-tree.js 的格式定义（可执行的那种）。
 // 在这里连带跑一遍，免得它们自己烂掉都没人知道 —— 它们的价值全在「换数据源时能拦住

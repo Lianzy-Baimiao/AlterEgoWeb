@@ -1099,6 +1099,7 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 .bar-row { display: flex; align-items: center; gap: 7px; font-size: 11.5px; }
 .bar-row label { width: 34px; color: var(--fg2); flex: none; }
 .bar-row .track {
+  display: block;
   flex: 1;
   height: 9px;
   background: var(--bg);
@@ -1107,8 +1108,12 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   overflow: hidden;
   position: relative;
 }
-.bar-row .track .fill { height: 100%; opacity: .75; }
-.bar-row .n { width: 46px; text-align: right; color: var(--fg2); flex: none; }
+/* 条子本身是 span，不写 display 的话它是 inline —— inline 元素的 width /
+ * height 一律不生效，条子就永远是 0×0，只剩一个空壳外框。
+ * 外面那个 .track 侥幸有尺寸，是因为它在 flex 容器里被 flex:1 撑成了 flex item；
+ * 里面这个 .fill 没有那个运气，所以必须自己声明。 */
+.bar-row .track .fill { display: block; height: 100%; opacity: .75; }
+.bar-row b { width: 46px; text-align: right; color: var(--fg2); flex: none; font-weight: 600; }
 
 /* ---- 部位列表（纵向长方形的主体） */
 .bis-slots { display: flex; flex-direction: column; gap: 7px; }
@@ -1219,13 +1224,15 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 .item .im .sub2.iv-none { color: var(--fg3); font-style: italic; }
 .item .im .stats { color: var(--fg3); font-size: 10.5px; }
 .item .usage { flex: none; width: 92px; }
+/* 同 .bar-row .track：这两个也是 span，不声明 display 就都是 0×0（实测）。 */
 .item .usage .track {
+  display: block;
   height: 6px;
   background: var(--bg3);
   border-radius: 3px;
   overflow: hidden;
 }
-.item .usage .track .fill { height: 100%; background: var(--accent); opacity: .7; }
+.item .usage .track .fill { display: block; height: 100%; background: var(--accent); opacity: .7; }
 .item .usage .n { display: block; font-size: 10.5px; color: var(--fg2); text-align: right; }
 /* maxroll 视角：这一列放名次徽章而不是使用率条。宽度沿用 .usage 的 92px，
  * 所以三个视角切换时右侧那一列不会左右跳。 */
