@@ -844,7 +844,7 @@
           render();
         });
         b.setAttribute('data-tip', s.cls + '/' + s.spec +
-          '　英雄天赋 ' + (s.hero || '(无)') +
+          '　英雄天赋 ' + (s.hero ? heroName(s.hero) : '(无)') +
           '　specID ' + (s.specId || '?'));
         specRow.appendChild(b);
       });
@@ -1120,7 +1120,10 @@
     }
     wrap.appendChild(cell('毕业装等', String(s.ilvl || '?'),
       '这个专精的毕业装等参照值，来自 WarcraftLogs 顶尖玩家的装备统计'));
-    wrap.appendChild(cell('英雄天赋', s.hero || '(无)',
+    // heroName() 查表换中文。**不换的话装备页写 San'layn、天赋页写萨莱因** ——
+    // 同一个英雄天赋在两页上是两个名字，用户会以为是两个东西。
+    // 那张表是 app/talent-tree.js 里子树的暴雪 DB2 名，查不到就原样留英文。
+    wrap.appendChild(cell('英雄天赋', s.hero ? heroName(s.hero) : '(无)',
       '这套推荐是按这个英雄天赋统计的'));
 
     var w = s.weapon && s.weapon[kind === 'raid' ? 'raid' : 'mplusHigh'];
@@ -1161,9 +1164,18 @@
     if (borrowed) {
       // 借来的数字必须自己说明是借来的，否则在「最佳推荐」这个标题下面，
       // 它看起来就是 maxroll 给的。
-      var from = el('span', 'note', '　这一组是顶尖玩家的统计值（'
-        + (kind === 'raid' ? '团本' : '大秘境') + '），不是 maxroll 给的 —— '
-        + 'maxroll 的属性优先级写在正文里，产物里没抓');
+      //
+      // 这句话原来有 40 多个字，塞在折叠标题那一行里会换行、把百分比顶下去。
+      // 折叠标题应该一眼扫过，长解释放 tooltip。
+      // 顺便修一处**说错的事实**：原来写「maxroll 的属性优先级写在正文里」——
+      // 不对。第 19 轮实测过：那是页面里一串编码（data-wow-data），
+      // 后端接口要 Discord 登录，用户实测 403。所以是「抓不到」，不是「在正文里」。
+      var from = el('span', 'note', '　本机实测数据，非 maxroll');
+      from.setAttribute('data-tip',
+        '这一组是顶尖玩家的属性统计值（' + (kind === 'raid' ? '团本' : '大秘境')
+        + '），来自本机两份实测数据，不是 maxroll 给的。\n'
+        + 'maxroll 的属性优先级在页面里是一串编码，后端接口要登录且实测 403，'
+        + '所以抓不到 —— 与其猜一个顺序，不如摆出这份能追溯的。');
       sum.appendChild(from);
     }
 
@@ -2007,7 +2019,9 @@
     var dec = AE.TalentDecode;
     var out = dec ? dec.decode(b.s, tree()) : { err: '天赋解码器没加载（app/talent-decode.js）' };
 
-    setSub('天赋　' + specLabel(s) + '　maxroll.gg '
+    // 标题（setTitle）在天赋页已经写着「天赋」，副标题**不要再写一遍** ——
+    // 两个拼在一起是「天赋　天赋　鲜血　maxroll.gg …」，同一个词连着两遍。
+    setSub(specLabel(s) + '　maxroll.gg '
       + ((M && M.updatedAt) || '?') + '　'
       + (pick.kind === 'mplus' ? '大秘境指南' : '团本指南')
       + ' 共 ' + pick.list.length + ' 套');
@@ -2093,14 +2107,6 @@
     });
     host.appendChild(pickBox);
 
-    if (out.err) {
-      var w = el('div', 'bis-warn');
-      w.appendChild(el('b', null, '这套方案的串解不开'));
-      w.appendChild(el('p', null, out.err + ' —— 树画不出来。'));
-      host.appendChild(w);
-    } else {
-      host.appendChild(renderMrTree(s, b, out));
-    }
 
     // 为什么这里**不给** maxroll 的串。
     //
@@ -2136,6 +2142,22 @@
     var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',
       'maxroll 指南里的 Priority List —— 就是「技能时间轴」的文字版。');
     if (pr) host.appendChild(pr);
+
+    // ---- 三棵树放**最后**（第 20 轮的易用性调整）。
+    //
+    // 实测这一页在 1440×900 下高 2494 像素，其中树占 1731 —— 快三屏。
+    // 原来的顺序是「方案列表 → 树 → 导入串 → 出手顺序」，也就是要复制那个串、
+    // 或者想看一眼出手顺序，都得先滚过一整棵树。而串和出手顺序是**拿来用的**
+    // （复制、照着打），树是**拿来看的**（确认这套点了什么）。
+    // 所以改成「先给能用的，再给能看的」。
+    if (out.err) {
+      var w = el('div', 'bis-warn');
+      w.appendChild(el('b', null, '这套方案的串解不开'));
+      w.appendChild(el('p', null, out.err + ' —— 树画不出来。'));
+      host.appendChild(w);
+    } else {
+      host.appendChild(renderMrTree(s, b, out));
+    }
   }
 
   /**
@@ -2369,7 +2391,7 @@
       return;
     }
 
-    setSub('天赋　' + specLabel(s) + '　共 ' + td.builds.length + ' 套');
+    setSub(specLabel(s) + '　共 ' + td.builds.length + ' 套');
 
     // 为什么这一页长得和别的专精不一样，得说清楚。
     //
@@ -2488,6 +2510,20 @@
     head.appendChild(el('b', null, '榜上热门天赋串'));
     head.appendChild(el('span', 'n',
       lo.total + ' 名玩家共 ' + lo.uniq + ' 种，下面是最热门的几种'));
+    // **样本太少时说出来。** 团本那一类按专精差别极大（实测奥法 1537 人，
+    // 火法 8 人、生存猎 6 人）—— 一队 20 人只有 2~3 个坦克治疗，冷门专精
+    // 天然凑不够。8 个人里「#1 有 2 人用」和 500 个人里「#1 有 50 人用」
+    // 在界面上长得一模一样，而前者基本等于没有统计意义。
+    // 数字本来就摆在那儿，但**数字的分量**得写出来。
+    if (lo.total < 20) {
+      var thin = el('span', 'lo-warn thin', '样本只有 ' + lo.total + ' 人');
+      thin.setAttribute('data-tip',
+        '这一类里这个专精只采样到 ' + lo.total + ' 个人，'
+        + '所以「最热门」的分量很轻 —— 换个人抓一遍，第一名可能就换了。\n'
+        + '团本里一队 20 人只有 2~3 个坦克 / 治疗，冷门专精天然凑不够。\n'
+        + '想要样本大的，看另一类。');
+      head.appendChild(thin);
+    }
     var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
     warn.setAttribute('data-tip',
       '这一块是排行榜上真实角色的天赋串，能一键导入。\n'
@@ -2719,18 +2755,27 @@
    * 而 app/talent-tree.js 的子树里既有暴雪 DB2 的中文名、也有英文名，
    * 所以拿英文名当连接键。没加载树、或者对不上，就原样显示英文 —— 不猜。
    */
+  /*
+   * **建好的表只在树真的加载了之后才缓存。**
+   *
+   * 原来是 `if (!heroZhMap)` 就建一次并永久留着 —— 而 app/talent-tree.js 是
+   * 懒加载的：装备页第一次画的时候它还没到，于是表建成了空的 `{}`，然后被
+   * 缓存住，这一整个会话里 heroName() 永远原样返回英文。
+   * 症状是装备页写「英雄天赋 San'layn」而天赋页写「萨莱因」—— 同一个东西
+   * 在两页上是两个名字。第 20 轮截图对比时才看出来。
+   */
   var heroZhMap = null;
   function heroName(en) {
     if (!en) return '?';
     if (!heroZhMap) {
-      heroZhMap = {};
       var TR = tree();
-      if (TR && TR.subTrees) {
-        Object.keys(TR.subTrees).forEach(function (sid) {
-          var s = TR.subTrees[sid];
-          if (s && s[3] && TR.names[s[0]]) heroZhMap[s[3]] = TR.names[s[0]];
-        });
-      }
+      if (!TR || !TR.subTrees) return en;      // 树还没到，这次先返回英文，别缓存
+      var m = {};
+      Object.keys(TR.subTrees).forEach(function (sid) {
+        var s = TR.subTrees[sid];
+        if (s && s[3] && TR.names[s[0]]) m[s[3]] = TR.names[s[0]];
+      });
+      heroZhMap = m;
     }
     return heroZhMap[en] || en;
   }
@@ -3138,6 +3183,11 @@
         else render();
         ensureRio();
         ensureMaxroll();
+        // **装备页也要那棵树** —— 不是为了画树，是为了 heroName()：
+        // 英雄天赋的中文名在 app/talent-tree.js 的子树表里，没有它装备页那一格
+        // 只能显示英文（「英雄天赋 San'layn」），而天赋页写的是「萨莱因」，
+        // 同一个东西两个名字。后台拉，到了重画一次，不阻塞首屏。
+        if (state.tab !== 'talents' && !global.AE_TALENT_TREE) ensureTree();
       }
 
       // 图标映射现在是包里自带的，无条件加载；它同时带了品质。
@@ -3148,6 +3198,23 @@
       done();
     });
   };
+
+  /**
+   * 只加载天赋树（app/talent-tree.js）。
+   *
+   * 装备页要它**只为了英雄天赋的中文名**（heroName），所以不走 ensureTalents()
+   * —— 那个会顺带拉 talent-data.js 和 talent-desc.js（506 KB），
+   * 装备页一个都用不上。
+   */
+  var treeLoading = false;
+  function ensureTree() {
+    if (treeLoading || global.AE_TALENT_TREE) return;
+    treeLoading = true;
+    loadDataFile('talent-tree.js', 'AE_TALENT_TREE', function () {
+      treeLoading = false;
+      if (global.AE_TALENT_TREE && gearLoaded) render();
+    });
+  }
 
   /**
    * 后台加载 app/rio-data.js（实测 849.3 KB），到了再重画一次。

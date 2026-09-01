@@ -205,7 +205,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               gapBadge: 0, gapBad: 0, gapMath: 0, gapTop: 0, gapTopBad: 0,
               gapSum: 0, gapChars: 0, gapSlots: 0,
               // 跨职业对照（选了死骑、切到法师专精）
-              xcChecked: 0, xcNoGap: 0, xcNote: 0,
+              xcChecked: 0, xcNoGap: 0, xcNote: 0, heroLate: 0,
               // 无障碍
               imgLazy: 0, imgEager: 0,
               // 来源插件的名字漏进界面（第 17 轮：只说「插件参照表」）
@@ -2233,6 +2233,69 @@ if (stats.cov < 1) {
     + '（它只在 maxroll 数据还没加载时出现，见 checkFirstPaintFallback）');
 }
 if (stats.slots < 1000) problems.push('只画了 ' + stats.slots + ' 个部位组，太少');
+
+// ---- 英雄天赋的中文名：树后到也得能补上（第 20 轮的真 bug）
+//
+// app/talent-tree.js 是**懒加载**的，而英雄天赋的中文名只在它的子树表里。
+// heroName() 原来是「第一次调用就把表建好并永久缓存」—— 装备页首屏那一刻树
+// 还没到，表建成空的 {} 然后被缓存住，这一整个会话里都返回英文。
+// 症状：装备页写「英雄天赋 San'layn」，天赋页写「萨莱因」，同一个东西两个名字。
+//
+// 这一条**必须模拟懒加载的先后**才能抓到 —— 上面所有渲染都是树已经在的状态，
+// 那时表建得好好的，断言再多也照样全绿。
+(function () {
+  var keep = g.AE_TALENT_TREE;
+  if (!keep) { problems.push('英雄天赋中文名那条：树没加载，这一组在验空气'); return; }
+  var key = null;
+  Object.keys(B.specs).forEach(function (k) {
+    if (!key && B.specs[k].hero) key = k;
+  });
+  if (!key) { problems.push('英雄天赋中文名那条：找不到带 hero 的专精'); return; }
+  var en = B.specs[key].hero;
+
+  function heroCellText() {
+    var txt = null;
+    walk(body, function (n) {
+      if (txt || !n.classList || !n.classList.contains('mcell')) return;
+      var t = n.textContent || '';
+      if (t.indexOf('英雄天赋') === 0) txt = t;
+    });
+    return txt;
+  }
+
+  settings.bisTab = 'gear';
+  settings.bisSpec = key;
+  settings.bisView = 'maxroll';
+  settings.bisChar = '';
+
+  // 第一趟：**树不在**（模拟首屏）。这时显示英文是对的。
+  g.AE_TALENT_TREE = null;
+  body.children.length = 0;
+  load('app/bis.js');
+  g.AE.openBis();
+  var first = heroCellText();
+
+  // 第二趟：树到了，**同一个 bis.js 实例**再画一次。
+  // 不重新 load —— 重新 load 会把模块作用域里的缓存也重置掉，
+  // 那就绕过了要测的东西（缓存有没有被错误地固化）。
+  g.AE_TALENT_TREE = keep;
+  body.children.length = 0;
+  g.AE.rerenderBis();
+  var second = heroCellText();
+
+  if (!first || !second) {
+    problems.push('英雄天赋中文名那条：找不到「英雄天赋」那一格（第一趟 '
+      + JSON.stringify(first) + '，第二趟 ' + JSON.stringify(second) + '）');
+  } else if (!/[一-鿿]/.test(second.replace('英雄天赋', ''))) {
+    problems.push('树加载完之后英雄天赋那一格还是英文：「' + second + '」（'
+      + en + ' 该显示中文）—— heroName() 把树缺失时建的空表缓存住了');
+  } else {
+    stats.heroLate++;
+  }
+}());
+if (!stats.heroLate) {
+  problems.push('「树后到也能补上英雄天赋中文名」这条一次都没验成 —— 空转');
+}
 
 // ---- 视角迁移（第 16 轮撤掉 GearInsight 那两个视角按钮）
 if (stats.vmChecked !== 4) {
