@@ -1369,6 +1369,39 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
 /* 「通用 N 处」：同一条串在 maxroll 页面上挂在 N 个小节下面。比点数更弱一档。 */
 .mrb .mt em.many { color: var(--fg3); opacity: .8; }
 
+/* 场景标签（单体 / AOE / 顺劈 / 多目标）。**可选** —— 实测 167 套方案里只有
+   51 套有，因为 maxroll 只有一部分专精按场景分天赋。
+   四个场景四个颜色，不是为了好看：用户在列表里找的就是「哪套是 AOE 的」，
+   靠颜色扫比读字快。单体用暖色（集中），AOE / 多目标用冷色（分散）。 */
+.mrb .mt em.scen, .note-row em.scen {
+  font-style: normal; font-size: 10px;
+  padding: 0 4px; border-radius: 3px;
+  border: 1px solid currentColor;
+  margin-left: 4px;
+}
+em.scen.st { color: var(--warn); }
+em.scen.aoe { color: var(--accent); }
+em.scen.cleave { color: var(--good); }
+em.scen.multi { color: var(--accent); opacity: .8; }
+
+/* 出手顺序 / 各首领·副本说明。正文是**英文原文**（首领名和技能名长在句子里，
+   本机没有官方中文译名，编一个会让人照着游戏里不存在的名字去找）。
+   所以这两块按「引文」排版：左边一道线，正文行高松一档，读长英文句子才不累。 */
+.mr-prio, .mr-boss { margin-top: 10px; }
+.mr-prio summary .ttl, .mr-boss summary .ttl { font-weight: 600; }
+.note-row {
+  padding: 5px 0 5px 9px;
+  border-left: 2px solid var(--line);
+  margin: 5px 0;
+}
+.note-row b { display: block; font-size: 12px; color: var(--fg); }
+.note-row p.en {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--fg2);
+}
+
 /* 天赋树。节点是绝对定位的方块，坐标由 app/bis.js 按网格算好写进 style，
    这里只管长相。方块宽 62px 是量出来的：3447 个天赋名里 2322 个正好 4 个字，
    而缩成 2 个字会有 496 个重名（「强化」能指两个不同天赋），所以必须放全名。 */

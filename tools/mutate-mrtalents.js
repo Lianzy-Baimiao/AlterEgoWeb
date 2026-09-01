@@ -173,8 +173,9 @@ var MUTANTS = [
 
   // 去重那条有没有牙：真值里塞一条重复的串，产物层面那条必须报出来。
   textMutant('真值里塞一条重复的串（证明去重断言在看）', RUNNER,
-    'out.push({ kind: k, list: v.talents });',
-    'out.push({ kind: k, list: v.talents.concat([v.talents[0]]) });',
+    'out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });',
+    'out.push({ kind: k, list: v.talents.concat([v.talents[0]]), '
+      + 'prio: v.prio || [], boss: v.boss || [] });',
     '去重没生效'),
 
   // 三个计数器的下界：不真去点 / 不真去比的话它们在测试里等于不存在。
@@ -191,7 +192,84 @@ var MUTANTS = [
   textMutant('「没给串」一次都不算（证明 mrtNoStr 下界不是空的）', RUNNER,
     '    stats.mrtNoStr++;',
     '    if (false) stats.mrtNoStr++;',
-    '「页面上没有 maxroll 的串」只验过')
+    '「页面上没有 maxroll 的串」只验过'),
+
+  // ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
+  //
+  // 这三块回答的是用户第 16 轮那条：「天赋分为单体、AOE」「单体、AOE 不同场景下的
+  // 技能时间轴」「团本下甚至还有不同 BOSS 的天赋和说明」。
+
+  // 场景标签整个不画。maxroll 只有一部分专精按场景分（实测 167 套里 51 套），
+  // 不画的话那 51 套在界面上和「没分场景」的长得一样。
+  textMutant('场景标签（单体 / AOE）不画', BIS,
+    "      (t.sc || []).forEach(function (code) {",
+    "      (false ? t.sc : []).forEach(function (code) {",
+    '次渲染画出了场景标签，太少'),
+
+  // 反过来：没有场景的也标上「单体」。这是**编数据** —— maxroll 没说这套是单体的。
+  textMutant('没分场景的方案也标成「单体」', BIS,
+    "      (t.sc || []).forEach(function (code) {",
+    "      (t.sc || ['st']).forEach(function (code) {",
+    '场景标签画了'),
+
+  // 标签的字和 class 对不上：AOE 那套标成单体。用户照着它选，进副本发现打不动。
+  textMutant('场景标签的字和场景对不上', BIS,
+    "        var e = el('em', 'scen ' + code, SCEN_ZH[code] || code);",
+    "        var e = el('em', 'scen ' + code, SCEN_ZH.st);",
+    '场景标签 class 是'),
+
+  // 出手顺序整块不画。它就是用户要的「技能时间轴」的文字版。
+  textMutant('出手顺序整块不画', BIS,
+    "    var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',",
+    "    var pr = renderMrNotes(null, 'mr-prio', '出手顺序',",
+    '出手顺序只逐条对过 0 行'),
+
+  // 各首领 / 副本说明整块不画。这是三块里数据最全的（252 条 / 71 篇）。
+  textMutant('各首领 / 副本说明整块不画', BIS,
+    "    var bs = renderMrNotes(pick.v.boss, 'mr-boss',",
+    "    var bs = renderMrNotes(null, 'mr-boss',",
+    '各首领 / 副本说明只逐条对过 0 行'),
+
+  // 两块取反了：出手顺序那一块画的是首领说明。**界面完全自洽** ——
+  // 标题写「出手顺序」，下面是一堆首领名 + 正文，条数也对得上自己。
+  // 只有「逐行正文 == 产物里那一块」抓得到。
+  textMutant('出手顺序和首领说明取反了', BIS,
+    "    var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',",
+    "    var pr = renderMrNotes(pick.v.boss, 'mr-prio', '出手顺序',",
+    '正文和产物不一致'),
+
+  // 正文截断。截断是「自作聪明」里最容易发生的一种（怕太长），
+  // 而截断之后那句话的后半截意思可能整个反过来（「除非…」都在后半句）。
+  textMutant('说明正文被截断', BIS,
+    "      row.appendChild(el('p', 'en', r.t));",
+    "      row.appendChild(el('p', 'en', r.t.slice(0, 80)));",
+    '这一段是英文原文，不许加工'),
+
+  // 标题里的条数写死成 1。标题写「1 条」而下面 9 行，是最容易漏的那种错：
+  // 折叠起来的时候用户只看得到标题。
+  textMutant('说明标题里的条数写死', BIS,
+    "    sum.appendChild(el('span', 'ttl', title + '　' + list.length + ' 条'));",
+    "    sum.appendChild(el('span', 'ttl', title + '　1 条'));",
+    '的标题里没写'),
+
+  // ---- 空转守卫（校验器自己）----
+
+  textMutant('场景标签一次都不算（证明 mrtScenSeen 下界不是空的）', RUNNER,
+    '    if (scenEls.length) stats.mrtScenSeen++;',
+    '    if (false) stats.mrtScenSeen++;',
+    '次渲染画出了场景标签，太少'),
+
+  textMutant('说明正文一行都不对（证明 mrtPrio / mrtBoss 下界不是空的）', RUNNER,
+    '  if (!bad) stats[statKey] += rows.length;',
+    '  if (false) stats[statKey] += rows.length;',
+    '出手顺序只逐条对过 0 行'),
+
+  // 产物层面：真值里把 prio 清空，面板那一块就该报「产物里没有却画了」。
+  // 这一条证明「产物有就必须画」和「产物没有就不许画」两个方向都在看。
+  textMutant('真值里把出手顺序清空（证明「没有就不许画」在看）', RUNNER,
+    "      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });",
+    "      out.push({ kind: k, list: v.talents, prio: [], boss: v.boss || [] });",
+    '产物里没有出手顺序，界面却画了这一块')
 ];
 
 console.log('=== maxroll 天赋方案断言的变异测试 ===');

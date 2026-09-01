@@ -1549,7 +1549,10 @@
     var list = mrTalents(specId, kind);
     var i = state.mrBuild;
     if (!(i >= 0) || i >= list.length) i = 0;
-    return { kinds: kinds, kind: kind, list: list, idx: i, build: list[i] };
+    // v 是**整个视角对象**，不只是 talents 数组 —— 出手顺序（prio）和
+    // 首领说明（boss）挂在视角上，不在单套方案里。
+    return { kinds: kinds, kind: kind, list: list, idx: i, build: list[i],
+      v: mrView(specId, kind) || {} };
   }
 
   /**
@@ -1667,6 +1670,14 @@
       // 生成器并成一套，c 是共用它的小节数。这里得说出来：名字里只留了第一个
       // 小节（「… in Altar of Fangs」），不说的话会以为这套只适用于那一个副本。
       if (t.c > 1) meta.appendChild(el('em', 'many', '通用 ' + t.c + ' 处'));
+      // 场景（单体 / AOE / 顺劈 / 多目标）。**可选字段** —— 实测 maxroll 80 篇里
+      // 只有 28 篇按场景分天赋，其余按英雄天赋或副本分。没有就不画这个标签，
+      // 而不是默认标成「单体」（那是编的）。
+      (t.sc || []).forEach(function (code) {
+        var e = el('em', 'scen ' + code, SCEN_ZH[code] || code);
+        e.setAttribute('data-tip', SCEN_TIP[code] || '');
+        meta.appendChild(e);
+      });
       // 英雄天赋名走 subTreeName()：那是 DB2 的中文名，不是我编的译名。
       // 结构是 <em class="hero"><b>名字</b></em>，和插件那条路的 chip 一样 ——
       // run-tests.js 的「英雄天赋名不许是英文」那条断言认的就是这个结构，
@@ -1707,9 +1718,72 @@
       + '游戏只认 2，粘进去会被直接拒。要能一键导入的串，用下面 raider.io 那一块'
       + '（那是从排行榜角色身上原样取的，能导）。'));
 
+    // 出手顺序（优先级列表）和每个首领 / 副本的说明。两块都是**英文原文**，
+    // 见 renderMrNotes 的注释。
+    var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',
+      'maxroll 指南里的 Priority List —— 就是「技能时间轴」的文字版。');
+    if (pr) host.appendChild(pr);
+    var bs = renderMrNotes(pick.v.boss, 'mr-boss',
+      pick.kind === 'mplus' ? '各副本说明' : '各首领说明',
+      pick.kind === 'mplus'
+        ? 'maxroll 按副本给的注意事项。'
+        : 'maxroll 按首领给的注意事项 —— 团本里每个首领的打法差别就在这。');
+    if (bs) host.appendChild(bs);
+
     // raider.io 的官方串放在后面：它是**验证过能导入**的那一批。
     var lo = renderLoadouts(s);
     if (lo) host.appendChild(lo);
+  }
+
+  // 场景码 → 中文。这四个词是**通用战斗术语**，不是游戏里的官方译名
+  // （不像首领名 / 技能名那样有官方中文），所以可以写。
+  var SCEN_ZH = { st: '单体', aoe: 'AOE', cleave: '顺劈', multi: '多目标' };
+  var SCEN_TIP = {
+    st: 'maxroll 把这套标为单目标（Single Target）场景',
+    aoe: 'maxroll 把这套标为 AOE 场景',
+    cleave: 'maxroll 把这套标为顺劈（Cleave，少量目标）场景',
+    multi: 'maxroll 把这套标为多目标（Multi-Target）场景'
+  };
+
+  /**
+   * 「出手顺序」和「各首领 / 副本说明」两块。形状一样，所以一个函数。
+   *
+   * **正文原样显示英文。** 这两块里首领名、副本名、技能名都长在句子里
+   * （「Ensure Blight of Tongues is active on the interrupt add」），
+   * 而本机没有这些名词的中英对照表 —— 硬约束是不凭记忆手打中文游戏名词，
+   * 因为打错一个官方译名比留英文更糟（用户会照着一个游戏里不存在的名字去找技能）。
+   * 所以这里只做一件事：把 maxroll 的原文分组摆出来，并在标题上说明它是英文。
+   *
+   * 用 <details> 折叠：实测一个专精有 3~9 条首领说明，全展开会把天赋树顶到屏幕外。
+   */
+  function renderMrNotes(list, cls, title, tip) {
+    if (!list || !list.length) return null;
+    var wrap = el('details', 'sec ' + cls);
+    // 标题拆成两个 <span>，**不写 summary 自己的文字再往里 appendChild** ——
+    // 那样在浏览器里两段都在，而 DOM 里「元素自己的文字 + 子元素」这种混合形状
+    // 读 textContent 时行为不一致（测试脚手架里前一半会丢）。
+    // 全用子元素，两边读出来的都是同一串字。
+    var sum = el('summary');
+    sum.appendChild(el('span', 'ttl', title + '　' + list.length + ' 条'));
+    sum.appendChild(el('span', 'note', '　英文原文'));
+    sum.setAttribute('data-tip', tip
+      + '\nmaxroll 的原文是英文，而首领名 / 技能名的官方中文译名本机查不到，'
+      + '所以这里不翻译 —— 编一个译名会让你照着游戏里不存在的名字去找。');
+    wrap.appendChild(sum);
+    list.forEach(function (r) {
+      var row = el('div', 'note-row');
+      var h = el('b', null, r.n);
+      // 带场景的那几条（实测 183 条优先级列表里有 14 条）在名字后面标出来。
+      if (r.s) {
+        var sc = el('em', 'scen ' + r.s, SCEN_ZH[r.s] || r.s);
+        sc.setAttribute('data-tip', SCEN_TIP[r.s] || '');
+        h.appendChild(sc);
+      }
+      row.appendChild(h);
+      row.appendChild(el('p', 'en', r.t));
+      wrap.appendChild(row);
+    });
+    return wrap;
   }
 
   /**

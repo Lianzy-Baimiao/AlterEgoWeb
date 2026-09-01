@@ -167,6 +167,8 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               mrtName: 0, mrtSpec: 0, mrtDecl: 0, mrtNoStr: 0,
               mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
+              // 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明
+              mrtScen: 0, mrtScenSeen: 0, mrtScenBad: 0, mrtPrio: 0, mrtBoss: 0,
               // 视角迁移（第 16 轮撤掉 GearInsight 那两个视角）
               vmChecked: 0, vmMigrated: 0, vmWrote: 0,
               // 装等差距（第 16 轮：maxroll 不给装等，从本机两份实测数据借）
@@ -770,7 +772,11 @@ function mrTalentTruth(specId) {
   var out = [];
   ['mplus', 'raid'].forEach(function (k) {
     var v = sp.views[k];
-    if (v && v.talents && v.talents.length) out.push({ kind: k, list: v.talents });
+    // prio / boss 也带上：它们挂在**视角**上，不在单套方案里，而面板要按当前
+    // 类型画对应那一份。不带的话「换类型之后说明也跟着换」就没法验。
+    if (v && v.talents && v.talents.length) {
+      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });
+    }
   });
   return out.length ? out : null;
 }
@@ -843,7 +849,8 @@ function mrDeclaredOk(t, d) {
  *
  * 顺带守住「不给串」这个决定本身：页面上任何一个输入框里都不许出现这条串。
  */
-function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals) {
+function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
+  scenEls, prioBox, bossBox) {
   var truth = mrTalentTruth(specId);
   if (!truth) {
     // 没方案（实测 3 个专精：战士武器、德鲁伊平衡、武僧织雾，它们的串全解不开）
@@ -1010,6 +1017,104 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals)
   } else {
     stats.mrtNoStr++;
   }
+
+  // ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
+  //
+  // 三块的判据都是「面板画出来的 == 产物里声明的」。产物是真值，面板是被测的。
+
+  // 场景标签（单体 / AOE / 顺劈 / 多目标）。**可选字段** —— 实测 167 套里只有
+  // 51 套有，因为 maxroll 只有一部分专精按场景分天赋。所以判据不是「必须有」，
+  // 而是**个数必须正好等于产物里声明的**：多画一个是编的，少画一个是丢了。
+  var wantScen = 0;
+  kind.list.forEach(function (x) { wantScen += (x.sc || []).length; });
+  // 出手顺序里也会画场景标签（实测 183 条里 14 条带场景），那些也在 scenEls 里。
+  var wantPrioScen = (kind.prio || []).filter(function (r) { return r.s; }).length;
+  var wantScenTotal = wantScen + wantPrioScen;
+  if (scenEls.length !== wantScenTotal) {
+    loNote('mr 场景标签', label + ' 场景标签画了 ' + scenEls.length + ' 个，'
+      + '产物里声明的是 ' + wantScenTotal + ' 个（方案 ' + wantScen
+      + ' + 出手顺序 ' + wantPrioScen + '）');
+  } else {
+    stats.mrtScen += scenEls.length;
+    if (scenEls.length) stats.mrtScenSeen++;
+  }
+  // 标签的字必须是那四个词之一，且和 class 对得上。写错了界面上就是把 AOE
+  // 那套标成单体 —— 用户照着它选，进副本发现打不动。
+  var SCEN_ZH = { st: '单体', aoe: 'AOE', cleave: '顺劈', multi: '多目标' };
+  scenEls.forEach(function (e) {
+    var code = ['st', 'aoe', 'cleave', 'multi'].filter(function (c) {
+      return e.classList.contains(c);
+    })[0];
+    if (!code) {
+      stats.mrtScenBad++;
+      loNote('mr 场景码', label + ' 场景标签「' + e.textContent + '」没有场景 class');
+    } else if (e.textContent !== SCEN_ZH[code]) {
+      stats.mrtScenBad++;
+      loNote('mr 场景字', label + ' 场景标签 class 是 ' + code + '，字却是「'
+        + e.textContent + '」，该是「' + SCEN_ZH[code] + '」');
+    }
+  });
+
+  // 出手顺序 / 各首领·副本说明：**产物里有就必须画，没有就不许画**。
+  // 「没有就不许画」这一半同样重要 —— 画一个空的 <details> 会让人以为
+  // maxroll 没写，而其实是面板取错了字段。
+  checkNoteBlock(label, '出手顺序', prioBox, kind.prio || [], 'mrtPrio');
+  checkNoteBlock(label, '各首领/副本说明', bossBox, kind.boss || [], 'mrtBoss');
+}
+
+/**
+ * 一块说明（出手顺序 / 首领说明）画得对不对。
+ *
+ * 判据三条：
+ *   · 产物里有几条，界面上就该有几行（`.note-row`）；
+ *   · 标题里的条数必须和行数一致 —— 标题写「9 条」而下面 3 行，是最容易漏的错；
+ *   · 每行的正文**必须原样等于产物里的字符串**。这一条盯的是「别自作聪明」：
+ *     截断、去标点、翻译，任何加工都会让它和产物不一致。这些正文是英文原文，
+ *     而本机没有首领名 / 技能名的中英对照表，翻译只能靠编。
+ */
+function checkNoteBlock(label, what, box, want, statKey) {
+  if (!want.length) {
+    if (box) loNote('mr 空说明', label + ' 产物里没有' + what + '，界面却画了这一块');
+    return;
+  }
+  if (!box) {
+    loNote('mr 缺说明', label + ' 产物里有 ' + want.length + ' 条' + what
+      + '，界面上一块都没画');
+    return;
+  }
+  var rows = [];
+  walk(box, function (n) {
+    if (n.classList && n.classList.contains('note-row')) rows.push(n);
+  });
+  if (rows.length !== want.length) {
+    loNote('mr 说明行数', label + ' ' + what + '画了 ' + rows.length + ' 行，'
+      + '产物里是 ' + want.length + ' 条');
+    return;
+  }
+  // 标题里的条数
+  var sum = '';
+  box.children.forEach(function (c) { if (c.tagName === 'SUMMARY') sum = c.textContent; });
+  if (sum.indexOf(String(want.length) + ' 条') < 0) {
+    loNote('mr 说明标题', label + ' ' + what + '的标题里没写「' + want.length
+      + ' 条」：' + sum.slice(0, 60));
+  }
+  // 逐行对正文
+  var bad = 0;
+  rows.forEach(function (row, i) {
+    var txt = '';
+    walk(row, function (n) {
+      if (n.classList && n.classList.contains('en')) txt = n.textContent;
+    });
+    if (txt !== want[i].t) {
+      bad++;
+      if (bad < 2) {
+        loNote('mr 说明正文', label + ' ' + what + '第 ' + (i + 1)
+          + ' 行的正文和产物不一致（产物 ' + want[i].t.length + ' 字，界面 '
+          + txt.length + ' 字）—— 这一段是英文原文，不许加工');
+      }
+    }
+  });
+  if (!bad) stats[statKey] += rows.length;
 }
 
 /**
@@ -1086,6 +1191,8 @@ function checkTalents(label, specId) {
   // mrLit 是树上点亮的节点，checkMrTalents 拿它验「画的树就是高亮那一套」；
   // taVals 是页面上所有输入框里的字，用来钉住「不给 maxroll 的串」这个决定。
   var mrBoxes = [], mrNotes = [], mrBtns = [], mrSubBtns = 0, mrLit = {}, taVals = [];
+  // 第 16 轮：场景标签（可选）、出手顺序、各首领/副本说明
+  var mrScen = [], mrPrio = null, mrBoss = null;
   walk(body, function (n) {
     checkA11y(n, label);
     if (n.tagName === 'TEXTAREA' || n.tagName === 'INPUT') taVals.push(n.value);
@@ -1098,6 +1205,10 @@ function checkTalents(label, specId) {
     if (n.classList.contains('mr-builds')) mrBoxes.push(n);
     if (n.classList.contains('mr-nostr')) mrNotes.push(n);
     if (n.classList.contains('mrb')) mrBtns.push(n);
+    if (n.classList.contains('scen')) mrScen.push(n);
+    // 两块说明：按 class 认，各只该有一个（<details>）。
+    if (n.classList.contains('mr-prio')) mrPrio = n;
+    if (n.classList.contains('mr-boss')) mrBoss = n;
     // 英雄天赋选择条。.tree-pick 这个类名两条路都在用（插件那条是「套路」），
     // 所以按 .lb 的字认，不按类名 —— 认错的话「只有一条也画了选择条」那条
     // 断言会被插件那条路的按钮喂饱，永远不报。
@@ -1218,7 +1329,8 @@ function checkTalents(label, specId) {
     }
   });
   checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks);
-  checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals);
+  checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals,
+    mrScen, mrPrio, mrBoss);
 
   // 一个专精应该画出三棵（职业 / 专精 / 英雄）
   if (grids !== 3) problems.push(label + ' 只画出 ' + grids + ' 棵树，应该是 3 棵');
@@ -1820,6 +1932,29 @@ if (stats.mrtBundle < 10) {
 }
 // 三个开关必须真被按过。不按的话它们在测试里等于不存在（state 不持久化，
 // 每次渲染都是「大秘境 第 0 套 第 0 条」）。
+// ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
+//
+// 三条都是**下界**，因为逐条的「等于产物」那些断言在数据为空时全是恒真的
+// （空集合上的全称命题）。产物里的真值：51 套方案带场景、183 条出手顺序、
+// 252 条首领说明 —— 渲染只走每个专精的一个类型，所以界面上遇到的是其中一部分。
+if (stats.mrtScenBad > 0) {
+  problems.push(stats.mrtScenBad + ' 个场景标签的字和 class 对不上'
+    + '（把 AOE 那套标成单体，用户照着它选会进副本发现打不动）');
+}
+if (stats.mrtScenSeen < 10) {
+  problems.push('只有 ' + stats.mrtScenSeen + ' 次渲染画出了场景标签，太少'
+    + ' —— 产物里 51 套方案带场景（单体 / AOE / 顺劈 / 多目标），'
+    + '一次都不画说明 sc 那个字段没接上');
+}
+if (stats.mrtPrio < 50) {
+  problems.push('出手顺序只逐条对过 ' + stats.mrtPrio + ' 行，太少'
+    + '（产物里 183 条）—— 那一块没画，或者正文被加工过');
+}
+if (stats.mrtBoss < 50) {
+  problems.push('各首领 / 副本说明只逐条对过 ' + stats.mrtBoss + ' 行，太少'
+    + '（产物里 252 条）—— 那一块没画，或者正文被加工过');
+}
+
 if (stats.mrtBuildSw < 20) problems.push('「换方案」只点过 ' + stats.mrtBuildSw + ' 次，太少');
 if (stats.mrtSubSw < 5) problems.push('「换英雄树」只点过 ' + stats.mrtSubSw + ' 次，太少');
 if (stats.mrtKindSw < 5) problems.push('「换团本 / 大秘境」只点过 ' + stats.mrtKindSw + ' 次，太少');
@@ -1838,6 +1973,12 @@ console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
   + '，打包多条英雄树 ' + stats.mrtBundle + ' 套都给了选择条'
   + '，真点过：换方案 ' + stats.mrtBuildSw + '、换英雄树 ' + stats.mrtSubSw
   + '、换类型 ' + stats.mrtKindSw + '）');
+// 单独一行：第 16 轮加的三块。**必须打印** —— 「加了计数器、写了断言、
+// 既不打印也没下界」在这个仓库出过一次，那次整块功能从没被画过而套件全绿。
+console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通过')
+  + '（场景标签 ' + stats.mrtScen + ' 个（字与 class 不符 ' + stats.mrtScenBad
+  + '），出手顺序逐条对过 ' + stats.mrtPrio + ' 行，各首领 / 副本说明 '
+  + stats.mrtBoss + ' 行　正文与产物逐字节相同，英文原文不加工）');
 
 // ---- 无障碍
 // 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。

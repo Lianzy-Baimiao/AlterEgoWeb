@@ -109,6 +109,73 @@ function strip(h) {
     .replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * 页面的**结构树**。天赋方案分单体 / AOE、每个首领的说明、优先级列表 ——
+ * 这三样都不在渲染后的 HTML 里，它们在 `__remixContext` 的
+ * `branch-posts.post.gutenbergBlock` 里：一棵 WordPress block 树，
+ * `innerBlocks` 是真的嵌套，每个 embed 的**祖先链**才带得出「这是哪个场景 /
+ * 哪个首领的」。
+ *
+ * 为什么不继续用正则扒渲染后的 HTML（上一版就是）：场景标签写在 tab 头里，
+ * 而 tab 是**嵌套**的（外层 `Single Target ・ Templar`，里层 `Radiant Glory`），
+ * 拿「往前找最近的一个」会取到里层那个，实测 833 个 embed 一个场景都认不出来。
+ * 走树才能拿到整条祖先链。
+ *
+ * 实测（81 篇缓存）：80 篇能解出这棵树，1 篇解不出（那一篇的 blob 里有
+ * JSON.parse 咽不下的东西）—— 解不出就退回原来那条正则路，不让整篇丢掉。
+ *
+ * 截取用**括号配平**，不用正则：这段 JSON 里嵌着大量 HTML 和转义引号，
+ * 正则截不了嵌套结构（试过 `[\s\S]*?\]`，截出来的是半截）。
+ */
+function guideBlocks(html) {
+  var i = html.indexOf('"gutenbergBlock":');
+  if (i < 0) return null;
+  var start = html.indexOf('[', i);
+  if (start < 0) return null;
+  var depth = 0, inStr = false, esc = false;
+  for (var k = start; k < html.length; k++) {
+    var c = html.charAt(k);
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '[' || c === '{') depth++;
+    else if (c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(html.slice(start, k + 1)); } catch (e) { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+/** block 的 innerHTML 里那一段 tab 头 / 标题 / figcaption 的纯文本。 */
+function blockLabel(ih) {
+  var hdr = /advgb-tab-body-header[^>]*>([\s\S]{0,400}?)<\/div>/.exec(ih);
+  if (hdr) return { kind: 'tab', text: stripRich(hdr[1]) };
+  var h = /<(h[234])[^>]*>([\s\S]{0,300}?)<\/\1>/.exec(ih);
+  if (h) return { kind: h[1], text: stripRich(h[2]) };
+  return null;
+}
+
+/**
+ * 比 strip() 多做两件事，专给 block 树用：
+ *   · `<br>` 换成「・」而不是删掉 —— tab 头是 `Single Target<br><span…>Templar</span>`，
+ *     直接删会粘成「Single TargetTemplar」，场景词就认不出来了；
+ *   · 认 `&lt;br&gt;`（blob 里是二次转义的）。
+ */
+function stripRich(h) {
+  return String(h).replace(/<br\s*\/?>/gi, ' ・ ').replace(/&lt;br&gt;/gi, ' ・ ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ').trim();
+}
+
 // tab 块。坑 ①②：类名按前缀匹配；找下一块要用完整的 '<div class="_tabsV2_'。
 function tabBlocks(html) {
   var out = [];
@@ -395,6 +462,113 @@ function deriveTargets(RIO, listHtml, specIdx) {
  * 不在这里解码：解码要整棵天赋树，那是 app/talent-tree.js 的活，浏览器端和
  * 校验器各自解一遍还能互相对账。
  */
+/**
+ * 走 block 树，把三样**祖先链才带得出来的东西**抓下来。
+ *
+ * 一、天赋方案的**场景**（单体 / AOE / 顺劈 / 多目标）。
+ *   实测这件事的形状和我以为的不一样：maxroll **不是每个专精都按场景分天赋**。
+ *   80 篇里只有 **28 篇**这么分（230 条去重串里 72 条带场景标签，2 条被标成两个场景）。
+ *   剩下的专精按「英雄天赋」分（`Soul Harvester` / `Hellcaller`）或按「副本」分
+ *   （`Altar of Fangs` / `Murder Row`）。所以场景是**可选字段**，不是每套都有；
+ *   面板见到没有场景的方案就不画那个标签，而不是编一个「单体」上去。
+ *
+ * 二、每个首领的说明（Boss Tips）。这是三样里最全的：**563 个小节、252 个有正文、
+ *   涉及 71/80 篇**。祖先链的形状是 `首领名 > Boss Tips`（团本）或
+ *   `副本名 > Boss Tips`（大秘境），所以首领 / 副本名取祖先链上倒数第二个。
+ *
+ * 三、优先级列表（Priority List）：**229 个小节，216 个能取到正文**。
+ *   它就是「技能时间轴」的文字版 —— 图形时间轴那 226 个 rotation embed 是另一种
+ *   编码（`embed-tools/rotation=…`），而正文里是同一份内容且**可读**，
+ *   所以取正文，不去啃那个编码。
+ *
+ * **这三样全是英文。** 首领名、副本名、技能名都长在句子里，本机没有它们的
+ * 中英对照表，而「不凭记忆手打中文游戏名词」是硬约束 —— 所以原样保留英文，
+ * 由面板在界面上说明这一段是英文原文。
+ */
+function walkGuide(blocks) {
+  var out = { scen: {}, boss: [], prio: [] };
+  if (!blocks) return out;
+
+  // 场景词 → 短码。写成一张表而不是 if 链，因为 maxroll 的拼法不统一
+  // （实测 `Single Target` / `Single-Target` / `Aoe` / `AoE` / `Multi-Target`
+  // / `Multitarget` / `Cleave` 七种都出现过）。
+  var SCEN_RE = /(single[ -]?target|aoe|cleave|multi[ -]?target|multitarget)/i;
+  function scenOf(text) {
+    var m = SCEN_RE.exec(text || '');
+    if (!m) return '';
+    var x = m[1].toLowerCase().replace(/[ -]/g, '');
+    if (x === 'singletarget') return 'st';
+    if (x === 'aoe') return 'aoe';
+    if (x === 'cleave') return 'cleave';
+    return 'multi';
+  }
+
+  /**
+   * 标题后面**同级**的正文，直到下一个标题为止。
+   *
+   * 为什么不取 innerBlocks：Priority List 和 Boss Tips 的正文是标题的**兄弟节点**，
+   * 不是子节点（WordPress 的 heading block 没有子块）。取子节点会得到空串 ——
+   * 而空串会让「有 252 个首领说明」变成「有 0 个」，还不报错。
+   */
+  function bodyAfter(list, idx, cap) {
+    var parts = [];
+    for (var i = idx + 1; i < list.length; i++) {
+      var ih = list[i].innerHTML || '';
+      if (/<h[234][^>]*>/.test(ih)) break;          // 下一个标题，停
+      var t = stripRich(ih);
+      if (t) parts.push(t);
+      if (parts.join(' ').length > cap) break;
+    }
+    return parts.join(' ').slice(0, cap).trim();
+  }
+
+  function walk(list, trail) {
+    (list || []).forEach(function (b, idx) {
+      var ih = b.innerHTML || '';
+      var lab = blockLabel(ih);
+      var next = lab ? trail.concat([lab.text]) : trail;
+
+      // ---- 天赋 embed：场景来自**整条祖先链 + 自己的 figcaption**
+      var url = b.attributes && b.attributes.url;
+      var km = url && /embed-tools\/(\w+)=([A-Za-z0-9_\-]+)/.exec(url);
+      if (km && km[1] === 'talents') {
+        var cap = /<figcaption[^>]*>([\s\S]{0,400}?)<\/figcaption>/.exec(ih);
+        var ctx = next.concat([cap ? stripRich(cap[1]) : '']).join(' | ');
+        var sc = scenOf(ctx);
+        if (sc) {
+          var key = normalizeB64(km[2]);
+          (out.scen[key] || (out.scen[key] = {}))[sc] = 1;
+        }
+      }
+
+      if (lab && lab.kind !== 'tab') {
+        // ---- 每个首领 / 副本的说明
+        if (/^boss tips$/i.test(lab.text)) {
+          var body = bodyAfter(list, idx, 700);
+          // 祖先链倒数第二个就是首领名（最后一个是 'Boss Tips' 自己）。
+          // 首领名里可能挂着 maxroll 编辑器留下的空 <a>（实测
+          // `Den of Nalorakk<a href="Legacy of Tyr"></a>`），stripRich 去标签时
+          // 会把 href 里的字留下来 —— 这里再切一刀。
+          var who = next.length > 1 ? next[next.length - 2] : '';
+          if (body && who) out.boss.push({ w: who, t: body });
+        }
+        // ---- 优先级列表（技能时间轴的文字版）
+        if (/priority/i.test(lab.text)) {
+          var pb = bodyAfter(list, idx, 900);
+          if (pb) {
+            // 祖先链里带场景的话记下来，界面才能分「单体优先级 / AOE 优先级」。
+            var ps = scenOf(next.join(' | '));
+            out.prio.push({ n: next[next.length - 2] || lab.text, s: ps, t: pb });
+          }
+        }
+      }
+      walk(b.innerBlocks, next);
+    });
+  }
+  walk(blocks, []);
+  return out;
+}
+
 function talentBuilds(html) {
   var out = [], seen = {};
   var re = /<div class="wow-embed"[^>]*data-wow-type="talents"[^>]*data-wow-data="([^"]+)"[^>]*>/g;
@@ -493,9 +667,15 @@ function parseGuide(html, slug) {
     }
   });
 
+  // block 树：场景 / 首领说明 / 优先级列表。解不出来就是空的三个字段
+  // （实测 81 篇里 1 篇解不出），装备和天赋照旧 —— 不让一篇的 blob 坏掉
+  // 拖垮整篇。
+  var tree = walkGuide(guideBlocks(html));
+
   return {
     bis: bis, alt: alt, ench: ench, tiers: tiers,
     talents: talentBuilds(html),
+    scen: tree.scen, boss: tree.boss, prio: tree.prio,
     labels: blk.labels, warn: warn
   };
 }
@@ -601,7 +781,37 @@ function main() {
  * 实测（80 篇缓存）：833 套里 626 套解得开，207 套报「位读完了但节点还剩 1 个
  * 没走到」—— 那批是照着**上一版天赋树**编的，跟本地这版差一个节点。
  */
-function collectTalents(list, specId, dec, ORDER, subOf, stat) {
+/**
+ * 首领说明 / 优先级列表的去重。
+ *
+ * 同一段文字在一篇指南里会出现好几次（正文讲一次、每个英雄天赋的 tab 里再讲一次）。
+ * 键是「名字 + 正文」：名字不同而正文相同的两条**都留着**（那是「Templar 下的
+ * Nek'zali」和「Herald 下的 Nek'zali」，说的是同一件事但归属不同），
+ * 正文和名字都相同才算重复。
+ */
+function dedupeNotes(list, stat, kind) {
+  var out = [], seen = {};
+  list.forEach(function (r) {
+    var name = String(r.w || r.n || '').replace(/\s+/g, ' ').trim();
+    // 首领名里可能挂着 maxroll 编辑器留下的空链接（实测
+    // `Den of Nalorakk<a href="Legacy of Tyr"></a>` → 去标签后会粘上 href 里的字）。
+    // 只取到第一个「大写字母开头的词组」结束为止是行不通的（首领名本身就带空格），
+    // 所以按已知的杂讯形状切：出现 `<` 之后的全丢。
+    name = name.split('<')[0].trim();
+    var text = String(r.t || '').replace(/\s+/g, ' ').trim();
+    if (!name || !text) return;
+    var key = name + '\u0000' + text;
+    if (seen[key]) { stat[kind + 'Dupe']++; return; }
+    seen[key] = 1;
+    stat[kind]++;
+    var rec = { n: name, t: text };
+    if (r.s) { rec.s = r.s; stat.prioScen++; }
+    out.push(rec);
+  });
+  return out;
+}
+
+function collectTalents(list, specId, dec, ORDER, subOf, stat, scenMap) {
   var out = [], byStr = {}, badStr = {};
   list.forEach(function (b) {
     var s = normalizeB64(b.str);
@@ -641,6 +851,15 @@ function collectTalents(list, specId, dec, ORDER, subOf, stat) {
     if (h.length > 1) stat.bundle++;
     stat.kept++;
     var rec = { n: b.name, s: s, p: pts, h: h, c: 1 };
+    // 场景（单体 / AOE / 顺劈 / 多目标）是**可选的**：实测 80 篇里只有 28 篇
+    // 按场景分天赋，其余按英雄天赋或副本分。没有就不写这个字段 ——
+    // 写个空串会让面板画出一个空标签，写 'st' 更糟（那是编的）。
+    var sc = scenMap && scenMap[s] ? Object.keys(scenMap[s]).sort() : [];
+    if (sc.length) {
+      rec.sc = sc;
+      stat.scen++;
+      if (sc.length > 1) stat.scenMulti++;
+    }
     byStr[s] = rec;
     out.push(rec);
   });
@@ -665,7 +884,9 @@ function writeOut(parsed, slotMap, RIO, meta) {
     });
     subOfSpec[sid] = m;
   });
-  var tStat = { kept: 0, undecodable: 0, wrongSpec: 0, noHero: 0, bundle: 0, threw: 0, dupe: 0 };
+  var tStat = { kept: 0, undecodable: 0, wrongSpec: 0, noHero: 0, bundle: 0, threw: 0, dupe: 0,
+    scen: 0, scenMulti: 0 };
+  var nStat = { boss: 0, bossDupe: 0, prio: 0, prioDupe: 0, prioScen: 0 };
 
 
   // 物品池：中文名 / 图标 / 品质 先复用 rio 已经查好的 2432 件。
@@ -690,7 +911,11 @@ function writeOut(parsed, slotMap, RIO, meta) {
     var v = s.views[kind] = {
       slug: p.t.slug, bis: {}, alt: {}, ench: {}, tiers: [],
       talents: collectTalents(p.g.talents || [], sid, dec, ORDER,
-        subOfSpec[String(sid)] || {}, tStat)
+        subOfSpec[String(sid)] || {}, tStat, p.g.scen || {}),
+      // 首领 / 副本说明和优先级列表都是**英文原文**（见 walkGuide 的注释）。
+      // 去重：同一段说明在页面里会重复出现（正文讲一次、总结再讲一次）。
+      boss: dedupeNotes(p.g.boss || [], nStat, 'boss'),
+      prio: dedupeNotes(p.g.prio || [], nStat, 'prio')
     };
 
     function put(target, rowList) {
@@ -795,7 +1020,12 @@ function writeOut(parsed, slotMap, RIO, meta) {
       specs: 'specId → {cls, specEn, views}',
       views: 'raid | mplus → {slug, bis 槽位→[itemId…], alt 同, ench 槽位→[itemId…], '
         + 'tiers [[分级, [itemId…]]…], talents [{n 方案名, s 串（画树用，不是游戏导入串）, '
-        + 'p 点数, h [英雄子树id…], c 有几个小节共用这一套}…]}',
+        + 'p 点数, h [英雄子树id…], c 有几个小节共用这一套, '
+        + 'sc [场景码…]（可选，st 单体 / aoe / cleave 顺劈 / multi 多目标）}…], '
+        + 'boss [{n 首领或副本名, t 说明}…], prio [{n 小节名, s 场景码（可选）, t 正文}…]}',
+      note2: 'boss 和 prio 的正文是**英文原文**：首领名 / 副本名 / 技能名都长在句子里，'
+        + '本机没有这些名词的中英对照表，手打中文是禁止的（会打错游戏里的官方译名）。'
+        + 'sc / prio[].s 只在 maxroll 自己按场景分了的时候才有 —— 实测 80 篇里只有 28 篇这么分。',
       items: 'itemId → {n 中文名, i 图标名, q 品质}（名字空字符串 = rio 池里没有，待补）'
     },
     guides: parsed.length,
@@ -824,6 +1054,12 @@ function writeOut(parsed, slotMap, RIO, meta) {
   console.log('    丢：解不开 ' + tStat.undecodable + '，串头专精对不上 ' + tStat.wrongSpec
     + '，一条英雄树都没点 ' + tStat.noHero + '，解码抛异常 ' + tStat.threw
     + '；同一条串挂在多个小节下面被并成一套的 ' + tStat.dupe + ' 处');
+  console.log('    分了场景（单体/AOE/顺劈/多目标）的 ' + tStat.scen + ' 套'
+    + '（同时属于多个场景的 ' + tStat.scenMulti + ' 套）'
+    + ' —— maxroll 只有一部分专精按场景分天赋，其余按英雄天赋或副本分');
+  console.log('  首领 / 副本说明 ' + nStat.boss + ' 条（重复合并 ' + nStat.bossDupe
+    + '），优先级列表 ' + nStat.prio + ' 条（重复合并 ' + nStat.prioDupe
+    + '，其中带场景的 ' + nStat.prioScen + '）　**英文原文**');
   if (db2Want) {
     console.log('  rio 池里没有的 ' + db2Want + ' 件：'
       + (db2Skipped ? '跳过补名（本机没有 tools\\.db2-names\\ItemSparse.csv）'

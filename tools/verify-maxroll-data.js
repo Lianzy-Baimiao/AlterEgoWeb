@@ -49,6 +49,58 @@ var VALID_SLOTS = {
   15: '背', 16: '主手', 17: '副手'
 };
 
+// 场景码白名单。四个都是**通用战斗术语**（不是游戏里的官方译名），
+// 由 tools/fetch-maxroll.js 的 walkGuide 从 maxroll 的 tab 头 / figcaption 里认出来。
+var VALID_SCEN = { st: '单体', aoe: 'AOE', cleave: '顺劈', multi: '多目标' };
+
+function uniq(a) {
+  var seen = {}, out = [];
+  a.forEach(function (x) { if (!seen[x]) { seen[x] = 1; out.push(x); } });
+  return out;
+}
+
+/**
+ * 出手顺序 / 首领说明那两块。
+ *
+ * withScen = 这一块允不允许带场景码（只有 prio 允许）。boss 那一块带场景码
+ * 就是取错字段了 —— 首领说明不分单体 / AOE。
+ */
+function checkNotes(at, what, list, withScen) {
+  ck();
+  if (list === undefined) return;           // 没有这一块是合法的（不是每篇都有）
+  if (!Array.isArray(list)) { fail(at + what + ' 不是数组'); return; }
+  var seen = {};
+  list.forEach(function (r, i) {
+    var where = at + what + '[' + i + ']';
+    ck();
+    if (!r || typeof r !== 'object') { fail(where + ' 不是对象'); return; }
+    ck();
+    if (typeof r.n !== 'string' || !r.n.trim()) fail(where + '.n 不是非空串（名字）');
+    ck();
+    if (typeof r.t !== 'string' || r.t.trim().length < 10) {
+      fail(where + '.t 正文太短或不是串：' + JSON.stringify(String(r.t).slice(0, 40)));
+    }
+    // 名字里不许残留 HTML。实测首领名上挂过 maxroll 编辑器留下的空链接
+    // （`Den of Nalorakk<a href="Legacy of Tyr"></a>`），去标签时会把 href
+    // 里的字粘进名字 —— 那就成了一个游戏里不存在的首领名。
+    ck();
+    if (/[<>]/.test(r.n)) fail(where + '.n 里残留了 HTML：' + JSON.stringify(r.n));
+    ck();
+    if (r.s !== undefined) {
+      if (!withScen) fail(where + '.s 不该有场景码（首领说明不分单体 / AOE）');
+      else if (!VALID_SCEN[r.s]) fail(where + '.s 是不认识的场景码「' + r.s + '」');
+      else stat.nScen++;
+    }
+    // 同一块里名字 + 正文都一样 = 去重没生效（同一段话在页面里会出现好几次）
+    var key = r.n + '|' + r.t;
+    ck();
+    if (seen[key]) fail(where + ' 和第 ' + seen[key] + ' 条完全相同 —— 去重没生效');
+    else seen[key] = i + 1;
+  });
+  if (what === '.prio') { stat.prio += list.length; if (list.length) stat.prioViews++; }
+  else { stat.boss += list.length; if (list.length) stat.bossViews++; }
+}
+
 /* ------------------------------------------------------------------ 顶层 */
 (function () {
   ck();
@@ -126,7 +178,9 @@ if (errors.length) { report(); }
 /* ----------------------------------------------------------------- items */
 var stat = { specs: 0, views: 0, bisRows: 0, altRows: 0, ench: 0, tiers: 0, noName: 0,
   talents: 0, tDecoded: 0, tSpecs: 0, tBundled: 0, tShared: 0, tMax: 0, tNoTalents: 0,
-  tVer2: 0 };
+  tVer2: 0,
+  // 第 16 轮：场景码 / 出手顺序 / 首领说明
+  tScen: 0, tScenMulti: 0, prio: 0, prioViews: 0, boss: 0, bossViews: 0, nScen: 0 };
 (function () {
   Object.keys(M.items).forEach(function (id) {
     var it = M.items[id];
@@ -290,10 +344,41 @@ var TR = null, DEC = null;
           if (!(typeof t.c === 'number' && t.c >= 1 && t.c === Math.floor(t.c))) {
             fail(at + '.c = ' + t.c + '，该是 >= 1 的整数（有几个小节共用这一套）');
           } else if (t.c > 1) stat.tShared++;
+          // 场景码（第 16 轮）。**可选字段**：实测 167 套里只有 51 套有 ——
+          // maxroll 只有一部分专精按场景分天赋，其余按英雄天赋或副本分。
+          // 所以判据不是「必须有」，而是「有的话必须是认识的码、去重、有序」。
+          if (t.sc !== undefined) {
+            ck();
+            if (!Array.isArray(t.sc) || !t.sc.length) {
+              fail(at + '.sc 存在但不是非空数组（不该有这个字段就别写）');
+            } else {
+              t.sc.forEach(function (c) {
+                ck();
+                if (!VALID_SCEN[c]) fail(at + '.sc 里有不认识的场景码「' + c + '」');
+              });
+              ck();
+              if (t.sc.join(',') !== t.sc.slice().sort().join(',')) {
+                fail(at + '.sc 没排序：[' + t.sc + ']');
+              }
+              ck();
+              if (t.sc.length !== uniq(t.sc).length) fail(at + '.sc 里有重复：[' + t.sc + ']');
+              stat.tScen++;
+              if (t.sc.length > 1) stat.tScenMulti++;
+            }
+          }
           checkBuildStr(at, sid, t);
         });
         if ((v.talents || []).length > stat.tMax) stat.tMax = (v.talents || []).length;
       }
+
+      // ---- 出手顺序 / 各首领·副本说明（第 16 轮）
+      //
+      // 两块形状一样：[{n 名字, t 正文, s 场景码（只有 prio 才有，且可选）}…]
+      // 正文是**英文原文** —— 首领名 / 副本名 / 技能名都长在句子里，本机没有
+      // 这些名词的中英对照表。所以这里能立的判据是「结构 + 非空 + 无重复」，
+      // 而不是「内容对不对」（那要有一份译名表才谈得上）。
+      checkNotes(sid + '/' + kind, '.prio', v.prio, true);
+      checkNotes(sid + '/' + kind, '.boss', v.boss, false);
     });
     ck();
     if (nT === 0) stat.tNoTalents++;
@@ -357,6 +442,18 @@ function checkBuildStr(at, sid, t) {
   if (stat.talents === 0) fail('一套天赋方案都没有 —— 天赋页会是空的，而那组断言全在空转');
   ck();
   if (stat.tDecoded === 0) fail('一条天赋串都没解开，「声明的点数/英雄树对不对」这组等于没跑');
+  // 第 16 轮那三块同理：checkNotes 里那些「非空 / 无重复 / 名字里没有 HTML」
+  // 的判据在 list 为空时全是恒真的，所以要有下界证明它们真的走到过。
+  // 实测：出手顺序 183 条、首领说明 252 条、带场景的方案 51 套。
+  ck();
+  if (stat.boss === 0 && stat.prio === 0) {
+    fail('一条出手顺序和首领说明都没有 —— walkGuide 那条路没接上'
+      + '（它靠 block 树的祖先链，正则扒渲染后的 HTML 是取不到的）');
+  }
+  ck();
+  if (stat.tScen === 0) {
+    warn('一套方案都没有场景码 —— 实测该有 51 套（单体 / AOE / 顺劈 / 多目标）');
+  }
 })();
 
 /* --------------------------------------------------------------- 警告类 */
@@ -397,6 +494,10 @@ function report() {
     + stat.tMax + ' 套），打包两条英雄树 ' + stat.tBundled + ' 套，多小节共用 ' + stat.tShared + ' 套');
   console.log('天赋复核   ' + stat.tDecoded + ' 条串重解一遍对声明的点数 / 英雄树'
     + '（解码器用 app/talent-decode.js，和生成器那份不是同一个实现）');
+  console.log('场景 / 说明 ' + stat.tScen + ' 套方案带场景码（同时属于多个场景的 '
+    + stat.tScenMulti + '），出手顺序 ' + stat.prio + ' 条 / ' + stat.prioViews
+    + ' 个视角（带场景 ' + stat.nScen + '），首领·副本说明 ' + stat.boss + ' 条 / '
+    + stat.bossViews + ' 个视角　**英文原文**');
   console.log('检查项     ' + checks);
 
   if (warns.length) {
