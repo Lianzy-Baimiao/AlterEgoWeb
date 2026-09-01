@@ -54,6 +54,9 @@ var https = require('https');
 // 解码器提到模块作用域：toGameLoadout 要拿它当「削尾之后还能不能解开」的闸。
 // 放在 writeOut 里的局部变量拿不到（那个函数在后面）。
 var DEC_MOD = require('./decode-talent-string.js');
+// 出手顺序的中文直译（人手写的规则表，见那个文件开头）。
+var TRANS = require('./translate-prio.js');
+var transStat = {};
 var DEC_ORDER = null;
 function decOrder() {
   if (!DEC_ORDER) DEC_ORDER = DEC_MOD.loadOrder();
@@ -207,6 +210,21 @@ var subst = { hit: 0, miss: 0, refs: {} };
  *
  * ID 可能带后缀（实测 139 处形如 `126519:AJAC`），取前面的数字部分。
  */
+/**
+ * 出手顺序的正文：补中英之间的空格，然后按规则表直译成中文。
+ *
+ * 补空格是因为技能名换成中文之后，原来靠标签隔开的地方会粘在一起
+ * （实测 `Cast<span>Revenge</span>` → `Cast复仇`）。粘着的话既难读，
+ * 也会让下面的整句模板匹配不上（模板里 `Cast ` 后面是有空格的）。
+ */
+function zhPrio(t) {
+  var s = String(t || '')
+    .replace(/([A-Za-z0-9%\)])([一-鿿])/g, '$1 $2')
+    .replace(/([一-鿿])([A-Za-z0-9\(])/g, '$1 $2')
+    .replace(/\s+/g, ' ').trim();
+  return TRANS.translate(s, transStat);
+}
+
 function substSpells(h) {
   return String(h).replace(
     /<span class="wow-(?:spell|trait)" data-wow-id="(\d+)(?::[A-Za-z0-9]+)?"[^>]*>([^<]{1,80})<\/span>/g,
@@ -543,7 +561,7 @@ function deriveTargets(RIO, listHtml, specIdx) {
  * 它要么换对，要么原样不动。
  */
 function walkGuide(blocks) {
-  var out = { scen: {}, boss: [], prio: [] };
+  var out = { scen: {}, prio: [] };
   if (!blocks) return out;
 
   // 场景词 → 短码。写成一张表而不是 if 链，因为 maxroll 的拼法不统一
@@ -600,7 +618,7 @@ function walkGuide(blocks) {
       }).filter(Boolean).join(' ').slice(0, 900).trim();
       if (!body) return;
       var nm = stripRich(substSpells(heads[i] || '')) || ('第 ' + (i + 1) + ' 页');
-      out2.push({ n: nm, s: scenOf(trail.concat([nm]).join(' | ')), t: body });
+      out2.push({ n: nm, s: scenOf(trail.concat([nm]).join(' | ')), t: zhPrio(body) });
     });
     return out2;
   }
@@ -625,16 +643,11 @@ function walkGuide(blocks) {
       }
 
       if (lab && lab.kind !== 'tab') {
-        // ---- 每个首领 / 副本的说明
-        if (/^boss tips$/i.test(lab.text)) {
-          var body = bodyAfter(list, idx, 700);
-          // 祖先链倒数第二个就是首领名（最后一个是 'Boss Tips' 自己）。
-          // 首领名里可能挂着 maxroll 编辑器留下的空 <a>（实测
-          // `Den of Nalorakk<a href="Legacy of Tyr"></a>`），stripRich 去标签时
-          // 会把 href 里的字留下来 —— 这里再切一刀。
-          var who = next.length > 1 ? next[next.length - 2] : '';
-          if (body && who) out.boss.push({ w: who, t: body });
-        }
+        // ---- 每个首领 / 副本的说明（Boss Tips）：**第 19 轮不收了。**
+        // 用户：「移除 天赋中 各首领说明，这个数据没用，没人看」。
+        // 实测过 252 条 / 71 篇，抓取本身是好的 —— 撤掉是因为没人看，
+        // 不是因为抓不到。哪天要回来，`git show ce0968c^:tools/fetch-maxroll.js`
+        // 里有整段（判据是「祖先链形如 首领名 > Boss Tips，取倒数第二个」）。
         // ---- 优先级列表（技能时间轴的文字版）
         if (/priority/i.test(lab.text)) {
           // 标题后面**可能是一个分页容器**而不是正文（实测 215 个 Priority 标题里
@@ -653,7 +666,7 @@ function walkGuide(blocks) {
             if (pb) {
               // 祖先链里带场景的话记下来，界面才能分「单体优先级 / AOE 优先级」。
               var ps = scenOf(next.join(' | '));
-              out.prio.push({ n: next[next.length - 2] || lab.text, s: ps, t: pb });
+              out.prio.push({ n: next[next.length - 2] || lab.text, s: ps, t: zhPrio(pb) });
             }
           }
         }
@@ -861,7 +874,7 @@ function parseGuide(html, slug) {
   return {
     bis: bis, alt: alt, ench: ench, tiers: tiers,
     talents: talentBuilds(html),
-    scen: tree.scen, boss: tree.boss, prio: tree.prio,
+    scen: tree.scen, prio: tree.prio,
     labels: blk.labels, warn: warn
   };
 }
@@ -1078,7 +1091,7 @@ function writeOut(parsed, slotMap, RIO, meta) {
   });
   var tStat = { kept: 0, undecodable: 0, wrongSpec: 0, noHero: 0, bundle: 0, threw: 0, dupe: 0,
     scen: 0, scenMulti: 0, game: 0, gameFail: 0 };
-  var nStat = { boss: 0, bossDupe: 0, prio: 0, prioDupe: 0, prioScen: 0 };
+  var nStat = { prio: 0, prioDupe: 0, prioScen: 0 };
 
 
   // 物品池：中文名 / 图标 / 品质 先复用 rio 已经查好的 2432 件。
@@ -1104,9 +1117,8 @@ function writeOut(parsed, slotMap, RIO, meta) {
       slug: p.t.slug, bis: {}, alt: {}, ench: {}, tiers: [],
       talents: collectTalents(p.g.talents || [], sid, dec, ORDER,
         subOfSpec[String(sid)] || {}, tStat, p.g.scen || {}),
-      // 首领 / 副本说明和优先级列表：技能名已换中文、句子留英文（见 walkGuide）。
-      // 去重：同一段说明在页面里会重复出现（正文讲一次、总结再讲一次）。
-      boss: dedupeNotes(p.g.boss || [], nStat, 'boss'),
+      // 出手顺序：技能名已换中文、句子留英文（见 walkGuide）。
+      // 去重：同一段在页面里会重复出现（正文讲一次、每个英雄天赋的 tab 里再讲一次）。
       prio: dedupeNotes(p.g.prio || [], nStat, 'prio')
     };
 
@@ -1226,14 +1238,16 @@ function writeOut(parsed, slotMap, RIO, meta) {
         + 'p 点数, h [英雄子树id…], c 有几个小节共用这一套, '
         + 'g 能粘进游戏的导入串（s 改了串头：版本 130→2、treeHash→全 0）, '
         + 'sc [场景码…]（可选，st 单体 / aoe / cleave 顺劈 / multi 多目标）}…], '
-        + 'boss [{n 首领或副本名, t 说明}…], prio [{n 小节名, s 场景码（可选）, t 正文}…]}',
-      note2: 'boss 和 prio 的正文里，**技能 / 天赋名是官方中文，句子是英文原文**。'
-        + 'maxroll 给每个技能都标了 data-wow-id，所以中文名是按 ID 查出来的'
-        + '（tools/spell-names-zh.json：天赋取 app/talent-tree.js 里暴雪 DB2 的名字，'
-        + '基础技能取 Wowhead locale=4），查不到的那几个留英文 —— 不猜译名。'
-        + '句子不整段翻译：机翻会把「unless / 除非」这类条件翻反，用户照着打是错的'
-        + '而界面上看不出来；名词替换要么换对要么原样不动，不会翻反。'
-        + '首领名（boss[].n）也留英文，本机没有它们的官方译名。'
+        + 'prio [{n 小节名, s 场景码（可选）, t 正文}…]}',
+      note2: 'prio 的正文是**中文**：技能 / 天赋名按 maxroll 标的 data-wow-id 换成了'
+        + '官方中文（tools/spell-names-zh.json：天赋取 app/talent-tree.js 里暴雪 DB2 的'
+        + '名字，基础技能取 Wowhead locale=4，查不到的留英文，不猜译名）；句子按'
+        + 'tools/translate-prio.js 那张**人手写的规则表**整句直译，'
+        + '**没命中模板的整句原样留英文**（实测约七成句子翻成中文）。'
+        + '不做半句翻译也不做机器翻译：出手顺序里「unless / 除非」这类条件翻反了，'
+        + '用户照着打就是错的，而界面上看不出来。'
+        + '「各首领 / 副本说明」（boss）第 19 轮撤掉了 —— 用户说这个数据没用没人看，'
+        + '所以生成器不再产出这个字段。'
         + 'sc / prio[].s 只在 maxroll 自己按场景分了的时候才有 —— 实测 80 篇里只有 28 篇这么分。',
       items: 'itemId → {n 中文名, i 图标名, q 品质}（名字空字符串 = rio 池里没有，待补）'
     },
@@ -1269,9 +1283,18 @@ function writeOut(parsed, slotMap, RIO, meta) {
   console.log('    分了场景（单体/AOE/顺劈/多目标）的 ' + tStat.scen + ' 套'
     + '（同时属于多个场景的 ' + tStat.scenMulti + ' 套）'
     + ' —— maxroll 只有一部分专精按场景分天赋，其余按英雄天赋或副本分');
-  console.log('  首领 / 副本说明 ' + nStat.boss + ' 条（重复合并 ' + nStat.bossDupe
-    + '），优先级列表 ' + nStat.prio + ' 条（重复合并 ' + nStat.prioDupe
-    + '，其中带场景的 ' + nStat.prioScen + '）　句子是英文原文');
+  console.log('  出手顺序 ' + nStat.prio + ' 条（重复合并 ' + nStat.prioDupe
+    + '，其中带场景的 ' + nStat.prioScen + '）'
+    + '　首领说明第 19 轮撤了（用户：没人看）');
+  // 直译的账。**必须印**：翻不动的句子留英文，光看产物分不清「maxroll 换了写法」
+  // 和「规则表没覆盖到」。数字掉下来就是该补规则了。
+  (function () {
+    var zh = transStat.zh || 0, en = transStat.en || 0, tot = zh + en;
+    if (!tot) { console.log('    直译：一句都没过（不对，检查 zhPrio 有没有接上）'); return; }
+    console.log('    直译成中文 ' + zh + '/' + tot + ' 句（'
+      + Math.round(zh / tot * 100) + '%），剩下 ' + en + ' 句留英文'
+      + ' —— 规则表 tools/translate-prio.js，没命中的整句不半翻');
+  }());
   // 技能名替换的账。**必须印出来**：产物里看不出「这段本来没技能名」和
   // 「表里缺这个技能」的区别，只有这一行能。
   (function () {

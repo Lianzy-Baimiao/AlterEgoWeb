@@ -113,6 +113,8 @@ function checkNotes(at, what, list, withScen) {
     // 下面用总量的下界来判：见 checkZhNames()。
     ck();
     if (/[一-鿿]/.test(r.t)) stat.zhNotes++;
+    stat.cjk += (r.t.match(/[一-鿿]/g) || []).length;
+    stat.latin += (r.t.match(/[A-Za-z]/g) || []).length;
     stat.allNotes++;
   });
   if (what === '.prio') { stat.prio += list.length; if (list.length) stat.prioViews++; }
@@ -126,19 +128,27 @@ function checkNotes(at, what, list, withScen) {
  * 产物会**静默退回全英文**，而上面每一条断言都照样通过（结构没变、字数够、
  * 不重复）。那正是这个项目反复踩的假绿 —— 功能没了但套件不知道。
  *
- * 门槛按实测定：590/592 个技能有中文名时，437 条说明里 415 条带汉字（95%）。
- * 剩下 22 条是整段不提任何技能的首领说明。定 70% —— 比实测低一档留余量
- * （换赛季重抓时新技能会有一小批还没进表），但远高于「表丢了」的情形：
- * 那时句子本身全是英文，比例会掉到 0%，这一条必红。
+ * **判据是「汉字占比」，不是「有没有汉字」。** 第一版写的是「多少条里含汉字」，
+ * 第 19 轮加了整句直译之后那条就废了：句子模板本身产出中文
+ * （`Cast X on cooldown.` → `X 冷却好就放。`），所以哪怕技能名全是英文，
+ * 每一条也都「含汉字」—— 两个把 substSpells 关掉的变异体因此全部漏过。
+ *
+ * 实测两种状态差三倍多，中间空得很开：
+ *   · 技能名中文 + 句子直译：汉字 13516 / 拉丁 24134 = **35.9%**
+ *   · 技能名英文 + 句子直译：汉字  5733 / 拉丁 47767 = **10.7%**
+ * 门槛定 22%（两者中点偏下）。占比而不是条数，是因为一条里换掉十个技能名
+ * 和换掉一个，在「含汉字」这个判据下毫无区别。
  */
 function checkZhNames() {
   ck();
-  if (!stat.allNotes) { fail('一条说明都没有 —— 这一组在验空气'); return; }
-  var pct = stat.zhNotes / stat.allNotes;
-  if (pct < 0.70) {
-    fail('只有 ' + stat.zhNotes + '/' + stat.allNotes + ' 条说明里有汉字（'
-      + Math.round(pct * 100) + '%，门槛 70%）—— 技能名没换成中文。'
-      + '要么 tools/spell-names-zh.json 丢了，要么 fetch-maxroll.js 的 substSpells 坏了');
+  if (!stat.allNotes) { fail('一条出手顺序都没有 —— 这一组在验空气'); return; }
+  var tot = stat.cjk + stat.latin;
+  var pct = tot ? stat.cjk / tot : 0;
+  if (pct < 0.22) {
+    fail('出手顺序里汉字只占 ' + Math.round(pct * 100) + '%（'
+      + stat.cjk + ' 个汉字 / ' + stat.latin + ' 个拉丁字母，门槛 22%）'
+      + ' —— 技能名没换成中文。要么 tools/spell-names-zh.json 丢了，'
+      + '要么 fetch-maxroll.js 的 substSpells 坏了（比如放到 stripRich 后面去了）');
   }
 }
 
@@ -222,7 +232,7 @@ var stat = { specs: 0, views: 0, bisRows: 0, altRows: 0, ench: 0, tiers: 0, noNa
   tVer2: 0, tGame: 0,
   // 第 16 轮：场景码 / 出手顺序 / 首领说明
   tScen: 0, tScenMulti: 0, prio: 0, prioViews: 0, boss: 0, bossViews: 0, nScen: 0,
-  zhNotes: 0, allNotes: 0 };
+  zhNotes: 0, allNotes: 0, cjk: 0, latin: 0 };
 (function () {
   Object.keys(M.items).forEach(function (id) {
     var it = M.items[id];
@@ -420,7 +430,13 @@ var TR = null, DEC = null;
       // 「结构 + 非空 + 无重复」—— 句子对不对没法在这里验（那要有一份人工译文
       // 当真值）。「技能名到底换没换中文」用总量下界判，见 checkZhNames()。
       checkNotes(sid + '/' + kind, '.prio', v.prio, true);
-      checkNotes(sid + '/' + kind, '.boss', v.boss, false);
+      // 「各首领 / 副本说明」第 19 轮撤了（用户：这个数据没用，没人看）。
+      // 反过来钉住：产物里再冒出这个字段就是生成器没停干净。
+      ck();
+      if (v.boss !== undefined) {
+        fail(sid + '/' + kind + '.boss 又出现了 —— 首领说明第 19 轮撤掉了，'
+          + '生成器不该再产出这个字段');
+      }
     });
     ck();
     if (nT === 0) stat.tNoTalents++;
@@ -599,10 +615,11 @@ function report() {
   console.log('场景 / 说明 ' + stat.tScen + ' 套方案带场景码（同时属于多个场景的 '
     + stat.tScenMulti + '），出手顺序 ' + stat.prio + ' 条 / ' + stat.prioViews
     + ' 个视角（带场景 ' + stat.nScen + '），首领·副本说明 ' + stat.boss + ' 条 / '
-    + stat.bossViews + ' 个视角');
-  console.log('技能名     ' + stat.zhNotes + ' / ' + stat.allNotes + ' 条说明里有汉字（'
-    + Math.round(stat.zhNotes / (stat.allNotes || 1) * 100) + '%，门槛 70%）'
-    + ' —— 技能 / 天赋名换成官方中文，句子留英文原文');
+    + stat.bossViews + ' 个视角（第 19 轮撤了，这两个数应该都是 0）');
+  console.log('中文化     汉字占 ' + Math.round(stat.cjk / ((stat.cjk + stat.latin) || 1) * 100)
+    + '%（' + stat.cjk + ' 汉字 / ' + stat.latin + ' 拉丁，门槛 22%），'
+    + stat.zhNotes + '/' + stat.allNotes + ' 条含汉字'
+    + ' —— 技能名换官方中文，句子按规则表整句直译，没命中的留英文');
   console.log('检查项     ' + checks);
 
   if (warns.length) {

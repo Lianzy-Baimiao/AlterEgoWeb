@@ -73,6 +73,7 @@ $dropFromPkg = @(
     'tools\.icon-cache.json',    # 57 KB of wowhead query results, dev-only
     'tools\.talent-names.json',  # 271 KB of DB2 zhCN join results, dev-only
     'tools\.talent-icon-fix.json', # bad-icon-name -> real-name table, build-time only
+    'tools\.maxroll-spell-ids.json', # which spell IDs fetch-maxroll.js needs looked up; a byproduct
     'tools\dom-stub.js',         # test harness
     'tools\run-tests.js',        # test harness
     'tools\mutate-a11y.js',     # mutation suite for the a11y assertions; needs run-tests.js

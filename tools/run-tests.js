@@ -73,7 +73,10 @@ function load(f) {
 // 视角在测试里从来没被画过，而套件照样全绿（渲染次数 163 一个都没涨）——
 // 又一次「跳过报成通过」。数字没动就是没跑，这条读数救了一次。
 ['app/bis-data.js', 'app/talent-data.js', 'app/talent-tree.js',
- 'app/item-icons.js', 'app/rio-data.js', 'app/maxroll-data.js'].forEach(function (f) {
+ 'app/item-icons.js', 'app/rio-data.js', 'app/maxroll-data.js',
+ // 天赋说明（第 19 轮）。**必须显式加载** —— 它在浏览器里是懒加载的，
+ // 不加载的话「悬停提示带说明」那条断言会一次都跑不到，然后报「通过」。
+ 'app/talent-desc.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f + '（先跑对应的 tools\\gen-*.js / fetch-*.js）');
 });
 var haveScan = load('data/data.js');
@@ -164,6 +167,8 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
               trenders: 0, tdup: 0, tnoId: 0, tgeo: 0, tSpill: 0, tOverlap: 0, thero: 0, theroEn: 0,
               tico: 0, tnoIco: 0, ticoBad: 0, ticoNoCls: 0, ticoMismatch: 0, ticoPair: 0,
+              // 第 19 轮：天赋节点的悬停提示里带「这个天赋原本的说明」
+              tDesc: 0, tDescBad: 0, tDescNo: 0,
               ticoLazy: 0, ticoEager: 0,
               tmaxCol: 0, tmaxRow: 0, tCluster: 0,
               // 天赋导入串。loSpecs 是**去重后的专精数**，loRenders 是渲染次数 ——
@@ -912,10 +917,13 @@ function mrTalentTruth(specId) {
   var out = [];
   ['mplus', 'raid'].forEach(function (k) {
     var v = sp.views[k];
-    // prio / boss 也带上：它们挂在**视角**上，不在单套方案里，而面板要按当前
-    // 类型画对应那一份。不带的话「换类型之后说明也跟着换」就没法验。
+    // prio 也带上：它挂在**视角**上，不在单套方案里，而面板要按当前类型画
+    // 对应那一份。不带的话「换类型之后出手顺序也跟着换」就没法验。
+    // boss 原样透传（**不套 `|| []`**）：第 19 轮撤掉那一块之后，产物里就不该
+    // 再有这个字段，下面 checkMrTalents 靠 `kind.boss` 是不是 undefined 判。
+    // 套了 `|| []` 会把「字段没了」变成「有个空数组」，那条断言就永远报红。
     if (v && v.talents && v.talents.length) {
-      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });
+      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss });
     }
   });
   return out.length ? out : null;
@@ -1029,6 +1037,9 @@ function mrDeclaredOk(t, d) {
  */
 function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
   scenEls, prioBox, bossBox) {
+  // bossBox 还在参数表里，但下面**只用它来断言「这一块必须没有」** ——
+  // 「各首领 / 副本说明」第 19 轮撤掉了（用户：这个数据没用，没人看），
+  // 生成器也不再产出 boss 字段。留这个参数是为了钉住「撤掉了就不许再画出来」。
   var truth = mrTalentTruth(specId);
   if (!truth) {
     // 没方案（实测 3 个专精：战士武器、德鲁伊平衡、武僧织雾，它们的串全解不开）
@@ -1364,7 +1375,11 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
   // 「没有就不许画」这一半同样重要 —— 画一个空的 <details> 会让人以为
   // maxroll 没写，而其实是面板取错了字段。
   checkNoteBlock(label, '出手顺序', prioBox, kind.prio || [], 'mrtPrio');
-  checkNoteBlock(label, '各首领/副本说明', bossBox, kind.boss || [], 'mrtBoss');
+  // 撤掉的那一块：画出来就是错的。产物里也不该再有 boss 字段。
+  if (bossBox) loNote('mr 首领说明没撤干净', label + ' 还画着「各首领 / 副本说明」，'
+    + '那一块第 19 轮撤掉了');
+  if (kind.boss) loNote('mr 产物还带 boss', label + ' 产物里还有 boss 字段（'
+    + (kind.boss.length || 0) + ' 条）—— 生成器该停掉了');
 }
 
 /**
@@ -1561,6 +1576,32 @@ function checkTalents(label, specId) {
       if (!nid) { stats.tnoId++; }
       else if (seen[nid]) { dup++; stats.tdup++; }
       else seen[nid] = 1;
+      // ---- 悬停提示里的「天赋原本说明」（第 19 轮用户要的）----
+      //
+      // 判据是**逐字节等于 app/talent-desc.js 里那一条**，不是「有汉字就算」：
+      // 说明取错了 entry（二选一节点两条说明摆反）用「有汉字」是查不出来的，
+      // 而那正是最容易发生、又最看不出来的错 —— 界面上两段都是通顺的中文。
+      var upD = TREE && TREE.nodes ? TREE.nodes[nid] : null;
+      var DESC = g.AE_TALENT_DESC;
+      if (upD && DESC && DESC.desc) {
+        var tipTxt = n.attrs['data-tip'] || '';
+        (upD[5] || []).forEach(function (e) {
+          var want = DESC.desc[e[3]];
+          if (!want) { stats.tDescNo++; return; }
+          // 面板把说明按行缩进两格挂在名字下面，所以按行找。
+          var lines = want.split('\n').filter(Boolean).map(function (l) { return '　　' + l; });
+          var ok = lines.every(function (l) { return tipTxt.indexOf(l) >= 0; });
+          if (ok) stats.tDesc++;
+          else {
+            stats.tDescBad++;
+            if (stats.tDescBad < 4) {
+              problems.push(label + ' 节点 ' + nid + ' 的提示里没有这个天赋的说明'
+                + '（spellId ' + e[3] + '，产物里 ' + want.length + ' 字）'
+                + ' —— 说明是原样挂上去的，不许加工');
+            }
+          }
+        });
+      }
       // 节点上必须有中文名。图标是认天赋的主要手段，但名字是唯一的**文字**信息，
       // 读屏软件和「图挂了」的情况都只剩它。
       var nm = null, ico = null;
@@ -2192,6 +2233,16 @@ if (stats.ticoBad > 0) problems.push(stats.ticoBad + ' 个天赋图标 src 不�
 // 图文不符一个都不允许。并且要求反查真的跑过足够多次 ——
 // 如果 wantIco 永远是空（比如 TREE.names 取不到），上面那条会一直是 0，
 // 看起来像「全对」，实际上一次都没比。本机实测能配上名字的节点 4304 中的大部分。
+// 天赋说明（第 19 轮）。**下界必须有** —— app/talent-desc.js 丢了、或者
+// renderTreeGrid 那几行被删掉，提示里就只剩名字，而上面每条断言都照样通过。
+if (stats.tDesc < 5000) {
+  problems.push('天赋说明只逐条核对过 ' + stats.tDesc + ' 次，太少'
+    + '（产物 app/talent-desc.js 里 3242 条，345 棵树画下来该有上万次）'
+    + ' —— 要么那份文件没加载，要么提示里没挂说明');
+}
+if (stats.tDescBad > 0) {
+  problems.push(stats.tDescBad + ' 个节点的提示里，天赋说明和产物对不上');
+}
 if (stats.ticoPair < 3000) {
   problems.push('图文配对只查了 ' + stats.ticoPair + ' 次，太少（反查没真跑）');
 }
@@ -2240,7 +2291,9 @@ console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精�
   + '，方块 ' + stats.tgeo + '（重叠 ' + stats.tOverlap + '，超出 ' + stats.tSpill + '）'
   + '，方块尺寸 ' + NODE_BOX.w + '×' + NODE_BOX.h + '（读自 style.css）'
   + '，最大 ' + stats.tmaxCol + ' 列 × ' + stats.tmaxRow + ' 行，聚类越界 '
-  + stats.tCluster + '）');
+  + stats.tCluster
+  + '，天赋说明逐条对过 ' + stats.tDesc + ' 次（对不上 ' + stats.tDescBad
+  + '，产物里没这条的 ' + stats.tDescNo + '））');
 
 // ---- 天赋导入串（rio 的 talentLoadoutText，照原样显示 / 复制）
 // 这一组必须有自己的下界，而且必须**打印出来**。上一版我把计数器加好了、
@@ -2452,12 +2505,10 @@ if (stats.mrtScenSeen < 10) {
 }
 if (stats.mrtPrio < 50) {
   problems.push('出手顺序只逐条对过 ' + stats.mrtPrio + ' 行，太少'
-    + '（产物里 183 条）—— 那一块没画，或者正文被加工过');
+    + '（产物里 185 条）—— 那一块没画，或者正文被加工过');
 }
-if (stats.mrtBoss < 50) {
-  problems.push('各首领 / 副本说明只逐条对过 ' + stats.mrtBoss + ' 行，太少'
-    + '（产物里 252 条）—— 那一块没画，或者正文被加工过');
-}
+// 「各首领 / 副本说明」第 19 轮撤了，所以这里不再有下界 —— 反过来钉住
+// 「撤掉了就不许再冒出来」：见 checkMrTalents 里那两条 loNote。
 
 // ---- 换专精之后会不会落在「别人的第 6 套」上（第 16 轮友好度修复）
 //
@@ -2560,8 +2611,8 @@ console.log(pad('　页面顺序') + 'raider.io 在 maxroll 上面 ' + stats.ord
 // 既不打印也没下界」在这个仓库出过一次，那次整块功能从没被画过而套件全绿。
 console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通过')
   + '（场景标签 ' + stats.mrtScen + ' 个（字与 class 不符 ' + stats.mrtScenBad
-  + '），出手顺序逐条对过 ' + stats.mrtPrio + ' 行，各首领 / 副本说明 '
-  + stats.mrtBoss + ' 行　正文与产物逐字节相同，面板不加工）');
+  + '），出手顺序逐条对过 ' + stats.mrtPrio + ' 行'
+  + '　正文与产物逐字节相同，面板不加工；首领说明已撤，画出来就报错）');
 console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked ? '通过' : '有问题')
   + '（' + stats.posChecked + ' 个专精上真点了一下：滚动位置保住 ' + stats.posScroll
   + '，折叠块展开状态保住 ' + stats.posSec + '）');

@@ -247,9 +247,9 @@ var MUTANTS = [
 
   // 去重那条有没有牙：真值里塞一条重复的串，产物层面那条必须报出来。
   textMutant('真值里塞一条重复的串（证明去重断言在看）', RUNNER,
-    'out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });',
+    'out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss });',
     'out.push({ kind: k, list: v.talents.concat([v.talents[0]]), '
-      + 'prio: v.prio || [], boss: v.boss || [] });',
+      + 'prio: v.prio || [], boss: v.boss });',
     '去重没生效'),
 
   // 三个计数器的下界：不真去点 / 不真去比的话它们在测试里等于不存在。
@@ -327,19 +327,22 @@ var MUTANTS = [
     "    var pr = renderMrNotes(null, 'mr-prio', '出手顺序',",
     '出手顺序只逐条对过 0 行'),
 
-  // 各首领 / 副本说明整块不画。这是三块里数据最全的（252 条 / 71 篇）。
-  textMutant('各首领 / 副本说明整块不画', BIS,
-    "    var bs = renderMrNotes(pick.v.boss, 'mr-boss',",
-    "    var bs = renderMrNotes(null, 'mr-boss',",
-    '各首领 / 副本说明只逐条对过 0 行'),
+  // 「各首领 / 副本说明整块不画」这条第 19 轮**删掉了** —— 那一块本身撤了
+  // （用户：这个数据没用，没人看），生成器也不再产出 boss 字段。
+  // 反方向的守卫改在别处：run-tests.js 的 checkMrTalents 里有两条 loNote
+  // （画出来就报 / 产物里还有这个字段就报），下面「撤掉的那一块又冒出来」验它。
 
-  // 两块取反了：出手顺序那一块画的是首领说明。**界面完全自洽** ——
-  // 标题写「出手顺序」，下面是一堆首领名 + 正文，条数也对得上自己。
-  // 只有「逐行正文 == 产物里那一块」抓得到。
-  textMutant('出手顺序和首领说明取反了', BIS,
+  // 「出手顺序和首领说明取反」这条也删了：产物里已经没有 boss 可取反了。
+  // 出手顺序那一块取错字段的守卫仍在（逐行正文 == 产物），
+  // 由下面「说明正文被截断」和「真值里把出手顺序清空」两条盯着。
+
+  // 撤掉的那一块又冒出来。这是**撤掉一个功能之后唯一要防的事** ——
+  // 哪天有人照着旧代码把它加回来，界面上多一块没人看的东西，而所有断言都通过。
+  textMutant('把撤掉的「各首领说明」加回来', BIS,
     "    var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',",
-    "    var pr = renderMrNotes(pick.v.boss, 'mr-prio', '出手顺序',",
-    '正文和产物不一致'),
+    "    host.appendChild(el('details', 'sec mr-boss'));\n"
+      + "    var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',",
+    '第 19 轮撤掉了'),
 
   // 正文截断。截断是「自作聪明」里最容易发生的一种（怕太长），
   // 而截断之后那句话的后半截意思可能整个反过来（「除非…」都在后半句）。
@@ -362,7 +365,7 @@ var MUTANTS = [
     '    if (false) stats.mrtScenSeen++;',
     '次渲染画出了场景标签，太少'),
 
-  textMutant('说明正文一行都不对（证明 mrtPrio / mrtBoss 下界不是空的）', RUNNER,
+  textMutant('出手顺序一行都不对（证明 mrtPrio 下界不是空的）', RUNNER,
     '  if (!bad) stats[statKey] += rows.length;',
     '  if (false) stats[statKey] += rows.length;',
     '出手顺序只逐条对过 0 行'),
@@ -370,8 +373,8 @@ var MUTANTS = [
   // 产物层面：真值里把 prio 清空，面板那一块就该报「产物里没有却画了」。
   // 这一条证明「产物有就必须画」和「产物没有就不许画」两个方向都在看。
   textMutant('真值里把出手顺序清空（证明「没有就不许画」在看）', RUNNER,
-    "      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });",
-    "      out.push({ kind: k, list: v.talents, prio: [], boss: v.boss || [] });",
+    "      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss });",
+    "      out.push({ kind: k, list: v.talents, prio: [], boss: v.boss });",
     '产物里没有出手顺序，界面却画了这一块'),
 
   // ---- 第 19 轮：技能名换成官方中文（句子留英文） ----
@@ -384,21 +387,53 @@ var MUTANTS = [
   genMutant('技能名不换中文（产物退回全英文）',
     '      var t = stripRich(substSpells(ih));',
     '      var t = stripRich(ih);',
-    '技能名没换成中文'),
+    '汉字只占'),
 
   // 替换放在 stripRich **之后**。那时标签连 data-wow-id 一起被扒掉了，
   // 正则一个都匹配不上 —— 效果等于不替换，但看代码像是做了。
   genMutant('替换放在 stripRich 之后（顺序颠倒，等于没替换）',
     '      var t = stripRich(substSpells(ih));',
     '      var t = substSpells(stripRich(ih));',
-    '技能名没换成中文'),
+    '汉字只占'),
 
   // 分页容器那条路去掉。防护骑 / 织雾僧的出手顺序会退回「只有分页标签」的
   // 假条目（「铸光者 圣殿骑士」8 个字），校验器的字数下界会抓住。
   genMutant('「Priority 后面是分页容器」那条路去掉',
     '          var tabbed = tabPrio(list[idx + 1], next);',
     '          var tabbed = [];',
-    '正文太短或不是串')
+    '正文太短或不是串'),
+
+  // 整句直译关掉。产物退回「技能名中文 + 句子英文」，汉字占比从 36% 掉下来。
+  // 这一条和上面两条一起，把「中文化」那个占比门槛的两个方向都验了：
+  // 名字没换 → 掉到 10.7%；句子没翻 → 也掉。
+  genMutant('出手顺序不做整句直译',
+    '  return TRANS.translate(s, transStat);',
+    '  return s;',
+    '汉字只占'),
+
+  // ---- 第 19 轮：天赋节点的悬停提示里带「天赋原本说明」 ----
+
+  // 说明整个不挂。**界面上看不出任何异常** —— 节点还是图标 + 名字 + 点数，
+  // 提示还是有内容（名字、二选一、点数要求）。只有「提示里逐字节含产物那一条」
+  // 能抓，而那条断言的下界（tDesc >= 5000）就是为这一刻准备的。
+  textMutant('天赋说明不挂到提示上', BIS,
+    '        var d = talentDesc(e[3]);',
+    '        var d = null;',
+    '天赋说明只逐条核对过'),
+
+  // 取错 entry：二选一节点上，两条说明会摆反。**这是最看不出来的错** ——
+  // 两段都是通顺的中文，只是挂在了对方名字下面。用「有汉字就算过」的判据
+  // 一定抓不到，只有逐字节对产物才行。
+  textMutant('天赋说明取第一个 entry 的（二选一节点会摆反）', BIS,
+    '        var d = talentDesc(e[3]);',
+    '        var d = talentDesc((n[5] || [])[0] && (n[5] || [])[0][3]);',
+    '的提示里没有这个天赋的说明'),
+
+  // 说明被截断。和「说明正文被截断」同一类自作聪明（怕提示太长）。
+  textMutant('天赋说明被截断', BIS,
+    "            if (ln) tip.push('　　' + ln);",
+    "            if (ln) tip.push('　　' + ln.slice(0, 20));",
+    '的提示里没有这个天赋的说明')
 ];
 
 console.log('=== maxroll 天赋方案断言的变异测试 ===');

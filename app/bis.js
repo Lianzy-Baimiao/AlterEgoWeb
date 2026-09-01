@@ -1688,8 +1688,40 @@
         talLoading = false;
         talLoaded = true;
         done();
+        // 天赋说明文字（app/talent-desc.js，约 506 KB）**在树画完之后才拉**：
+        // 它只喂悬停提示，不影响任何布局，所以不该让树多等它半秒。
+        // 拉到了重画一次，提示里就有说明了；拉不到就一直只有名字。
+        ensureTalentDesc();
       });
     });
+  }
+
+  /**
+   * 天赋说明文字。挂在天赋树每个节点的悬停提示上（见 renderTreeGrid）。
+   *
+   * 单独一个文件、单独一次懒加载，理由是它**纯粹是锦上添花**：
+   * 506 KB 只为了鼠标停下来那一刻多几行字。跟 talent-tree.js 绑在一起加载的话，
+   * 天赋页第一次打开要多等它 —— 而树本身不需要它就能画。
+   */
+  var descLoading = false, descLoaded = false;
+  function ensureTalentDesc() {
+    if (descLoaded || descLoading) return;
+    if (global.AE_TALENT_DESC) { descLoaded = true; return; }
+    descLoading = true;
+    loadDataFile('talent-desc.js', 'AE_TALENT_DESC', function () {
+      descLoading = false;
+      descLoaded = true;
+      // 拉到了就重画，让已经画出来的那些节点也带上说明。
+      // 拉不到也走这条 —— render() 是幂等的，而且提示里少一段说明不算错。
+      if (global.AE_TALENT_DESC) render();
+    });
+  }
+
+  /** 一个 entry 的说明文字，没有就返回空串（**不猜、不兜底**）。 */
+  function talentDesc(spellId) {
+    if (!spellId) return '';
+    var D = global.AE_TALENT_DESC;
+    return (D && D.desc && D.desc[spellId]) || '';
   }
 
   var TCAT = [['raid', '团本'], ['mplusHigh', '冲分'], ['mplusFarm', '割草']];
@@ -2079,17 +2111,13 @@
         '这一套没有导入串（生成时串头改写失败）—— 树还是能看的。'));
     }
 
-    // 出手顺序（优先级列表）和每个首领 / 副本的说明。技能名是中文、句子是英文，
-    // 见 renderMrNotes 的注释。
+    // 出手顺序（优先级列表）。见 renderMrNotes 的注释。
+    //
+    // 「各首领 / 副本说明」第 19 轮**撤掉了**（用户：「这个数据没用，没人看」）。
+    // 生成器也不再产出 boss 字段，所以这里没有兜底分支可写 —— 产物里就没有了。
     var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',
       'maxroll 指南里的 Priority List —— 就是「技能时间轴」的文字版。');
     if (pr) host.appendChild(pr);
-    var bs = renderMrNotes(pick.v.boss, 'mr-boss',
-      pick.kind === 'mplus' ? '各副本说明' : '各首领说明',
-      pick.kind === 'mplus'
-        ? 'maxroll 按副本给的注意事项。'
-        : 'maxroll 按首领给的注意事项 —— 团本里每个首领的打法差别就在这。');
-    if (bs) host.appendChild(bs);
   }
 
   /**
@@ -2755,8 +2783,22 @@
       if (maxR > 1) b.appendChild(el('span', 'r', (hit ? hit.rank : 0) + '/' + maxR));
 
       var tip = [];
+      // 每个 entry 一行：名字 +（有的话）**这个天赋原本的说明**。
+      // 说明来自 app/talent-desc.js（第 19 轮用户要的「天赋图标，鼠标指向的提示，
+      // 能不能显示天赋原本说明」），键是 entry 的 spellId。
+      // 那份文件是**懒加载**的：没加载到就只有名字，不报错也不占位 ——
+      // 悬停提示少一段说明，功能不受影响。
       (n[5] || []).forEach(function (e) {
-        tip.push((hit && e[0] === hit.eid ? '▸ ' : '· ') + (TR.names[e[1]] || '?'));
+        var sel = hit && e[0] === hit.eid;
+        tip.push((sel ? '▸ ' : '· ') + (TR.names[e[1]] || '?'));
+        var d = talentDesc(e[3]);
+        if (d) {
+          // 说明本身可能有换行（主效果 + 一句补充）。缩进两格挂在名字下面，
+          // 二选一节点有两段说明时才分得清哪段是哪个。
+          d.split('\n').forEach(function (ln) {
+            if (ln) tip.push('　　' + ln);
+          });
+        }
       });
       if (type === 'choice') tip.push('（二选一）');
       if (n[4]) tip.push('本树满 ' + n[4] + ' 点才能点');
