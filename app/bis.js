@@ -1977,6 +1977,18 @@
       + (pick.kind === 'mplus' ? '大秘境指南' : '团本指南')
       + ' 共 ' + pick.list.length + ' 套');
 
+    // **raider.io 那一块放在最上面**（用户第 18 轮定的）。
+    //
+    // 它和下面 maxroll 那一整块**不是同一套天赋**，也不是同一个问题的答案：
+    // 这块是榜上最多人用的串（验证过能导入，来自能进排行榜的真实角色），
+    // 下面那块是 maxroll 编辑推荐的方案。放最上面是因为「照抄一套能用的」
+    // 是最常见的来意，而它自成一块、不依赖下面选了哪套方案。
+    //
+    // 位置换了但内容一字没改 —— 尤其是「这不是上面那套的可导入版本」那句话
+    // 还在（见 renderLoadouts）：两块相邻时更容易被读成同一套，那句必须留着。
+    var lo = renderLoadouts(s);
+    if (lo) host.appendChild(lo);
+
     // 团本 / 大秘境。只有一种时也画出来 —— 少一个按钮比「为什么没有团本」好解释。
     var bar = el('div', 'bis-bar');
     var seg = el('span', 'seg');
@@ -2093,10 +2105,6 @@
         ? 'maxroll 按副本给的注意事项。'
         : 'maxroll 按首领给的注意事项 —— 团本里每个首领的打法差别就在这。');
     if (bs) host.appendChild(bs);
-
-    // raider.io 的官方串放在后面：它是**验证过能导入**的那一批。
-    var lo = renderLoadouts(s);
-    if (lo) host.appendChild(lo);
   }
 
   /**
@@ -2273,10 +2281,16 @@
       var n = TR.nodes[id];
       return n && (!sub || n[6] === sub);
     });
+    // **英雄天赋排在最前面**（用户第 18 轮定的）。游戏里三棵树是职业 → 专精 →
+    // 英雄，但这个面板不是拿来照着点的：英雄天赋是「这套方案是哪一套」的标识
+    // （方案列表上的徽章、上面那个选择条、名字里的区分后缀都是它），
+    // 而职业树 / 专精树在同一个专精的十套方案之间差别很小。
+    // 先给最能区分的那棵，长的两棵往后放。插件那条路同样调了顺序，
+    // 两条路的形状必须一致，否则退到插件那份时整页会换个样子。
     var cols = el('div', 'tree-cols');
-    [[sp.classNodes, '职业天赋'],
-     [sp.specNodes, '专精天赋'],
-     [heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')]
+    [[heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
+     [sp.classNodes, '职业天赋'],
+     [sp.specNodes, '专精天赋']
     ].forEach(function (g) {
       var grid = renderTreeGrid(sp, g[0] || [], out.nr, g[1]);
       if (grid) cols.appendChild(grid);
@@ -2340,6 +2354,13 @@
       host.appendChild(why);
     }
 
+    // **raider.io 那一块在这条路上也放最上面**（位置和 maxroll 路对齐）。
+    // 它不依赖 maxroll，而是从数据包独立解出来的 —— 在这条路上说明
+    // 「maxroll 没方案，但你可以抄别的能用的」。上面那段解释已经说了
+    // 「这页和别的专精长得不一样」，把两条路形状统一能减少困惑。
+    var lo = renderLoadouts(s);
+    if (lo) host.appendChild(lo);
+
     var bar = el('div', 'bis-bar');
     var seg = el('span', 'seg');
     TCAT.forEach(function (c) {
@@ -2357,10 +2378,6 @@
 
     if (tree()) host.appendChild(renderTree(td));
     else host.appendChild(renderTreeMissing());
-
-    // 官方导入串。放在树后面、统计前面 —— 看完树才会想「怎么弄到我号上」。
-    var lo = renderLoadouts(s);
-    if (lo) host.appendChild(lo);
 
     host.appendChild(renderBuildStats(td));
     host.appendChild(renderEncounters(T, td));
@@ -2809,9 +2826,10 @@
       var n = TR.nodes[id];
       return n && (!sub || n[6] === sub);
     });
-    [[sp.classNodes, '职业天赋'],
-     [sp.specNodes, '专精天赋'],
-     [heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')]
+    // 顺序和 maxroll 那条路一致：英雄天赋在最前。理由见 renderMrTree 的同一处。
+    [[heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
+     [sp.classNodes, '职业天赋'],
+     [sp.specNodes, '专精天赋']
     ].forEach(function (g) {
       var grid = renderTreeGrid(sp, g[0] || [], nr, g[1]);
       if (grid) cols.appendChild(grid);

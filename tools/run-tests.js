@@ -184,6 +184,8 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明
               mrtScen: 0, mrtScenSeen: 0, mrtScenBad: 0, mrtPrio: 0, mrtBoss: 0,
               // 点一下之后位置有没有丢（滚动 / 折叠块展开状态）
+              // 第 18 轮：块顺序（rio 在上）/ 树列顺序（英雄在前）
+              ordChecked: 0, ordRio: 0, ordCols: 0, ordHero: 0,
               posChecked: 0, posScroll: 0, posSec: 0, mrtKindSaved: 0,
               switchChecked: 0, switchReset: 0,
               // 视角迁移（第 16 轮撤掉 GearInsight 那两个视角）
@@ -1496,17 +1498,31 @@ function checkTalents(label, specId) {
   var mrBoxes = [], mrNotes = [], mrBtns = [], mrSubBtns = 0, mrLit = {}, taVals = [];
   // 第 16 轮：场景标签（可选）、出手顺序、各首领/副本说明
   var mrScen = [], mrPrio = null, mrBoss = null;
+  // 第 18 轮定的顺序：raider.io 那一块在最上面，maxroll 在下面；maxroll 里面
+  // 英雄天赋那一列在最前。**顺序是用户明确要求的东西，所以要有断言钉住** ——
+  // 光有「这些块都画出来了」的断言，把 appendChild 挪个位置照样全绿。
+  // walk() 是深度优先前序，所以 push 的次序就是文档次序。
+  var order = [], colOrder = [];
   walk(body, function (n) {
     checkA11y(n, label);
     if (n.tagName === 'TEXTAREA' || n.tagName === 'INPUT') taVals.push(n.value);
     if (!n.classList) return;
     if (n.classList.contains('tree-canvas')) canvases.push(n);
-    if (n.classList.contains('bis-loadout')) loBoxes.push(n);
+    if (n.classList.contains('bis-loadout')) { loBoxes.push(n); order.push('rio'); }
+    if (n.classList.contains('mr-builds')) order.push('maxroll');
+    // 树列的表头。第一个子元素是 <b>，里面是「英雄天赋：…」/「职业天赋」/「专精天赋」。
+    if (n.classList.contains('tree-grid-head')) {
+      var hb = n.children[0];
+      if (hb && hb.textContent) colOrder.push(hb.textContent.split('：')[0]);
+    }
     if (n.classList.contains('lo-text')) loTexts.push(n);
     if (n.classList.contains('lo-copy')) loCopies.push(n);
     if (n.classList.contains('lo-pick')) loPicks += n.children.length;
     if (n.classList.contains('mr-builds')) mrBoxes.push(n);
     if (n.classList.contains('mr-nostr')) mrNotes.push(n);
+    // 注意：order 里 'maxroll' 是在上面那个 bis-loadout 分支旁边 push 的，
+    // 和这里分开写 —— 两个 if 都命中同一个节点是不可能的（类名互斥），
+    // 但放在一起会让「谁先 push」依赖于 if 的书写顺序，而不是文档顺序。
     if (n.classList.contains('mrb')) mrBtns.push(n);
     if (n.classList.contains('scen')) mrScen.push(n);
     // 两块说明：按 class 认，各只该有一个（<details>）。
@@ -1646,6 +1662,27 @@ function checkTalents(label, specId) {
   checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks);
   checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals,
     mrScen, mrPrio, mrBoss);
+
+  // ---- 第 18 轮的顺序。两条断言，各自有独立的失败方式。
+  //
+  // ① raider.io 在 maxroll 上面。只在**两块都画了**的时候判 ——
+  //    插件那条路上 maxroll 那块压根不存在，拿「rio 必须是第 0 个」去判会
+  //    把它误报（那条路上 rio 前面还有一段解释文字，但那不是这两块之一）。
+  if (order.indexOf('rio') >= 0 && order.indexOf('maxroll') >= 0) {
+    stats.ordChecked++;
+    if (order.indexOf('rio') > order.indexOf('maxroll')) {
+      loNote('顺序 rio', label + ' raider.io 那一块画在 maxroll 下面了（第 18 轮定的是放最上面）');
+    } else stats.ordRio++;
+  }
+  // ② 英雄天赋那一列在最前。三棵树的表头次序必须是 英雄 → 职业 → 专精。
+  //    这一条和「画出 3 棵树」是两件事：挪个顺序那条照样过。
+  if (colOrder.length === 3) {
+    stats.ordCols++;
+    if (colOrder[0] !== '英雄天赋') {
+      loNote('顺序 英雄树', label + ' 三棵树的次序是 ' + colOrder.join(' → ')
+        + '，英雄天赋该在最前（第 18 轮定的）');
+    } else stats.ordHero++;
+  }
 
   // 一个专精应该画出三棵（职业 / 专精 / 英雄）
   if (grids !== 3) problems.push(label + ' 只画出 ' + grids + ' 棵树，应该是 3 棵');
@@ -2376,6 +2413,22 @@ if (stats.mrtSubBar !== stats.mrtBundle) {
 if (stats.mrtBundle < 10) {
   problems.push('只遇到 ' + stats.mrtBundle + ' 套「打包两条英雄天赋」的方案，太少');
 }
+// 第 18 轮的顺序：两条都是**下界 + 全等**。下界不写的话，把两块都不画
+// 会让「顺序对」恒真（一个都没比过等于全对）；全等则钉住「比过的每一次都对」。
+if (stats.ordChecked < 30) {
+  problems.push('「raider.io 在 maxroll 上面」只验过 ' + stats.ordChecked + ' 次，太少');
+}
+if (stats.ordRio !== stats.ordChecked) {
+  problems.push('验了 ' + stats.ordChecked + ' 次两块的先后，只有 ' + stats.ordRio
+    + ' 次 raider.io 在上面');
+}
+if (stats.ordCols < 30) {
+  problems.push('「英雄天赋那一列在最前」只验过 ' + stats.ordCols + ' 次，太少');
+}
+if (stats.ordHero !== stats.ordCols) {
+  problems.push('验了 ' + stats.ordCols + ' 次三棵树的次序，只有 ' + stats.ordHero
+    + ' 次英雄天赋在最前');
+}
 // 三个开关必须真被按过。不按的话它们在测试里等于不存在（state 不持久化，
 // 每次渲染都是「大秘境 第 0 套 第 0 条」）。
 // ---- 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明 ----
@@ -2494,6 +2547,10 @@ console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
   + '，导入串可用（版本 2 / hash 全 0 / specID 对 / 节点位未变）' + stats.mrtGameOk
   + '，真点过：换方案 ' + stats.mrtBuildSw + '、换英雄树 ' + stats.mrtSubSw
   + '、换类型 ' + stats.mrtKindSw + '）');
+// 单独一行：第 18 轮定的顺序。打印出来才看得见「验过几次」——
+// 不打印的话下界失效时没人会注意到数字变成了 0。
+console.log(pad('　页面顺序') + 'raider.io 在 maxroll 上面 ' + stats.ordRio + '/' + stats.ordChecked
+  + '，英雄天赋列在最前 ' + stats.ordHero + '/' + stats.ordCols);
 // 单独一行：第 16 轮加的三块。**必须打印** —— 「加了计数器、写了断言、
 // 既不打印也没下界」在这个仓库出过一次，那次整块功能从没被画过而套件全绿。
 console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通过')
