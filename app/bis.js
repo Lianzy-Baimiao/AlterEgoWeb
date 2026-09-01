@@ -597,13 +597,34 @@
     return (ch && ch.ilvl && ch.ilvl.value) || 0;
   }
 
-  function currentChar() {
+  /**
+   * 对照哪个角色。**职业对不上就当没选**（返回 null）。
+   *
+   * 为什么不是「照算 + 给个警告」（上一版就是）：bisChar 是持久化的，
+   * 选完死骑再切到法师专精，整页会拿死骑的装备去比法师的毕业表 ——
+   * 「对上 0 件 / 差 13 件」，再加一行跨护甲类型算出来的「装等差距」。
+   * 那几个数字没有任何意义，但它们和真数字长得一模一样、位置一样显眼，
+   * 而警告只有一行、在最下面。一个错到没意义的数比不给数更糟。
+   *
+   * 下拉里那个角色**仍然列着**（带 ≠ 标记），选中状态也还在 —— 切回他自己的
+   * 职业就自动恢复。这里只是不把他喂给对照逻辑。
+   */
+  /** 下拉里选中的那个角色，**不看职业**。界面上要说「他是法师」时用这个。 */
+  function pickedChar() {
     if (!state.charKey) return null;
     var list = characters();
     for (var i = 0; i < list.length; i++) {
       if (list[i].key === state.charKey) return list[i];
     }
     return null;
+  }
+
+  function currentChar() {
+    var found = pickedChar();
+    if (!found) return null;
+    var s = currentSpec();
+    if (s && found.classFile !== s.cls) return null;
+    return found;
   }
 
   /** slotId -> 角色身上那件的 {itemId, name, itemLevel, quality}，没有就 null。 */
@@ -986,12 +1007,24 @@
     });
     host.appendChild(list);
 
+    // 选了个别的职业的角色：currentChar() 已经把他挡在对照之外（见那里的说明），
+    // 所以这里 ch 是 null，上面一件都没比。**必须说出来**，不然界面上只是
+    // 「对照角色」下拉里挂着一个名字、而所有对照痕迹凭空消失，看着像功能坏了。
+    var picked = pickedChar();
+    if (!ch && picked) {
+      var mm = el('p', 'bis-sum');
+      mm.appendChild(el('b', null, picked.name));
+      mm.appendChild(el('b', 'warn', '　是' + L.classLabel(picked.classFile, settings().learnedClassNames)
+        + '，不是' + specLabel(s) + '所属职业 —— 没有拿他对照'));
+      mm.appendChild(el('span', 'note',
+        '　跨职业比装备算不出有意义的数（护甲类型和属性都不一样）。'
+        + '换个下拉里没有 ≠ 标记的角色，或者切回他自己的专精。'));
+      host.appendChild(mm);
+    }
+
     if (ch) {
       var sum = el('p', 'bis-sum');
       sum.appendChild(el('b', null, ch.name));
-      if (ch.classFile !== s.cls) {
-        sum.appendChild(el('b', 'warn', '　职业不是' + specLabel(s) + '所属职业，下面的对照只能当参考'));
-      }
       sum.appendChild(doc.createTextNode('　对上 ' + matched + ' 件，差 ' + missing + ' 件'
         + (unknown ? '，' + unknown + ' 个部位存档里没记录' : '') + '。'));
       sum.appendChild(el('span', 'note',
@@ -1042,7 +1075,7 @@
           'AlterEgo 存的装备只有名字 / 装等 / 品质 / 物品链接，没有属性字段。\n'
           + '链接里的 bonusID 理论上能推出属性，但那要一张 bonusID→属性的对照表，'
           + '本机没有 —— 猜出来的属性比不给更糟。\n'
-          + '实测拿 GearInsight 的物品池去查，身上 224 件只对上 52 件（23.2%），'
+          + '实测拿随包那份物品池去查，身上 224 件只对上 52 件（23.2%），'
           + '四分之三的部位会空着。');
         host.insertBefore(stNote, list);
         host.insertBefore(gsum, list);
@@ -1115,9 +1148,9 @@
     if (borrowed) {
       // 借来的数字必须自己说明是借来的，否则在「最佳推荐」这个标题下面，
       // 它看起来就是 maxroll 给的。
-      var from = el('span', 'note', '　这一组来自 GearInsight（顶尖玩家统计，'
-        + (kind === 'raid' ? '团本' : '大秘境') + '），不是 maxroll —— '
-        + 'maxroll 的属性优先级是正文里的文字，产物里没抓');
+      var from = el('span', 'note', '　这一组是顶尖玩家的统计值（'
+        + (kind === 'raid' ? '团本' : '大秘境') + '），不是 maxroll 给的 —— '
+        + 'maxroll 的属性优先级写在正文里，产物里没抓');
       sum.appendChild(from);
     }
 
@@ -1174,8 +1207,8 @@
     var want = top[1];
     if (!want) return null;
     var srcText = top[3] === -2
-      ? (top[9] === 'r' ? 'raider.io 榜上均值' : 'GearInsight 实测最高')
-      : (top[3] === -1 ? 'raider.io 榜上均值' : 'GearInsight 实测');
+      ? (top[9] === 'r' ? 'raider.io 榜上均值' : '顶尖玩家实测最高')
+      : (top[3] === -1 ? 'raider.io 榜上均值' : '顶尖玩家实测');
     return { d: Math.round(want - mine.itemLevel), mine: mine.itemLevel, want: want, srcText: srcText };
   }
 
@@ -1365,15 +1398,15 @@
         sub.setAttribute('data-tip', ivSrc === 'r'
           ? '装等 ' + ilvl + '：maxroll 不给装等，这是 raider.io 榜上玩家'
             + '穿这件时的「平均」装等'
-          : '装等 ' + ilvl + '：maxroll 不给装等，这是 GearInsight 记录的'
-            + '顶尖玩家身上这件的「最高」装等'
+          : '装等 ' + ilvl + '：maxroll 不给装等，这是顶尖玩家身上'
+            + '这件的「最高」装等'
             + (mx && mx > ilvl ? '，还能升到 ' + mx : ''));
       }
       main.appendChild(sub);
     } else if (isMr) {
       var noiv = el('span', 'sub2 iv-none', '装等 ?');
       noiv.setAttribute('data-tip',
-        'maxroll 不给装等，而这一件在 GearInsight 和 raider.io 两份实测数据里都没出现'
+        'maxroll 不给装等，而这一件在本机两份实测数据里都没出现'
         + '（实测 1358 次引用里有 6 次这样）—— 所以这里不填，不猜一个数字上去');
       main.appendChild(noiv);
     }
@@ -1383,7 +1416,7 @@
       var tb = el('span', 'tag trk', tl);
       tb.setAttribute('data-tip', '升级轨道，从装备的 bonusID 解出来的\n'
         + '（' + tl + ' = 这条轨道的第 ' + (trk % 10) + ' 级，满级 6 级）'
-        + (isMr ? '\nmaxroll 不给轨道，这一条和左边的装等是同一次测量（GearInsight）' : ''));
+        + (isMr ? '\nmaxroll 不给轨道，这一条和左边的装等出自同一次测量' : ''));
       main.appendChild(tb);
     }
 
@@ -1633,8 +1666,8 @@
     }
 
     p.appendChild(doc.createTextNode(
-      '数据来自 GearInsight 插件自带的参照表（' + (B.source || '未知来源') + '），'
-      + '统计日期 ' + (B.updatedAt || '?') + '，插件版本 ' + (B.addonVersion || '?') + '。'));
+      '随包的静态参照表（' + (B.source || '未知来源') + '），'
+      + '统计日期 ' + (B.updatedAt || '?') + '，表版本 ' + (B.addonVersion || '?') + '。'));
     p.appendChild(el('br'));
     p.appendChild(doc.createTextNode(
       '这是「顶尖玩家实际在用什么」的统计，不是模拟器算出来的理论最优。'
@@ -2156,13 +2189,13 @@
     //     他会以为自己这里坏了。
     if (!tree() || !maxroll()) {
       host.appendChild(el('p', 'note',
-        '下面是插件那份「顶尖玩家实际在用什么」的统计。maxroll 的推荐方案还在加载，'
+        '下面是「顶尖玩家实际在用什么」的统计。maxroll 的推荐方案还在加载，'
         + '到了会自动换过来。'));
     } else {
       var why = el('p', 'note');
       why.appendChild(el('b', null, 'maxroll 没有这个专精的天赋方案。'));
       why.appendChild(doc.createTextNode(
-        '下面是插件自带的「顶尖玩家实际在用什么」统计 —— 所以这一页和别的专精长得不一样,'
+        '下面是随包自带的「顶尖玩家实际在用什么」统计 —— 所以这一页和别的专精长得不一样，'
         + '不是坏了。'));
       why.setAttribute('data-tip',
         'maxroll 这个专精的指南里，天赋图是照上一版天赋树编的，解不开所以没收进来'

@@ -140,6 +140,18 @@ function walk(node, fn) {
 var B = g.AE_BIS;
 var specKeys = Object.keys(B.specs);
 var problems = [];
+/**
+ * 「这数是从哪个插件来的」在界面文案里的痕迹。见下面 checkA11y 里那段注释。
+ *
+ * 三类一起查：
+ *   · 产品名本身（GearInsight）；
+ *   · 泛称 +「参照表 / 自带 / 统计 / 数据」（「插件参照表」「插件自带的统计」）；
+ *   · 「来自插件」「插件那份」这类指代。
+ * 「插件」两个字本身不禁 —— 面板别处要告诉用户去装哪个扫描插件，那是操作说明，
+ * 不是数据出处。
+ */
+var SRC_LEAK = /GearInsight|插件(自带|那份|那条|参照表)|来自插件|插件的(统计|数据|参照表)/i;
+
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
               // rioRenders 数的是**所有**画过 rio 视角的渲染（专精循环 + 视角迁移
               // + 对照角色那三组都算），mainRio 只数专精循环那一轮。
@@ -180,8 +192,12 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               ivGi: 0, ivRio: 0, ivNone: 0, ivZero: 0,
               gapBadge: 0, gapBad: 0, gapMath: 0, gapTop: 0, gapTopBad: 0,
               gapSum: 0, gapChars: 0, gapSlots: 0,
+              // 跨职业对照（选了死骑、切到法师专精）
+              xcChecked: 0, xcNoGap: 0, xcNote: 0,
               // 无障碍
               imgLazy: 0, imgEager: 0,
+              // 来源插件的名字漏进界面（第 17 轮：只说「插件参照表」）
+              srcLeak: 0,
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
               a11yCanvas: 0, a11yCanvasBad: 0 };
 var missingFiles = {};
@@ -239,6 +255,31 @@ function checkA11y(n, label) {
       if (stats.a11yTipBad < 4) {
         problems.push(label + ' 带 data-tip 但自己没有可见文字：' + n.attrs['data-tip'].split('\n')[0]);
       }
+    }
+  }
+  // 数据是从哪个插件来的，**不许出现在界面上**（用户第 17 轮定的）。
+  // 这一条盯的是**回归**：那个名字原先散在 4 处文案里（装等来源、查不到装等、
+  // 升级轨道、属性权重借用说明）+ 脚注一句，实测 1280 次渲染下有 13 种不同的串；
+  // 改成不点名之后又剩 2 处泛称（「插件参照表」「插件自带的」）—— 泛称也算漏，
+  // 用户不关心数字是哪个插件测的，他要的是数字本身。
+  //
+  // 所以判据是 SRC_LEAK：**产品名 + 泛称一起查**。只查产品名的话，
+  // 下次写「来自插件的统计」照样过；两个都查，才逼着文案去说这数是什么，
+  // 而不是它从哪来。
+  //
+  // 只查**用户看得见的**两处：可见文字和 data-tip。源码注释里留着是对的 ——
+  // 那是给维护者看的出处说明，不是界面文案。
+  if (n.attrs['data-tip'] != null && SRC_LEAK.test(n.attrs['data-tip'])) {
+    stats.srcLeak++;
+    if (stats.srcLeak < 4) {
+      problems.push(label + ' 的 data-tip 里在说数据来自哪个插件：'
+        + n.attrs['data-tip'].split('\n')[0]);
+    }
+  }
+  if (!n.children.length && n.textContent && SRC_LEAK.test(n.textContent)) {
+    stats.srcLeak++;
+    if (stats.srcLeak < 4) {
+      problems.push(label + ' 界面文字里在说数据来自哪个插件：' + String(n.textContent).slice(0, 60));
     }
   }
   // 天赋树画布是一堆绝对定位的 div 拼出来的图。没有 role 和说明的话，
@@ -628,6 +669,72 @@ specKeys.forEach(function (key) {
       stats.gapSlots++;
     });
     stats.gapChars++;
+  });
+})();
+
+/**
+ * **跨职业对照**：选了死骑，切到法师专精。
+ *
+ * 上面那个驱动**故意挑同职业的专精**，所以这条路它一次都走不到 —— 而这正是
+ * bisChar 持久化带来的那个坑：选完一个角色再换专精，设置还在。
+ *
+ * 判据不是「有没有警告」，而是**那些没有意义的数字一个都不许画出来**：
+ * 跨护甲类型比装备，「对上 0 件 / 差 13 件」和「装等差距」都是算得出来、
+ * 长得和真数字一模一样、却没有任何含义的东西。旧版是「照算 + 最下面一行警告」，
+ * 那等于把错的数摆在显眼处、把话说在角落里。
+ *
+ * 三条一起立，少一条就能被绕过：
+ *   ① 装等差距徽章 0 个（照算的话这里会有十几个）；
+ *   ② 「对上 N 件」那句不出现（它的分母是跨职业算出来的）；
+ *   ③ 但**必须**有一句说明，而且得说出那个角色的名字 ——
+ *      静默什么都不画会让用户以为功能坏了。
+ */
+(function checkCrossClassChar() {
+  var chars = (model.characters || []).filter(function (c) {
+    return c.equipment && Object.keys(c.equipment).length >= 10
+      && c.ilvl && c.ilvl.value > 50;
+  });
+  if (!chars.length) { stats.xcChecked = 0; return; }
+
+  chars.slice(0, 8).forEach(function (c) {
+    // 找一个**别的职业**的专精 key
+    var key = null;
+    for (var i = 0; i < specKeys.length; i++) {
+      if (specKeys[i].split('/')[0] !== c.classFile) { key = specKeys[i]; break; }
+    }
+    if (!key) return;
+    settings.bisTab = 'gear';
+    settings.bisSpec = key;
+    settings.bisView = 'maxroll';
+    settings.bisChar = c.key;
+    body.children.length = 0;
+    load('app/bis.js');
+    g.AE.openBis();
+    stats.xcChecked++;
+
+    var gaps = 0, sums = [], notes = 0;
+    walk(body, function (n) {
+      if (n.classList && n.classList.contains('gap')) gaps++;
+      if (n.classList && n.classList.contains('bis-sum')) sums.push(n.textContent || '');
+    });
+    var label = '跨职业对照/' + c.name + '→' + key;
+    if (gaps) {
+      problems.push(label + ' 画了 ' + gaps + ' 个装等差距徽章 —— '
+        + '跨职业比装备算不出有意义的数，一个都不该画');
+    } else stats.xcNoGap++;
+
+    sums.forEach(function (t) {
+      if (/对上 \d+ 件/.test(t)) {
+        problems.push(label + ' 还在印「' + t.slice(0, 40) + '」—— '
+          + '那个分母是拿别的职业的装备算出来的');
+      }
+      // 说明里必须点出角色名，否则用户不知道是哪个角色被挡下了
+      if (t.indexOf(c.name) >= 0 && /不是|没有拿他对照/.test(t)) notes++;
+    });
+    if (!notes) {
+      problems.push(label + ' 一句说明都没有 —— '
+        + '对照痕迹凭空消失，用户会以为功能坏了（该说「' + c.name + ' 是XX，不是本专精所属职业」）');
+    } else stats.xcNote++;
   });
 })();
 
@@ -1853,6 +1960,19 @@ if (stats.gapChars > 0) {
   }
 }
 
+// 跨职业那一组的下界。上面三条断言都是「不许出现 X」的形式，在**一次都没跑**
+// 的情况下全部自动成立 —— 所以必须钉住「真的跑过」和「每次都给了说明」。
+if (stats.xcChecked > 0) {
+  if (stats.xcNoGap !== stats.xcChecked) {
+    problems.push('跨职业对照验了 ' + stats.xcChecked + ' 次，其中只有 ' + stats.xcNoGap
+      + ' 次没画装等差距 —— 剩下那些在拿别的职业的装备算差距');
+  }
+  if (stats.xcNote !== stats.xcChecked) {
+    problems.push('跨职业对照验了 ' + stats.xcChecked + ' 次，只有 ' + stats.xcNote
+      + ' 次说清了「这个角色职业不对，没拿他对照」');
+  }
+}
+
 // ---- 「实战分布」视角（rio）
 // 这一组是**独立的**，不能靠上面的总量断言兜着：rio 视角要是一个部位都没画，
 // 总量只会从 1264 掉到 1264 —— 因为它本来就没被算进去过。
@@ -1973,6 +2093,15 @@ console.log(pad('装等 / 差距') + '通过（视角按钮 2 个，旧视角 '
   + stats.gapBad + '，差值拿提示里的两个数独立复核 ' + stats.gapMath
   + '，比的是首选那一件 ' + stats.gapTop + '（不符 ' + stats.gapTopBad
   + '）），汇总行 ' + stats.gapSum + '）');
+// 判词必须**自己算**，不能写死「通过」：变异测试里这一行在 0/8 的情况下
+// 照样印了「通过」，问题只出现在下面的问题清单里。一行印着通过、
+// 一行印着问题，是最容易让人只看前一行的形状。
+console.log(pad('　跨职业对照')
+  + (stats.xcChecked && (stats.xcNoGap !== stats.xcChecked || stats.xcNote !== stats.xcChecked)
+    ? '有问题' : '通过')
+  + '（' + stats.xcChecked
+  + ' 次「选了别的职业的角色」：没画差距徽章 ' + stats.xcNoGap
+  + '，说清了原因 ' + stats.xcNote + '）');
 console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精是空的' : '通过')
   + '（' + stats.tspecs + ' 个专精，' + stats.tgrids + ' 棵树，节点 ' + stats.tnodes
   + '，点亮 ' + stats.tnodeOn + '，连线 ' + stats.tedges + '，点亮 ' + stats.tedgeOn
@@ -2291,16 +2420,23 @@ if (stats.a11yTipBad > 0) {
 if (stats.a11yCanvasBad > 0) {
   problems.push(stats.a11yCanvasBad + ' 个天赋树画布没有 role=group + aria-label');
 }
+// 来源插件的名字漏进界面。第 17 轮改文案前实测 13 种不同的串（散在装等来源、
+// 查不到装等、升级轨道、属性权重借用说明四处 + 脚注一句），改完是 0 —— 钉住它。
+if (stats.srcLeak > 0) {
+  problems.push(stats.srcLeak + ' 处界面文案在说这数据来自哪个插件'
+    + '（第 17 轮定的：界面只说这数是什么，出处说明留在源码注释里）');
+}
 // 数量下界：断言本身有没有跑到。全是 0 也可能是「一个都没数到」。
 if (stats.a11yTip < 2000) problems.push('只数到 ' + stats.a11yTip + ' 个 data-tip 元素，无障碍检查没跑起来');
 if (stats.a11yBtn < 200) problems.push('只数到 ' + stats.a11yBtn + ' 个 <button>，无障碍检查没跑起来');
 if (stats.a11yCanvas < 100) problems.push('只数到 ' + stats.a11yCanvas + ' 个天赋树画布，无障碍检查没跑起来');
 
 console.log(pad('无障碍') + (stats.a11yImg + stats.a11yBtnBad + stats.a11yTipBad
-    + stats.a11yCanvasBad ? '有问题' : '通过')
+    + stats.a11yCanvasBad + stats.srcLeak ? '有问题' : '通过')
   + '（' + stats.imgs + ' 个图标全有 alt，' + stats.a11yBtn + ' 个按钮全有名字，'
   + stats.a11yTip + ' 个 data-tip 元素全有可见文字，'
-  + stats.a11yCanvas + ' 个天赋树画布全有 role=group + 说明）');
+  + stats.a11yCanvas + ' 个天赋树画布全有 role=group + 说明，'
+  + '文案提到数据出自哪个插件 ' + stats.srcLeak + ' 处）');
 
 // ----------------------------------------------------------------------- 格式校验
 // 两个校验器分别是 app/bis-data.js 和 app/talent-tree.js 的格式定义（可执行的那种）。
