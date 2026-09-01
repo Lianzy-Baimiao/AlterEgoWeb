@@ -76,7 +76,10 @@ function load(f) {
  'app/item-icons.js', 'app/rio-data.js', 'app/maxroll-data.js',
  // 天赋说明（第 19 轮）。**必须显式加载** —— 它在浏览器里是懒加载的，
  // 不加载的话「悬停提示带说明」那条断言会一次都跑不到，然后报「通过」。
- 'app/talent-desc.js'].forEach(function (f) {
+ 'app/talent-desc.js',
+ // 团本天赋串（第 20 轮，Warcraft Logs）。同理必须显式加载 ——
+ // 不加载的话「团本 / 大秘境两类」那一组断言全部跳过，而摘要照样印「通过」。
+ 'app/wcl-data.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f + '（先跑对应的 tools\\gen-*.js / fetch-*.js）');
 });
 var haveScan = load('data/data.js');
@@ -177,6 +180,8 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 「=== 40」于是恒报 43。
               loSpecs: 0, loRenders: 0, loBoxes: 0, loCopy: 0, loPicks: 0,
               loSpec: 0, loExact: 0,
+              // 第 20 轮：团本 / 大秘境两类
+              loKindBtn: 0, loKindOn: 0, loRaid: 0, loKindSw: 0, loSorted: 0, loKindSaved: 0,
               // maxroll 天赋方案（第 15 轮：天赋页也按 maxroll 来）。和上面那组
               // 分开数：那组盯 raider.io 的官方串（能导入的那批），这组盯 maxroll
               // 的方案 —— maxroll 的串不给用户（版本号 130，游戏会拒），
@@ -371,7 +376,13 @@ function checkRender(label) {
         if (n.classList.contains('iv-rio')) stats.ivRio++;
         else if (n.classList.contains('iv-gi')) stats.ivGi++;
         // 形如「703」或「690→703」。0 一律不合格 —— 那正是上一版的样子。
-        if (!/^[1-9]\d{1,3}(→[1-9]\d{1,3})?$/.test(t)) {
+        //
+        // **允许一位数**，第 20 轮换赛季时被真实数据教育了一次：原来写的是
+        // `\d{1,3}`（至少两位），换到 season-mn-2 之后报「装等那一格是『5』」。
+        // 查了一下 —— itemId 88710「纳特的帽子」，一顶 5 级的钓鱼帽子，
+        // 榜上真有一个人抓 profile 那一刻头上戴着它。那是真数据，不是 bug。
+        // 这条断言要防的是「印成 0」（字段不存在），不是「装等太低」。
+        if (!/^[1-9]\d{0,3}(→[1-9]\d{0,3})?$/.test(t)) {
           stats.ivZero++;
           if (stats.ivZero < 4) {
             problems.push(label + ' 装等那一格是「' + t + '」—— 装等该是正整数，'
@@ -802,23 +813,50 @@ var TREE = g.AE_TALENT_TREE || null;
  * 排序规则必须和面板一致（人数降序，同人数按串本身），否则「#1」指的不是同一串。
  */
 function rioLoadoutTruth(specId) {
-  var R = g.AE_RIO;
-  if (!R || !R.specs) return null;
-  var rs = R.specs[String(specId)];
-  if (!rs || !rs.loadouts || !rs.loadouts.length) return null;
-  var count = Object.create(null), total = 0;
-  rs.loadouts.forEach(function (s) {
-    if (!s) return;
-    count[s] = (count[s] || 0) + 1;
-    total++;
+  return loadoutTruth(g.AE_RIO, specId);
+}
+
+/**
+ * 一个专精的天赋串真值，两家共用（第 20 轮起产物形状统一了）：
+ * `loadouts: [[串, 多少人用]…]`，人数降序、同人数按串本身，最多 30 种。
+ *
+ * 这里除了读出来，还**独立排一遍**存进 sorted —— 面板不重排（顺序是产物的
+ * 责任），所以「产物到底排对了没有」必须在这里判，否则那条规则没人管。
+ */
+function loadoutTruth(D, specId) {
+  if (!D || !D.specs) return null;
+  var sp = D.specs[String(specId)];
+  if (!sp || !sp.loadouts || !sp.loadouts.length) return null;
+  var count = Object.create(null), list = [];
+  sp.loadouts.forEach(function (row) {
+    if (!row || !row[0]) return;
+    count[row[0]] = row[1] || 1;
+    list.push(row[0]);
   });
-  var list = Object.keys(count);
   if (!list.length) return null;
-  list.sort(function (a, b) {
+  var sorted = list.slice().sort(function (a, b) {
     if (count[b] !== count[a]) return count[b] - count[a];
     return a < b ? -1 : (a > b ? 1 : 0);
   });
-  return { list: list, count: count, total: total };
+  return {
+    list: list, sorted: sorted, count: count,
+    total: sp.n || list.length,
+    uniq: sp.loUniq || sp.uniq || list.length
+  };
+}
+
+/**
+ * WCL 里这个专精的团本导入串真值。
+ *
+ * **独立算一遍**，不调 app/bis.js 的 wclLoadouts() —— 拿被测代码算真值是恒等式。
+ * 产物里已经是 [[串, 人数]…] 且排好序了，所以这里的活是「按同一条规则再排一次
+ * 并核对顺序没被面板改动」：人数降序，同人数按串本身。
+ *
+ * total 取产物的 n（真实采样人数），不是 count 之和 —— 产物只留前 30 种，
+ * 拿截断后的和当分母，界面上的百分比会偏高。
+ */
+function wclLoadoutTruth(specId) {
+  return loadoutTruth(g.AE_WCL, specId);
 }
 
 /**
@@ -837,13 +875,49 @@ function headerSpec(s) {
  * 导入串这一块。这一组盯的是「显示的串和数据里的串是不是同一串」——
  * 面板不编码、不改字符，所以这里能用最硬的判据：**字节相等**。
  */
-function checkLoadouts(label, specId, boxes, texts, copies, picks) {
-  var truth = rioLoadoutTruth(specId);
-  if (!truth) {
-    // 没真值 = rio 里这个专精没有串，那面板就**不该**画这一块。
+function checkLoadouts(label, specId, boxes, texts, copies, picks, kindBtns) {
+  // ---- 第 20 轮：这一块分「团本 / 大秘境」两类，来源是两家
+  //      （大秘境 raider.io，团本 Warcraft Logs）。
+  //
+  // 真值选哪一份，**看界面上哪个按钮是高亮的**，不看 state ——
+  // 拿被测代码的内部状态去挑真值，就没法抓「高亮在团本、显示的却是大秘境那串」
+  // 这种错，而那正是分两类之后新出现的、界面完全自洽的失败方式。
+  var mplusTruth = rioLoadoutTruth(specId);
+  var raidTruth = wclLoadoutTruth(specId);
+  var have = [];
+  if (mplusTruth) have.push('大秘境');
+  if (raidTruth) have.push('团本');
+
+  var onKind = null;
+  (kindBtns || []).forEach(function (b) {
+    if (b.classList && b.classList.contains('on')) {
+      onKind = /团本/.test(b.textContent) ? 'raid' : 'mplus';
+    }
+  });
+  var truth = onKind === 'raid' ? raidTruth : mplusTruth;
+
+  if (!mplusTruth && !raidTruth) {
+    // 两边都没真值 = 这个专精一条串都没有，那面板就**不该**画这一块。
     // 这一条反着抓：画出一个空框比不画更糟（用户会去复制一个空串）。
-    if (boxes.length) loNote('画了空框', label + ' rio 里没有导入串，却画出了导入串块');
+    if (boxes.length) loNote('画了空框', label + ' 两家都没有导入串，却画出了导入串块');
     return;
+  }
+  if (!truth) {
+    loNote('高亮的类没数据', label + ' 界面高亮的是「'
+      + (onKind === 'raid' ? '团本' : '大秘境') + '」，但那一类没有真值');
+    return;
+  }
+  // 按钮条：有几类数据就该有几个按钮，一个不多一个不少。
+  // 多画一个（比如那一类其实没数据）用户点下去会看到空白；
+  // 少画一个（团本有数据却不给按钮）等于这一半功能没上。
+  if (boxes.length) {
+    if ((kindBtns || []).length !== have.length) {
+      loNote('类按钮数', label + ' 团本/大秘境按钮 ' + (kindBtns || []).length
+        + ' 个，产物里有数据的是 ' + have.length + ' 类（' + have.join('、') + '）');
+    } else {
+      stats.loKindBtn += kindBtns.length;
+      if (onKind) stats.loKindOn++;
+    }
   }
   stats.loRenders++;
   // 按 specId 去重。第一版这里写的是 loSpecs++，然后断言「loSpecs === 40」——
@@ -876,10 +950,21 @@ function checkLoadouts(label, specId, boxes, texts, copies, picks) {
 
   // 核心断言：显示的串必须和数据里那条**一个字节都不差**。
   if (shown !== truth.list[0]) {
-    loNote('串不一致', label + ' 显示的导入串和 rio 数据里的第一条不一致：显示 '
-      + shown.length + ' 字符，数据 ' + truth.list[0].length + ' 字符');
+    loNote('串不一致', label + ' 显示的导入串和' + (onKind === 'raid' ? ' WCL 团本' : ' rio 大秘境')
+      + '数据里的第一条不一致：显示 ' + shown.length + ' 字符，数据 '
+      + truth.list[0].length + ' 字符');
   } else {
     stats.loExact++;
+    if (onKind === 'raid') stats.loRaid++;
+  }
+  // 产物的顺序必须已经是「人数降序」。面板不重排（重排会把产物排错这件事藏起来），
+  // 所以这里对着独立排过的一份核对 —— 只有 WCL 那份需要，rio 那份是面板现算的。
+  if (truth.sorted && truth.list.join('|') !== truth.sorted.join('|')) {
+    loNote('产物没排序', label + ' '
+      + (onKind === 'raid' ? 'app/wcl-data.js' : 'app/rio-data.js')
+      + ' 里这个专精的 loadouts 不是人数降序 —— 面板不重排，所以产物必须自己排好');
+  } else {
+    stats.loSorted++;
   }
   // 只读。用户在框里改一个字符再复制，导进游戏只会说「无效」，
   // 而他会以为是这个面板给错了。
@@ -1510,7 +1595,7 @@ function checkTalents(label, specId) {
   stats.renders++;
   stats.trenders++;
   var nodes = 0, grids = 0, seen = {}, dup = 0, canvases = [];
-  var loBoxes = [], loTexts = [], loCopies = [], loPicks = 0;
+  var loBoxes = [], loTexts = [], loCopies = [], loPicks = 0, loKindBtns = [];
   // maxroll 那一块的元素。类名故意和 lo-* 分开（.mr-builds / .mrb / .mr-nostr），
   // 共用的话「导入串块正好 1 个」那条断言会被两块互相喂饱。
   // mrLit 是树上点亮的节点，checkMrTalents 拿它验「画的树就是高亮那一套」；
@@ -1538,6 +1623,11 @@ function checkTalents(label, specId) {
     if (n.classList.contains('lo-text')) loTexts.push(n);
     if (n.classList.contains('lo-copy')) loCopies.push(n);
     if (n.classList.contains('lo-pick')) loPicks += n.children.length;
+    // 团本 / 大秘境那一排（第 20 轮）。**按 .lo-kind 认，不按 .lo-pick** ——
+    // 两排都是按钮，共用一个类的话「选串按钮 6 个」那条断言会被多喂两个。
+    if (n.classList.contains('lo-kind')) {
+      n.children.forEach(function (c) { loKindBtns.push(c); });
+    }
     if (n.classList.contains('mr-builds')) mrBoxes.push(n);
     if (n.classList.contains('mr-nostr')) mrNotes.push(n);
     // 注意：order 里 'maxroll' 是在上面那个 bis-loadout 分支旁边 push 的，
@@ -1705,7 +1795,7 @@ function checkTalents(label, specId) {
       }
     }
   });
-  checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks);
+  checkLoadouts(label, specId, loBoxes, loTexts, loCopies, loPicks, loKindBtns);
   checkMrTalents(label, specId, mrBoxes, mrNotes, mrBtns, mrSubBtns, mrLit, taVals,
     mrScen, mrPrio, mrBoss);
 
@@ -1887,6 +1977,9 @@ specKeys.forEach(function (key) {
   // 已经是团本了，而 findKindBtn 只认「还没高亮的那个」，于是「点团本」这条路
   // 只被走过 1 次。持久化本身另有一条断言专门验（下面的 mrtKindSaved）。
   settings.bisMrKind = '';
+  // 同理清掉导入串那一块的类型 —— 不清的话第一个专精点完团本，
+  // 后面 39 个进来就已经是团本了，「点一下团本」这条路只被走过 1 次。
+  settings.bisLoKind = '';
   body.children.length = 0;
   load('app/bis.js');
   g.AE.openBis();
@@ -1994,6 +2087,47 @@ specKeys.forEach(function (key) {
     } else {
       stats.mrtKindSaved++;
     }
+  }
+
+  // ---- 第 20 轮：「榜上热门天赋串」的团本 / 大秘境开关 ----
+  //
+  // 和上面 maxroll 那个开关是**两个不同的开关**：这个换的是导入串那一块的
+  // 数据来源（大秘境 = raider.io，团本 = Warcraft Logs），maxroll 那个换的是
+  // maxroll 指南的类型。两个都叫「团本」，所以按容器类名分开找 ——
+  // 混在一起找的话点到的是哪一个全看 walk 的顺序。
+  var lk = null;
+  walk(body, function (n) {
+    if (lk || !n.classList || !n.classList.contains('lo-kind')) return;
+    n.children.forEach(function (c) {
+      if (!lk && /团本/.test(c.textContent) && !c.classList.contains('on')) lk = c;
+    });
+  });
+  if (lk) {
+    lk.click();
+    // 点完必须真的换过去：那一排里高亮的应该是「团本」了。
+    var onTxt = '';
+    walk(body, function (n) {
+      if (!n.classList || !n.classList.contains('lo-kind')) return;
+      n.children.forEach(function (c) {
+        if (c.classList && c.classList.contains('on')) onTxt = c.textContent;
+      });
+    });
+    if (!/团本/.test(onTxt)) {
+      loNote('lo 换类没生效', '天赋 ' + key + ' 点了导入串那块的「团本」，高亮却是：' + onTxt);
+    } else {
+      stats.loKindSw++;
+    }
+    // 持久化：和 mrKind 同一个道理。
+    if (settings.bisLoKind !== 'raid') {
+      loNote('lo 类型没存', '天赋 ' + key + ' 点了导入串的「团本」，'
+        + '设置里 bisLoKind 还是「' + settings.bisLoKind + '」');
+    } else {
+      stats.loKindSaved++;
+    }
+    // **换完之后整组断言再走一遍。** checkLoadouts 会按「界面上高亮哪一类」
+    // 挑真值，所以这一遍验的是「高亮团本时显示的就是团本那份数据」——
+    // 那是分两类之后新出现的、界面完全自洽的失败方式。
+    checkTalents('天赋 ' + key + '/串团本', specId);
   }
 });
 
@@ -2333,12 +2467,48 @@ if (stats.loExact !== stats.loRenders) {
   problems.push('逐字节相等只验过 ' + stats.loExact + ' 次，渲染 ' + stats.loRenders
     + ' 次，摘要里「逐字节相同」这句话没有依据');
 }
+// ---- 第 20 轮：团本 / 大秘境两类。**每条都要有下界** ——
+// 这四个计数器要是没有下界，「分了两类」这件事在测试里等于不存在：
+// 团本那半一条都没画、按钮一次都没点，摘要照样这么印。
+if (stats.loKindBtn < stats.loRenders) {
+  problems.push('团本/大秘境按钮只数到 ' + stats.loKindBtn + ' 个，渲染 '
+    + stats.loRenders + ' 次 —— 每次渲染至少该有一个（那一排同时是「这批数据'
+    + '哪来的」的标签，不只是开关）');
+}
+if (stats.loKindOn !== stats.loRenders) {
+  problems.push('只有 ' + stats.loKindOn + ' 次渲染里有一个类是高亮的，渲染 '
+    + stats.loRenders + ' 次 —— 一个都不高亮的话用户不知道自己在看哪一类');
+}
+if (stats.loRaid < 30) {
+  problems.push('团本那一类只逐字节验过 ' + stats.loRaid + ' 次，太少'
+    + '（app/wcl-data.js 覆盖 40 个专精）—— 那一半可能根本没画出来');
+}
+if (stats.loKindSw < 20) {
+  problems.push('「点一下团本」只真点过 ' + stats.loKindSw + ' 次，太少'
+    + ' —— 这个开关的 state 不点就等于不存在');
+}
+if (stats.loKindSaved < stats.loKindSw) {
+  problems.push('点了团本但只有 ' + stats.loKindSaved + '/' + stats.loKindSw
+    + ' 次写回了设置 —— 换个专精又会跳回大秘境');
+}
+if (stats.loSorted !== stats.loRenders) {
+  problems.push('产物顺序只核对过 ' + stats.loSorted + ' 次，渲染 ' + stats.loRenders
+    + ' 次 —— 面板不重排，「#1 热门」是不是真的最热门全靠这一条');
+}
 console.log(pad('天赋导入串') + (stats.loSpecs === specKeys.length
     && stats.loCopy === stats.loRenders && stats.loSpec === stats.loRenders
     && stats.loExact === stats.loRenders ? '通过' : '有问题')
   + '（' + stats.loSpecs + ' 个专精 / ' + stats.loRenders + ' 次渲染，串框 ' + stats.loBoxes
   + '，选串按钮 ' + stats.loPicks + '，复制按钮真点过 ' + stats.loCopy
-  + ' 次且复制内容与显示逐字节相同，串头 specID 全部与所属专精一致）');
+  + ' 次且复制内容与显示逐字节相同，串头 specID 全部与所属专精一致，'
+  + '产物顺序独立复核 ' + stats.loSorted + '）');
+// 第 20 轮那一行单独打。**必须打印** —— 加了计数器又不印，等于给自己看的。
+console.log(pad('　团本/大秘境') + (stats.loRaid >= 30 && stats.loKindSw >= 20
+    && stats.loKindOn === stats.loRenders ? '通过' : '有问题')
+  + '（类按钮 ' + stats.loKindBtn + ' 个，每次渲染都有一类高亮 ' + stats.loKindOn
+  + '，团本那类逐字节验过 ' + stats.loRaid + ' 次，真点过「团本」' + stats.loKindSw
+  + ' 次（写回设置 ' + stats.loKindSaved + '）'
+  + '　大秘境来自 raider.io，团本来自 Warcraft Logs）');
 
 // ---- maxroll 天赋方案（第 15 轮：天赋页改成以 maxroll 为主）
 // 门槛全部写成「和渲染次数相等」，不是「> 0」：这一组的每条断言都在
@@ -2729,7 +2899,9 @@ var VERIFIERS = [
   { label: '天赋串解码', script: 'verify-talent-decode.js', data: 'talent-tree.js',
     need: 'tools/talent-truth.json', own: true },
   { label: 'rio 装备分布', script: 'verify-rio-data.js', data: 'rio-data.js' },
-  { label: 'maxroll 推荐', script: 'verify-maxroll-data.js', data: 'maxroll-data.js' }
+  { label: 'maxroll 推荐', script: 'verify-maxroll-data.js', data: 'maxroll-data.js' },
+  // 团本天赋串（第 20 轮）。串头能解开 + specID 对得上，是这份数据唯一的硬判据。
+  { label: 'wcl 团本天赋', script: 'verify-wcl-data.js', data: 'wcl-data.js' }
 ];
 VERIFIERS.forEach(function (v) {
   if (!fs.existsSync(path.join(ROOT, 'app', v.data))) {
@@ -2998,6 +3170,6 @@ if (problems.length) {
 var bad = total.fail + problems.length;
 console.log(bad === 0
   ? '全部通过：' + total.pass + ' 项测试 + 装备渲染 + 天赋树渲染 + maxroll 天赋方案'
-    + ' + 无障碍 + 三项格式校验 + 天赋串解码对真值 + 并发池 + 打包一致性'
+    + ' + 无障碍 + 四项格式校验 + 天赋串解码对真值 + 并发池 + 打包一致性'
   : '有问题：' + total.fail + ' 项测试失败，' + problems.length + ' 个渲染/格式问题');
 process.exit(bad === 0 ? 0 : 1);

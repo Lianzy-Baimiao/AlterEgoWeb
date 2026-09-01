@@ -78,9 +78,26 @@ var argv = process.argv.slice(2);
 function flag(n) { return argv.indexOf(n) >= 0; }
 function opt(n, d) { var i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; }
 
-var SEASON = opt('--season', 'season-tww-3');
+/*
+ * 赛季。**这个默认值必须是当前赛季**，而且改了之后要能真的重抓 —— 见下面
+ * rankFile() 和 checkSeason() 两处，它们合起来是一次真实事故的补丁：
+ * 产物一直停在 season-tww-3（上一个资料片 The War Within 第三赛季），
+ * 而当时早就是 season-mn-2（Midnight 第二赛季）了。两个赛季都返回 200，
+ * 所以什么都没报错，面板上那一整页实战分布是上个资料片的数据。
+ */
+var SEASON = opt('--season', 'season-mn-2');
+// 装备的样本量。每个角色要一次 profile 请求，所以这个数直接决定跑多久。
 var TARGET = Number(opt('--target', 100)) || 100;
-var MAXPAGES = Number(opt('--maxpages', 6)) || 6;
+/*
+ * 天赋串的样本量，**和装备分开**。
+ *
+ * 天赋串在榜页里就有（`character.talentLoadoutText`），一页 100 人白送 100 条；
+ * 装备得逐个角色查 profile，一人一次请求还带配额。第 20 轮用户说天赋串
+ * 「数量太少了，扩充一下基础数量」—— 那就只扩这一边：榜多翻几页，
+ * 装备仍然只取前 TARGET 个人。
+ */
+var TALENT_TARGET = Number(opt('--talent-target', 500)) || 500;
+var MAXPAGES = Number(opt('--maxpages', 15)) || 15;
 var ONLY = String(opt('--specs', '')).split(',').filter(Boolean).map(Number);
 var RANK_ONLY = flag('--rank-only');
 var OFFLINE = flag('--offline');
@@ -305,8 +322,17 @@ function store(name, body) {
 
 // -------------------------------------------------------------------- 抓榜
 
+/*
+ * 榜页的缓存文件名。**必须带赛季**。
+ *
+ * 第一版是 `rank-mage-arcane-p0.json`，不带赛季 —— 于是把 SEASON 从
+ * season-tww-3 改成 season-mn-2 之后，一个请求都不会发：缓存全命中，
+ * 拿到的还是上个资料片的榜，而日志会告诉你「已抓完」。
+ * 那正是这个仓库反复踩的形状：**没跑，但报成跑过了。**
+ * 赛季进文件名之后，换赛季自动等于换一套缓存。
+ */
 function rankFile(sp, page) {
-  return 'rank-' + sp.classSlug + '-' + sp.specSlug + '-p' + page + '.json';
+  return 'rank-' + SEASON + '-' + sp.classSlug + '-' + sp.specSlug + '-p' + page + '.json';
 }
 
 function rankPage(sp, page, cb) {
@@ -334,7 +360,10 @@ function rankPage(sp, page, cb) {
 function collectSpec(sp, cb) {
   var roster = [], seen = {}, pages = 0, examined = 0;
   (function nextPage(p) {
-    if (p >= MAXPAGES || roster.length >= TARGET) { cb(null, roster, pages, examined); return; }
+    // 抓到**天赋**的目标深度才停（装备只用前 TARGET 个，见下面的 gear 标记）。
+    if (p >= MAXPAGES || roster.length >= TALENT_TARGET) {
+      cb(null, roster, pages, examined); return;
+    }
     rankPage(sp, p, function (e, j) {
       if (e) { cb(e, roster, pages, examined); return; }
       pages++;
@@ -350,10 +379,12 @@ function collectSpec(sp, cb) {
         var key = region + '/' + realm + '/' + c.name;
         if (seen[key]) return;
         seen[key] = 1;
-        if (roster.length >= TARGET) return;
+        if (roster.length >= TALENT_TARGET) return;
+        // gear = 「这个人要不要去查装备」。榜是按分数降序的，所以前 TARGET 个
+        // 就是这个专精分数最高的那批 —— 装备统计取他们，天赋串取全部。
         roster.push({
           name: c.name, realm: realm, altRealm: c.realm.altSlug || null, region: region,
-          specId: sp.id, score: r.score || 0,
+          specId: sp.id, score: r.score || 0, gear: roster.length < TARGET,
           loadout: c.talentLoadoutText || null
         });
       });
@@ -576,6 +607,30 @@ function aggregate(roster, gears) {
   return { specs: specs, itemMeta: itemMeta };
 }
 
+/**
+ * 串数组 → [[串, 人数]…]，人数降序，同人数按串本身，最多 keep 条。
+ *
+ * 排序规则必须和 app/bis.js 里画「#1 热门」那处一致，否则「#1」指的不是同一串。
+ * 同人数时按串本身排是为了**稳定**：Object.keys 的顺序一变，界面上第一条就换了，
+ * 而这种不稳定在测试里表现为偶发失败，很难查。
+ */
+function topLoadouts(list, keep) {
+  var count = Object.create(null);
+  (list || []).forEach(function (s) { if (s) count[s] = (count[s] || 0) + 1; });
+  var keys = Object.keys(count);
+  keys.sort(function (a, b) {
+    if (count[b] !== count[a]) return count[b] - count[a];
+    return a < b ? -1 : (a > b ? 1 : 0);
+  });
+  return keys.slice(0, keep).map(function (s) { return [s, count[s]]; });
+}
+
+function uniqCount(list) {
+  var seen = Object.create(null), n = 0;
+  (list || []).forEach(function (s) { if (s && !seen[s]) { seen[s] = 1; n++; } });
+  return n;
+}
+
 function emit(agg, names, meta) {
   var specTable = {};
   var tree = meta.tree;
@@ -584,7 +639,17 @@ function emit(agg, names, meta) {
     var sp = tree.specs[sid] || {};
     specTable[sid] = {
       cls: sp.cls || '', specEn: sp.specEn || '',
-      n: S.n, nGear: S.nGear, slots: S.slots, loadouts: S.loadouts
+      n: S.n, nGear: S.nGear, slots: S.slots,
+      // 天赋串**在产物里就聚合成 [[串, 人数]…]，只留前 30 种**。
+      //
+      // 第 20 轮把每专精的采样从 100 人提到 500 人之后，一人一条地存
+      // 19908 条串 = 2091 KB，占整个产物的 90%，而面板每个专精只画前 6 种。
+      // 那 2 MB 全是重复的字节（12788 种 / 19908 条），纯粹是让懒加载变慢。
+      // 聚合之后形状和 app/wcl-data.js 一致，面板那边一份代码画两家。
+      loadouts: topLoadouts(S.loadouts, 30),
+      // uniq 是**去重前的真实种类数**，不是上面那 30 条的长度 ——
+      // 界面上「N 名玩家共 M 种」里的 M 要说真话。
+      loUniq: uniqCount(S.loadouts)
     };
   });
 
@@ -604,7 +669,8 @@ function emit(agg, names, meta) {
       + '槽位编号沿用暴雪的 INVSLOT（和 app/bis-data.js 的 slotNames 同一套）。',
     slotOf: SLOT_MAP,
     fmt: {
-      specs: 'specId → {cls, specEn, n 角色数, nGear 有装备的人数, slots, loadouts 天赋串}',
+      specs: 'specId → {cls, specEn, n 榜上人数, nGear 有装备的人数, slots, '
+        + 'loadouts [[天赋串, 多少人用]…]（人数降序，最多 30 种）, loUniq 去重前的真实种类数}',
       slots: '槽位编号 → {n 这个部位的样本量, d: [[itemId, 人数, 平均装等], …] 按人数降序}',
       items: 'itemId → {n 中文名, i 图标名, q 品质, sock 带宝石的次数}'
     },
@@ -636,10 +702,72 @@ function main() {
     specs = specs.filter(function (s) { return ONLY.indexOf(s.id) >= 0; });
     if (!specs.length) throw new Error('--specs 过滤后一个专精都不剩');
   }
-  console.log('raider.io 抓取：' + specs.length + ' 个专精，目标 ' + TARGET
-    + ' 人/专精，最多翻 ' + MAXPAGES + ' 页　赛季 ' + SEASON
+  console.log('raider.io 抓取：' + specs.length + ' 个专精　赛季 ' + SEASON
+    + '\n  天赋串目标 ' + TALENT_TARGET + ' 人/专精（榜里白送），'
+    + '装备目标 ' + TARGET + ' 人/专精（一人一次请求），最多翻 ' + MAXPAGES + ' 页'
     + (OFFLINE ? '　（--offline，只用缓存）' : ''));
+  checkSeason(function () { run(specs); });
+}
 
+/**
+ * 开跑之前先问站点「现在是哪个赛季」。
+ *
+ * 这一条是补一次真实事故：产物里的赛季停在 season-tww-3（上一个资料片），
+ * 而当时早就是 season-mn-2 了。**两个赛季都返回 HTTP 200**，榜也都是满的 ——
+ * 所以没有任何一处会报错，面板上那一整页实战分布是上个资料片的数据，
+ * 而且看不出来。
+ *
+ * 判据只能是「跟站点对一遍」：赛季表在
+ * `/api/v1/mythic-plus/static-data?expansion_id=N`，第一条就是当前赛季。
+ * 对不上就**停下来**（不是警告）—— 抓一份错赛季的数据比不抓糟得多，
+ * 它会安静地正确运行。真要抓旧赛季，显式写 --season 就是「我知道我在干什么」。
+ */
+function checkSeason(next) {
+  if (OFFLINE || argv.indexOf('--season') >= 0) { next(); return; }
+  // expansion_id 也别写死：从赛季 slug 里认（mn = Midnight = 11，tww = 10）。
+  var EXP = { mn: 11, tww: 10 };
+  var m = /^season-([a-z]+)-/.exec(SEASON);
+  var eid = (m && EXP[m[1]]) || 11;
+  get('https://raider.io/api/v1/mythic-plus/static-data?expansion_id=' + eid,
+    function (e, code, body) {
+      if (e || code !== 200) {
+        console.log('  ⚠ 赛季核对失败（' + (e ? e.message : 'HTTP ' + code)
+          + '）—— 继续用 ' + SEASON + '，但没人替你确认它是当前赛季');
+        next();
+        return;
+      }
+      var cur = null, all = [];
+      try {
+        var j = JSON.parse(body.toString('utf8'));
+        all = (j.seasons || []).map(function (x) { return x.slug; });
+        // 取**最新的正式赛季**，不是数组第一条。站点会在正式赛季前面塞变体
+        // （实测 TWW 那一栏第一条是 season-tww-3-cutoffs，还有
+        // -break-the-meta / -legion-remix 这些活动赛季）。正式赛季的 slug
+        // 形状固定是 season-<资料片>-<数字>，按这个筛。
+        for (var k = 0; k < all.length; k++) {
+          if (/^season-[a-z]+-\d+$/.test(all[k])) { cur = all[k]; break; }
+        }
+      } catch (e2) { /* 解析不了就当核对失败 */ }
+      if (!cur) {
+        console.log('  ⚠ 赛季表解析不了 —— 继续用 ' + SEASON);
+        next();
+        return;
+      }
+      if (cur !== SEASON) {
+        console.log('\n站点说当前赛季是 ' + cur + '，而这里要抓 ' + SEASON + '。');
+        console.log('  站点认的赛季：' + all.join('、'));
+        console.log('  这就是上一次那个 bug 的形状：**旧赛季照样返回 200**，'
+          + '抓下来一切正常，只是数据是上个资料片的。');
+        console.log('  改 tools/fetch-rio.js 里 SEASON 的默认值，'
+          + '或者显式写 --season ' + SEASON + ' 表示你确实要抓旧赛季。');
+        process.exit(1);
+      }
+      console.log('  赛季核对（站点最新的正式赛季）：' + cur + ' ✓（站点第一条就是它）');
+      next();
+    });
+}
+
+function run(specs) {
   var t0 = Date.now();
   var rosters = {}, thin = [], pagesUsed = 0;
 
@@ -657,8 +785,9 @@ function main() {
         var withStr = roster.filter(function (r) { return r.loadout; }).length;
         console.log('  ' + pad(sp.cls + '/' + sp.specEn, 26) + ' ' + pages + ' 页 → '
           + roster.length + ' 人，带串 ' + withStr
-          + (roster.length < TARGET ? '　← 不足 ' + TARGET : ''));
-        if (roster.length < TARGET) thin.push(sp.cls + '/' + sp.specEn + ' ' + roster.length);
+          + (roster.length < TALENT_TARGET ? '　← 不足 ' + TALENT_TARGET : ''));
+        // 「不足」按天赋目标算 —— 装备目标本来就只取前 TARGET 个，不算缺。
+        if (roster.length < TALENT_TARGET) thin.push(sp.cls + '/' + sp.specEn + ' ' + roster.length);
       }
       step();
     });
@@ -680,7 +809,10 @@ function main() {
       + '，流量 ' + (netStat.bytes / 1024 / 1024).toFixed(2) + ' MB，'
       + (((Date.now() - t0) / 1000) | 0) + ' 秒');
     if (thin.length) {
-      console.log('样本不足 ' + TARGET + ' 的专精（' + thin.length + ' 个）：' + thin.join('，'));
+      console.log('天赋样本不足 ' + TALENT_TARGET + ' 的专精（' + thin.length + ' 个）：'
+        + thin.join('，'));
+      console.log('  这不一定是错：榜是按「用这个专精打出的分」排的，而筛的是'
+        + '角色**当前**专精（见文件头 ①），冷门专精本来就凑不够。');
     }
     if (RANK_ONLY) {
       console.log('--rank-only，装备不抓。');
@@ -688,11 +820,15 @@ function main() {
       return;
     }
 
-    console.log('\n抓装备：' + all.length + ' 个角色，fields=gear（实测 9638 B/人），并发 '
+    // **只查前 TARGET 个人的装备。** 榜可能抓了 500 人（为了天赋串），
+    // 但装备一人一次请求还带配额，全查等于把跑一次的时间乘五。
+    var gearList = all.filter(function (r) { return r.gear; });
+    console.log('\n抓装备：' + gearList.length + ' / ' + all.length
+      + ' 个角色（每专精分数最高的 ' + TARGET + ' 个），fields=gear（实测 9638 B/人），并发 '
       + CONCURRENCY);
     var gears = {}, okN = 0, failN = 0, hitN = 0, realmFallback = 0;
     var done = 0;
-    pool(all, CONCURRENCY, function (ch, next) {
+    pool(gearList, CONCURRENCY, function (ch, next) {
       profile(ch, function (e, j, wasCached) {
         if (!e && j) {
           if (wasCached) hitN++;
@@ -706,12 +842,12 @@ function main() {
               realmFallback++; okN++;
               gears[ch.region + '/' + ch.realm + '/' + ch.name] = j2;
             } else failN++;
-            done++; progress(done, all.length, 'ok ' + okN + '，失败 ' + failN);
+            done++; progress(done, gearList.length, 'ok ' + okN + '，失败 ' + failN);
             next();
           });
           return;
         } else failN++;
-        done++; progress(done, all.length, 'ok ' + okN + '，失败 ' + failN);
+        done++; progress(done, gearList.length, 'ok ' + okN + '，失败 ' + failN);
         next();
       });
     }, function () {
@@ -803,14 +939,14 @@ function main() {
       sids.forEach(function (sid) {
         var S = res.obj.specs[sid];
         nMin = Math.min(nMin, S.n); nMax = Math.max(nMax, S.n);
-        loadN += S.loadouts.length;
+        loadN += S.loUniq || 0;
         Object.keys(S.slots).forEach(function (k) {
           slotMin = Math.min(slotMin, S.slots[k].n);
         });
       });
       console.log('  专精 ' + sids.length + '，每专精人数 ' + (nMin === Infinity ? 0 : nMin)
         + '~' + nMax + '，最小部位样本量 ' + (slotMin === Infinity ? 0 : slotMin)
-        + '，天赋串 ' + loadN + '，物品 ' + Object.keys(res.obj.items).length);
+        + '，天赋串 ' + loadN + ' 种（各专精只留前 30），物品 ' + Object.keys(res.obj.items).length);
       console.log('\n下一步：node tools\\verify-rio-data.js 校验格式。');
     });
   }

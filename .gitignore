@@ -47,6 +47,15 @@ tools/.maxroll-raw/
 # tools/fetch-maxroll.js 顺手写出的「出手顺序 / 首领说明正文里引用到哪些技能 ID」
 # 清单，给 tools/fetch-spell-names.js 读。它是那次运行的副产品，重跑就重生成 ——
 # 而**译名表 tools/spell-names-zh.json 是入库的**（--report 要能离线重算产物）。
+# Warcraft Logs 的 API 凭证（client id / secret）。**绝对不能入库。**
+# 用户给的是他自己账号下的应用凭证 —— 泄漏出去等于把他的配额和身份交出去。
+# tools/fetch-wcl-*.js 从这个文件或环境变量 WCL_CLIENT_ID / WCL_CLIENT_SECRET 读。
+tools/.wcl-auth.json
+
+# Warcraft Logs 的原始响应缓存 + token。上千个小 JSON，重跑能续。
+# 产出物是 app/wcl-data.js，那个才入库。token 更不能入库。
+tools/.wcl-raw/
+
 tools/.maxroll-spell-ids.json
 
 # Editor / OS noise

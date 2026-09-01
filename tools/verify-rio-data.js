@@ -26,7 +26,8 @@
  *              n      这个专精抓到几个角色
  *              nGear  其中几个真的拿到装备
  *              slots  { 槽位编号: { n 该部位样本量, d: [[itemId, 人数, 平均装等], …] } }
- *              loadouts [天赋导入串, …]
+ *              loadouts [[天赋导入串, 多少人用], …]（人数降序，最多 30 种）
+ *              loUniq   去重前的真实种类数
  *            } }
  *
  * 用法：node tools\verify-rio-data.js
@@ -133,7 +134,7 @@ var itemIds = {};
 })();
 
 // ------------------------------------------------------------------ 专精表
-var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSpecN: Infinity,
+var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infinity, minSpecN: Infinity,
   minGear: Infinity, gearTotal: 0, zeroGear: [], thinGear: [] };
 (function () {
   var specs = R.specs || {};
@@ -171,17 +172,55 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSp
       stat.thinGear.push(sid + ':' + S.nGear);
     }
 
-    // 天赋串：榜上实测 98~100% 的人带串，所以串数不该远少于人数。
+    /*
+     * 天赋串。**第 20 轮起形状变了**：一人一条改成 [[串, 多少人用]…]，
+     * 人数降序、同人数按串本身、每专精最多 30 种。
+     * 原因见 tools/fetch-rio.js 的 topLoadouts()：采样提到 500 人之后一人一条
+     * 是 2091 KB，占产物 90%，而面板每个专精只画前 6 种。
+     * 和 app/wcl-data.js（团本那半）现在是同一个形状。
+     */
     var lo = S.loadouts || [];
-    stat.loadouts += lo.length;
     ck();
-    if (!Array.isArray(lo)) fail('专精 ' + sid + ' 的 loadouts 不是数组');
-    lo.forEach(function (s) {
-      // 串是标准 base64 字母表。里头出现别的字符说明存的时候被截断或转义了。
-      if (typeof s !== 'string' || !/^[A-Za-z0-9+/]+$/.test(s)) {
-        fail('专精 ' + sid + ' 有一个天赋串不是 base64：' + String(s).slice(0, 20));
+    if (!Array.isArray(lo)) { fail('专精 ' + sid + ' 的 loadouts 不是数组'); lo = []; }
+    stat.loRows += lo.length;
+    ck();
+    if (typeof S.loUniq !== 'number' || S.loUniq < lo.length) {
+      fail('专精 ' + sid + ' 的 loUniq 是 ' + S.loUniq + '，不该小于留下来的 '
+        + lo.length + ' 种 —— 它记的是**去重前的真实种类数**');
+    } else {
+      stat.loadouts += S.loUniq;
+    }
+    var prev = null;
+    lo.forEach(function (row, i) {
+      ck();
+      if (!Array.isArray(row) || row.length !== 2) {
+        fail('专精 ' + sid + ' 的 loadouts[' + i + '] 不是 [串, 人数] 两元组');
+        return;
       }
+      // 串是标准 base64 字母表。里头出现别的字符说明存的时候被截断或转义了。
+      ck();
+      if (typeof row[0] !== 'string' || !/^[A-Za-z0-9+/]+$/.test(row[0])) {
+        fail('专精 ' + sid + ' 有一个天赋串不是 base64：' + String(row[0]).slice(0, 20));
+      }
+      ck();
+      if (typeof row[1] !== 'number' || row[1] < 1 || row[1] !== Math.floor(row[1])) {
+        fail('专精 ' + sid + ' 的 loadouts[' + i + '] 人数不是正整数：' + row[1]);
+      }
+      // **顺序必须是人数降序。** 面板不重排（重排会把产物排错这件事藏起来），
+      // 所以「#1 热门」到底是不是最热门的那条，全靠这一条守着。
+      ck();
+      if (prev !== null && row[1] > prev) {
+        fail('专精 ' + sid + ' 的 loadouts 不是人数降序：第 ' + i + ' 条 '
+          + row[1] + ' 人，排在 ' + prev + ' 人后面');
+      }
+      prev = row[1];
     });
+    // 人数之和不该超过榜上人数 —— 超了说明聚合把同一个人数了两遍。
+    ck();
+    var sum = lo.reduce(function (a, r) { return a + (Array.isArray(r) ? r[1] : 0); }, 0);
+    if (sum > S.n) {
+      fail('专精 ' + sid + ' 的 loadouts 人数之和 ' + sum + ' 超过榜上人数 ' + S.n);
+    }
 
     var slots = S.slots || {};
     Object.keys(slots).forEach(function (k) {
@@ -270,7 +309,8 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, minSlotN: Infinity, minSp
 console.log('校验       ' + path.relative(BASE, dataPath));
 console.log('数据       v' + R.v + '   ' + R.updatedAt + '   ' + R.season);
 console.log('规模       ' + stat.specs + ' 专精 / ' + Object.keys(R.items || {}).length
-  + ' 件 / ' + stat.slots + ' 部位组 / ' + stat.rows + ' 行 / ' + stat.loadouts + ' 条天赋串');
+  + ' 件 / ' + stat.slots + ' 部位组 / ' + stat.rows + ' 行 / ' + stat.loadouts
+  + ' 种天赋串（产物里留了 ' + stat.loRows + ' 条，各专精最多 30）');
 // 两个数都打出来。只打 n 会把「榜上有 100 人」说成「有 100 人的装备」——
 // 那是第 13 轮真实发生过的误报。
 console.log('榜单样本   每专精最少 ' + (stat.minSpecN === Infinity ? '?' : stat.minSpecN) + ' 人');

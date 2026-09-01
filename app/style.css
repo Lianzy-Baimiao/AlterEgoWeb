@@ -1352,6 +1352,13 @@ table.bis-tbl th { color: var(--fg2); font-weight: 600; }
   white-space: nowrap;
 }
 
+/* 团本 / 大秘境（第 20 轮）。和 .lo-pick 分开一个类，是因为它俩层级不同：
+ * 先选哪一类数据，再在那一类里选第几串。挨着放但中间留一道分隔线，
+ * 免得看成同一排七八个按钮。 */
+.lo-kind {
+  display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line);
+}
 .lo-pick { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
 /* maxroll 那块的串框。外观和 .lo-text 一样，但**是两个类** ——
    lo-text 被测试按「每次渲染恰好一个」数着。 */

@@ -54,6 +54,11 @@
     charKey: '',        // 对照哪个角色的实际装备，'' = 不对照
     build: -1,          // 天赋树画哪一套，-1 = 该类别里用得最多的那套
     loadout: 0,         // 显示第几条官方导入串（rioLoadouts 排序后的下标）
+    // 「榜上热门天赋串」看团本还是大秘境（第 20 轮）。
+    // **持久化**，和 mrKind 同一个道理：它是两个固定的字，而且一个人在准备打
+    // 团本的话每次打开都要看团本那份。两份数据来源不同 ——
+    // 大秘境是 raider.io，团本是 Warcraft Logs（见 loKinds()）。
+    loKind: 'mplus',
     // 天赋页的 maxroll 那一路（第 15 轮：天赋也按 maxroll 来）。
     // mrKind 是 'mplus' | 'raid'，mrBuild 是该类型里第几套方案，
     // mrSub 是「打包了两条英雄树」时画哪一条（0 = 用方案里第一条）。
@@ -362,29 +367,40 @@
   }
 
   /**
-   * rio 里这个专精的官方天赋导入串，按「同一串多少人用」聚合后降序。
+   * 一个专精的天赋导入串列表，**两家共用一个读法**。
    *
-   * 返回 {list: [串], count: {串: 人数}, total: 总人数, uniq: 种类数} 或 null。
-   * 同人数时按串本身排序 —— 不这样的话 Object.keys 的顺序一变，界面上
-   * 「#1 热门」指的就是另一串了，而这种不稳定在测试里表现为偶发失败。
+   * app/rio-data.js（大秘境）和 app/wcl-data.js（团本）现在是同一个形状：
+   * `loadouts: [[串, 多少人用]…]`，人数降序、同人数按串本身，各专精最多 30 种。
+   *
+   * 为什么产物里就聚合好、面板不自己数：第 20 轮把 rio 的采样从 100 人提到
+   * 500 人，一人一条地存 19908 条串是 2 MB、占产物 90%，而这里只画前 6 种。
+   * 聚合放在生成器里，产物 2319 KB → 359 KB。
+   *
+   * **面板不重排。** 顺序是产物的责任，重排一遍等于把「产物排错了」这件事
+   * 藏起来 —— 那是校验器该报的，不是面板该兜的。
+   *
+   * total 用 n（真实采样人数），不是 count 之和：只留了前 30 种，
+   * 拿截断后的和当分母，百分比会偏高。
    */
-  function rioLoadouts(specId) {
-    var rs = rioSpec(specId);
-    if (!rs || !rs.loadouts || !rs.loadouts.length) return null;
-    var count = Object.create(null);
-    var total = 0;
-    rs.loadouts.forEach(function (str) {
+  function loadoutsOf(sp) {
+    if (!sp || !sp.loadouts || !sp.loadouts.length) return null;
+    var count = Object.create(null), list = [];
+    sp.loadouts.forEach(function (row) {
+      var str = row && row[0];
       if (!str) return;
-      count[str] = (count[str] || 0) + 1;
-      total++;
+      count[str] = row[1] || 1;
+      list.push(str);
     });
-    var list = Object.keys(count);
     if (!list.length) return null;
-    list.sort(function (a, b) {
-      if (count[b] !== count[a]) return count[b] - count[a];
-      return a < b ? -1 : (a > b ? 1 : 0);
-    });
-    return { list: list, count: count, total: total, uniq: list.length };
+    return {
+      list: list, count: count,
+      total: sp.n || list.length,
+      uniq: sp.loUniq || sp.uniq || list.length
+    };
+  }
+
+  function rioLoadouts(specId) {
+    return loadoutsOf(rioSpec(specId));
   }
   function talents() { return global.AE_TALENTS || null; }
   function tree() { return global.AE_TALENT_TREE || null; }
@@ -1677,6 +1693,8 @@
     // 它自己带回调重画，所以这里只是**触发**，不等它 —— 等它的话
     // 天赋页会为了一份可选数据多空一会儿。
     ensureMaxroll();
+    // 团本天赋串（第 20 轮）。同上，只触发不等。
+    ensureWcl();
     loadDataFile('talent-data.js', 'AE_TALENTS', function (err) {
       if (err && AE.toast) AE.toast(err, 'warn');
       // 树结构是另一个文件（app/talent-tree.js，约 415 KB）。
@@ -2415,10 +2433,44 @@
    * execCommand）。它可能没加载（测试环境就不加载 toast.js），所以先判断再用，
    * 判断不到时退回「选中文本自己按 Ctrl+C」—— 文本框本来就是可选中的。
    */
+  /** 团本那半（app/wcl-data.js）。形状和 rio 那半一样，见 loadoutsOf()。 */
+  function wclLoadouts(specId) {
+    var W = global.AE_WCL;
+    return loadoutsOf(W && W.specs ? W.specs[String(specId)] : null);
+  }
+
+  /**
+   * 「榜上热门天赋串」这一块，分**团本 / 大秘境**两类（第 20 轮用户要的）。
+   *
+   * 两类的来源不一样，而且不得不不一样：
+   *   · 大秘境 = raider.io 每专精排行榜，串在榜页里白送（app/rio-data.js）；
+   *   · 团本   = Warcraft Logs，raider.io 的团本榜只有公会没有角色。
+   *     WCL 的串在 `ReportFight.talentImportCode(actorID:)` 上（app/wcl-data.js）。
+   * 所以这里不是「同一份数据切两半」，是两份数据并排放 —— 样本量、覆盖的专精
+   * 都不一样，界面上必须分别写清楚，不能让人以为是一个数的两个视图。
+   */
+  function loKinds(specId) {
+    var out = [];
+    var m = rioLoadouts(specId);
+    if (m) out.push({ k: 'mplus', label: '大秘境', lo: m, src: 'rio' });
+    var r = wclLoadouts(specId);
+    if (r) out.push({ k: 'raid', label: '团本', lo: r, src: 'wcl' });
+    return out;
+  }
+
   function renderLoadouts(s) {
     if (!s || !s.specId) return null;
-    var lo = rioLoadouts(s.specId);
-    if (!lo) return null;
+    var kinds = loKinds(s.specId);
+    if (!kinds.length) return null;
+
+    // 选中哪一类。**默认取第一个存在的**，而不是写死 mplus —— 有些专精
+    // 只有一边有数据（团本 39/40，大秘境 40/40），写死会让那一个专精空着。
+    var ki = 0;
+    for (var q = 0; q < kinds.length; q++) {
+      if (kinds[q].k === state.loKind) { ki = q; break; }
+    }
+    var cur = kinds[ki];
+    var lo = cur.lo;
 
     var idx = state.loadout;
     if (!(idx >= 0) || idx >= lo.list.length) idx = 0;
@@ -2434,12 +2486,32 @@
       lo.total + ' 名玩家共 ' + lo.uniq + ' 种，下面是最热门的几种'));
     var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
     warn.setAttribute('data-tip',
-      '这一块是 raider.io 排行榜上真实角色的天赋串，能一键导入。\n'
+      '这一块是排行榜上真实角色的天赋串，能一键导入。\n'
       + '和下面 maxroll 那些方案不是同一套：拿一个专精逐节点比过，'
       + '一边多 7 个节点，另一边多 8 个。\n'
       + '要 maxroll 那一套，用它自己那一块的复制按钮。');
     head.appendChild(warn);
     box.appendChild(head);
+
+    // 团本 / 大秘境。只有一类时也画 —— 它同时是「这批数据是哪来的」的标签，
+    // 不只是开关。少画的话用户不知道自己看的是哪一类。
+    var kbar = el('div', 'lo-kind');
+    kinds.forEach(function (kd, i) {
+      var b = button(kd.label + '　' + kd.lo.total + ' 人',
+        i === ki ? 'on' : null, function () {
+          state.loKind = kd.k;
+          state.loadout = 0;          // 换类之后 #4 指的是另一串，回到 #1
+          persist({ bisLoKind: kd.k });
+          render();
+        });
+      b.setAttribute('data-tip', kd.k === 'raid'
+        ? '团本（史诗难度）首领榜上玩家的天赋，来自 Warcraft Logs。\n'
+          + '样本按专精差别很大：一队 20 人只有 2~3 个坦克 / 治疗。'
+        : '大秘境每专精排行榜上玩家的天赋，来自 raider.io。\n'
+          + '每个专精的样本量比较均匀。');
+      kbar.appendChild(b);
+    });
+    box.appendChild(kbar);
 
     // 选串。只列前 6 种 —— 再往后都是 1 人用的，列出来只是噪音。
     var bar = el('div', 'lo-pick');
@@ -2476,8 +2548,11 @@
     box.appendChild(act);
 
     box.appendChild(el('p', 'note',
-      '这几串是 raider.io 上大秘境排行榜玩家身上原样取下来的官方串，'
-      + '面板没有改动一个字符，也没有自己编码 —— 所以它们本来就能导进游戏。'
+      (cur.k === 'raid'
+        ? '这几串取自 Warcraft Logs 上 ' + ((global.AE_WCL && global.AE_WCL.raid) || '当前团本')
+          + '（史诗）首领榜玩家的战斗记录，原样转发，面板没有改动一个字符。'
+        : '这几串取自 raider.io 大秘境排行榜玩家身上，原样转发，'
+          + '面板没有改动一个字符。')
       + '导入的位置：游戏里 N 打开天赋界面，右下角「导入/导出」→「导入」。'
       + '串里带着它自己的专精编号，导错专精游戏会直接拒绝。'));
     return box;
@@ -3039,6 +3114,7 @@
     if (s.bisTalentCat) state.tcat = s.bisTalentCat;
     // 团本 / 大秘境：只认那两个字，别的一律当没存过（设置文件是用户能手改的）。
     if (s.bisMrKind === 'raid' || s.bisMrKind === 'mplus') state.mrKind = s.bisMrKind;
+    if (s.bisLoKind === 'raid' || s.bisLoKind === 'mplus') state.loKind = s.bisLoKind;
     if (s.bisChar) state.charKey = s.bisChar;
 
     loadDataFile('bis-data.js', 'AE_BIS', function (err) {
@@ -3111,6 +3187,25 @@
       mrLoading = false;
       mrLoaded = true;
       if (global.AE_MAXROLL && gearLoaded) render();
+    });
+  }
+
+  /**
+   * 团本天赋串（app/wcl-data.js，约 90 KB）。
+   *
+   * 单独懒加载，和 maxroll 那份一样只是**触发**、不等它：天赋页有大秘境那半
+   * 就能画，团本这半到了再重画一次多一个按钮。加载不到就只有大秘境 ——
+   * 那不是错误，界面上那个按钮条本来就是按「有几类数据」画的。
+   */
+  var wclLoading = false, wclLoaded = false;
+  function ensureWcl() {
+    if (wclLoaded || wclLoading) return;
+    if (global.AE_WCL) { wclLoaded = true; return; }
+    wclLoading = true;
+    loadDataFile('wcl-data.js', 'AE_WCL', function () {
+      wclLoading = false;
+      wclLoaded = true;
+      if (global.AE_WCL && gearLoaded) render();
     });
   }
 

@@ -74,6 +74,8 @@ $dropFromPkg = @(
     'tools\.talent-names.json',  # 271 KB of DB2 zhCN join results, dev-only
     'tools\.talent-icon-fix.json', # bad-icon-name -> real-name table, build-time only
     'tools\.maxroll-spell-ids.json', # which spell IDs fetch-maxroll.js needs looked up; a byproduct
+    'tools\.wcl-auth.json',      # the user's Warcraft Logs API credentials -- MUST NOT ship
+
     'tools\dom-stub.js',         # test harness
     'tools\run-tests.js',        # test harness
     'tools\mutate-a11y.js',     # mutation suite for the a11y assertions; needs run-tests.js
@@ -100,8 +102,14 @@ $dropDirsFromPkg = @(
     'tools\.talent-raw',        # 14 MB upstream cache for fetch-talent-tree.js
     'tools\.db2-names',         # 15 KB DB2 CSV cache for fetch-class-names.js
     'tools\.rio-raw',           # 1.9 MB raider.io cache for fetch-talent-truth.js
-    'tools\.maxroll-raw'        # 50 MB of maxroll guide HTML for fetch-maxroll.js (81 pages, measured)
+    'tools\.maxroll-raw',       # 50 MB of maxroll guide HTML for fetch-maxroll.js -- 81 pages, measured
+    'tools\.wcl-raw'            # Warcraft Logs raw responses + OAuth token for fetch-wcl.js
 )
+# NOTE: keep '(' and ')' out of the comments in these two lists. run-tests.js
+# finds each list with a non-greedy /@\(([\s\S]*?)\)/ -- a ')' inside a comment
+# ends the capture early and everything after it silently stops being checked.
+# That is how '.wcl-raw' slipped past the guard once: it sat right after a comment
+# reading '(81 pages, measured)'.
 foreach ($d in $dropDirsFromPkg) {
     Remove-Item -LiteralPath (Join-Path $pkgDir $d) -Recurse -Force -ErrorAction SilentlyContinue
 }
