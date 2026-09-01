@@ -152,6 +152,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               tnoName: 0, tnoCJK: 0, tRank: 0, tRankBad: 0, tspecs: 0, tEmpty: 0,
               trenders: 0, tdup: 0, tnoId: 0, tgeo: 0, tSpill: 0, tOverlap: 0, thero: 0, theroEn: 0,
               tico: 0, tnoIco: 0, ticoBad: 0, ticoNoCls: 0, ticoMismatch: 0, ticoPair: 0,
+              ticoLazy: 0, ticoEager: 0,
               tmaxCol: 0, tmaxRow: 0, tCluster: 0,
               // 天赋导入串。loSpecs 是**去重后的专精数**，loRenders 是渲染次数 ——
               // 两者不同（40 个专精 + 3 次切类别 = 43 次渲染），混用会得到一条
@@ -179,6 +180,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               gapBadge: 0, gapBad: 0, gapMath: 0, gapTop: 0, gapTopBad: 0,
               gapSum: 0, gapChars: 0, gapSlots: 0,
               // 无障碍
+              imgLazy: 0, imgEager: 0,
               a11yImg: 0, a11yBtn: 0, a11yBtnBad: 0, a11yTip: 0, a11yTipBad: 0,
               a11yCanvas: 0, a11yCanvasBad: 0 };
 var missingFiles = {};
@@ -261,6 +263,17 @@ function checkRender(label) {
     if (n.classList && n.classList.contains('item')) sawItem = true;
     if (n.tagName === 'IMG') {
       stats.imgs++;
+      // **懒加载必须都带上。** 面板每点一下整块重建，一次天赋页要造 99 个图标
+      // <img>、装备页 79 个，而三棵树里通常只有第一棵在视口内。少了这个属性，
+      // 浏览器每次重建都要把全部图标处理一遍（file:// 下每张一次文件读取 + 解码）
+      // —— 那正是「点一下就卡」的来源，而它在测试里没有任何别的表现。
+      if ((n.attrs && n.attrs.loading) === 'lazy') stats.imgLazy++;
+      else {
+        stats.imgEager++;
+        if (stats.imgEager < 3) {
+          problems.push(label + ' 有 <img> 没写 loading="lazy"：' + (n.attrs && n.attrs.src));
+        }
+      }
       var src = n.attrs.src || n.src || '';
       if (!src) { stats.badSrc++; problems.push(label + ' img 没有 src'); return; }
       if (src.indexOf('app/icons/') !== 0) {
@@ -318,20 +331,24 @@ function checkRender(label) {
         }
       }
     }
-    // ---- 装等差距徽章。形如「差 14」「高 3」「持平」，三种状态各有 class。
+    // ---- 装等差距徽章。形如「289 → 331　差 42」，三种状态各有 class。
     if (n.classList && n.classList.contains('gap')
       && n.classList.contains('tag')) {
       stats.gapBadge++;
       var gt = n.textContent;
-      var okTxt = /^(差|高) [1-9]\d{0,2}$/.test(gt) || gt === '持平';
+      // 前半截是两个原始装等（第 16 轮加的：做决定要看的数字不该只在悬停提示里），
+      // 后半截是差值。两截都要验，而且要互相对得上。
+      var m2 = /^([0-9]+) → ([0-9]+)　(差 [1-9][0-9]{0,2}|高 [1-9][0-9]{0,2}|持平)$/.exec(gt);
+      var okTxt = !!m2;
+      var tail = m2 ? m2[3] : '';
       // 文字和 class 必须**互相对得上**。只验文字的话「差 14」配 ahead 这种
       // 反着来的组合照样过 —— 而那正是「颜色对不上数字」的样子：
       // 落后画成淡色、领先画成警告色，用户会照着颜色做反的决定。
       var cls = n.classList.contains('behind') ? 'behind'
         : n.classList.contains('ahead') ? 'ahead'
           : n.classList.contains('even') ? 'even' : '';
-      var wantCls = gt.indexOf('差 ') === 0 ? 'behind'
-        : gt.indexOf('高 ') === 0 ? 'ahead' : 'even';
+      var wantCls = tail.indexOf('差 ') === 0 ? 'behind'
+        : tail.indexOf('高 ') === 0 ? 'ahead' : 'even';
       if (!okTxt || cls !== wantCls) {
         stats.gapBad++;
         if (stats.gapBad < 4) {
@@ -356,8 +373,18 @@ function checkRender(label) {
         }
       } else {
         var want = Math.round(Number(nums[2]) - Number(nums[1]));
-        var shown = gt === '持平' ? 0
-          : (gt.indexOf('差 ') === 0 ? 1 : -1) * Number(gt.slice(2));
+        var shown = tail === '持平' ? 0
+          : (tail.indexOf('差 ') === 0 ? 1 : -1) * Number(tail.slice(2));
+        // 徽章上印的两个装等必须**就是**提示里那两个。不然徽章是一套数、提示是
+        // 另一套，两边各自自洽而用户看到的是矛盾的读数。
+        if (m2 && (Math.round(Number(nums[1])) !== Number(m2[1])
+          || Number(nums[2]) !== Number(m2[2]))) {
+          stats.gapBad++;
+          if (stats.gapBad < 4) {
+            problems.push(label + ' 装等差距徽章上印的是 ' + m2[1] + ' → ' + m2[2]
+              + '，提示里却是 ' + nums[1] + ' → ' + nums[2]);
+          }
+        }
         if (want !== shown) {
           stats.gapBad++;
           if (stats.gapBad < 4) {
@@ -1263,6 +1290,18 @@ function checkTalents(label, specId) {
         if (stats.tnoIco < 4) problems.push(label + ' 天赋节点 ' + nid + ' 没有图标');
       } else {
         stats.tico++;
+        // 懒加载。**这一条差点又栽在同一个坑里**：上面那段注释说的就是
+        // 「数图标的代码只在 checkRender 里，而天赋树走 checkTalents」——
+        // 我加完 loading="lazy" 的断言后，把天赋树那 99 个图标的属性去掉，
+        // 摘要里的 19398 一个都没变，套件全绿。同一个形状，第二次。
+        if ((ico.attrs && ico.attrs.loading) === 'lazy') stats.ticoLazy++;
+        else {
+          stats.ticoEager++;
+          if (stats.ticoEager < 3) {
+            problems.push(label + ' 天赋图标没写 loading="lazy" —— 一棵树 ~33 个，'
+              + '三棵 99 个，而面板每点一下都整块重建');
+          }
+        }
         var isrc = ico.attrs.src || ico.src || '';
         if (isrc.indexOf('app/talent-icons/') !== 0) {
           stats.ticoBad++;
@@ -1613,6 +1652,13 @@ var mf = Object.keys(missingFiles);
 if (stats.renders < 80) problems.push('渲染次数只有 ' + stats.renders + '，harness 没跑起来');
 if (stats.imgs < 5000) problems.push('<img> 只有 ' + stats.imgs + ' 个，图标没接上');
 if (stats.ph > 0) problems.push('出现 ' + stats.ph + ' 个占位块，说明有 itemId 查不到图标');
+if (stats.imgEager > 0) {
+  problems.push(stats.imgEager + ' 个 <img> 没写 loading="lazy" —— '
+    + '面板每点一下都整块重建，不懒加载的话每次都要把全部图标重新处理一遍');
+}
+if (stats.imgLazy !== stats.imgs) {
+  problems.push('懒加载 ' + stats.imgLazy + ' / 图标 ' + stats.imgs + '，不是全覆盖');
+}
 if (stats.badSrc > 0) problems.push(stats.badSrc + ' 个 <img> 没有 src');
 if (mf.length) problems.push('引用了 ' + mf.length + ' 个不存在的图标文件：' + mf.slice(0, 5).join(', '));
 if (haveIcon.length !== gearIds.length) {
@@ -1757,6 +1803,12 @@ if (stats.tgrids !== stats.trenders * 3) {
     + ' 次，不是每次 3 棵');
 }
 if (stats.tEmpty > 0) problems.push(stats.tEmpty + ' 个专精一个天赋节点都没画出来');
+if (stats.ticoEager > 0) {
+  problems.push(stats.ticoEager + ' 个天赋图标没写 loading="lazy"');
+}
+if (stats.ticoLazy !== stats.tico) {
+  problems.push('天赋图标懒加载 ' + stats.ticoLazy + ' / ' + stats.tico + '，不是全覆盖');
+}
 if (stats.tnodes < 4000) problems.push('天赋节点只画了 ' + stats.tnodes + ' 个，太少');
 if (stats.tedges < 6000) problems.push('天赋连线只画了 ' + stats.tedges + ' 条，太少');
 // 名字是这棵树的全部可读性 —— 不带图标，名字空一个都不行。
@@ -1828,7 +1880,8 @@ if (stats.tico !== stats.tnodes) {
 
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
-  + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots + '）');
+  + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots
+  + '，图标全部懒加载 ' + stats.imgLazy + '）');
 // 这一行必须打印：装等和差距是第 16 轮加的，而「加了计数器、写了断言、
 // 既不打印也没下界」在本仓库出过一次 —— 那次整块功能没被画过，套件照样全绿。
 console.log(pad('装等 / 差距') + '通过（视角按钮 2 个，旧视角 '
@@ -1843,7 +1896,8 @@ console.log(pad('天赋树渲染') + (stats.tEmpty ? stats.tEmpty + ' 个专精�
   + '（' + stats.tspecs + ' 个专精，' + stats.tgrids + ' 棵树，节点 ' + stats.tnodes
   + '，点亮 ' + stats.tnodeOn + '，连线 ' + stats.tedges + '，点亮 ' + stats.tedgeOn
   + '，点数徽章 ' + stats.tRank + '，英雄天赋名 ' + stats.thero
-  + '，图标 ' + stats.tico + '（没图标 ' + stats.tnoIco + '，路径错 ' + stats.ticoBad
+  + '，图标 ' + stats.tico + '（全部懒加载 ' + stats.ticoLazy
+  + '，没图标 ' + stats.tnoIco + '，路径错 ' + stats.ticoBad
   + '，缺 class ' + stats.ticoNoCls + '，图文配对 ' + stats.ticoPair
   + '，图文不符 ' + stats.ticoMismatch + '）'
   + '，方块 ' + stats.tgeo + '（重叠 ' + stats.tOverlap + '，超出 ' + stats.tSpill + '）'

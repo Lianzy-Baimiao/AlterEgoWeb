@@ -990,7 +990,16 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 
    这个面板比其它抽屉宽（纵向长方形，一列部位从上往下排），所以它自己一档宽度。 */
 #bis { width: min(680px, 96vw); }
-#bis-body { overflow-y: auto; padding: 10px 14px 40px; flex: 1; }
+/* contain: content —— 面板每次点击都整块重建，而里面有三棵天赋树（各 ~33 个
+   绝对定位的节点）。没有它的话浏览器要把这一块的布局和绘制放在整页的上下文里算;
+   有了它，重建的影响被关在这个盒子内。和 #grid-wrap 上那句 contain: paint 同一个
+   道理（那边是 60 列的表格横向滚动）。 */
+#bis-body {
+  overflow-y: auto;
+  padding: 10px 14px 40px;
+  flex: 1;
+  contain: content;
+}
 
 #bis-body .bis-tabs {
   display: flex;
@@ -1494,5 +1503,14 @@ em.scen.multi { color: var(--accent); opacity: .8; }
 .bis-sum { margin: 0 0 7px; font-size: 12px; }
 .bis-sum.gap-sum { color: var(--fg2); }
 .bis-sum.gap-sum b { color: var(--fg); }
+/* 汇总行里两边的平均装等。你的用中性色，推荐的用强调色 —— 一眼能看出
+   「要往哪个数走」。不给「你」上警告色：落后本身不是错误状态。 */
+.bis-sum.gap-sum b.iv-mine { color: var(--fg); }
+.bis-sum.gap-sum b.iv-want { color: var(--accent); }
+/* 「属性只有一边」那句说明。比装等汇总更弱一档：它是解释，不是读数。 */
+.bis-sum.stat-note { color: var(--fg3); }
+.bis-sum.stat-note b { color: var(--fg2); }
+/* 差距徽章现在带两个装等（「289 → 331　差 42」），比原来宽，所以别再挤压它。 */
+.slot-head .tag.gap { white-space: nowrap; }
 .bis-sum .warn { color: var(--warn); font-weight: 600; }
 .bis-foot { margin-top: 14px; color: var(--fg3); font-size: 11px; line-height: 1.6; }

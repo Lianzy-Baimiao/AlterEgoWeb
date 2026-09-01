@@ -444,6 +444,15 @@
     img.alt = '';
     img.width = size;
     img.height = size;
+    // 懒加载 + 异步解码。天赋页一次要造 **99 个**这样的图标（三棵树各 ~33 个），
+    // 而面板每点一下都是整块重建 —— 三棵树里通常只有第一棵在视口内，
+    // 剩下的都在滚动区外。不加这两句的话每次重建都要把 99 张全处理一遍
+    // （file:// 下每张都是一次单独的文件读取 + 解码）。
+    //
+    // 用 setAttribute 而不是 img.loading = ... ：两者在浏览器里等价，但属性赋值
+    // 在测试脚手架里**看不见**（桩只记 setAttribute），那样这条改动就没法写断言。
+    img.setAttribute('loading', 'lazy');
+    img.setAttribute('decoding', 'async');
     // 缺一张图不该让整个节点塌掉，也不该留一个碎图标记。
     img.addEventListener('error', function () {
       if (img.parentNode) img.parentNode.removeChild(img);
@@ -499,6 +508,15 @@
     img.alt = '';
     img.width = size;
     img.height = size;
+    // **懒加载 + 异步解码。** 面板每次点击都是整块重建，而一次天赋页要造 99 个
+    // 图标 <img>（三棵树各 ~33 个）—— 其中只有第一棵树的那些在视口里，剩下的
+    // 都在下面滚动区外。不加这两个属性的话，浏览器每次重建都要把 99 个全处理
+    // 一遍（file:// 下每个都是一次单独的文件读取 + 解码），点一下就能感觉到卡。
+    //
+    // 这两个属性都是浏览器原生的、不支持也只是没效果，所以不用探测特性。
+    // width/height 上面已经写死了，所以懒加载不会引起布局跳动。
+    img.setAttribute('loading', 'lazy');
+    img.setAttribute('decoding', 'async');
     // 图标文件缺一个不该让整行塌掉，也不该留一个碎图标记。
     //
     // 换到 rio 视角后这条分支**经常走到**：rio 有 2432 件物品，而包里
@@ -932,6 +950,9 @@
     // 「能比的部位数」要单独记 —— 不记的话「差 168 装等」这个数没有分母，
     // 而分母会变（存档稀疏、6 件推荐装两份实测数据都查不到装等）。
     var gapN = 0, gapSum = 0, gapWorst = null;
+    // 两边的装等分别累加。只有汇总里给出**这两个原始数**，用户才能自己验算 ——
+    // 光给一个「合计差 168」是个无法核对的断言（分母和两边的基数都看不见）。
+    var gapMine = 0, gapWant = 0;
 
     SLOT_ORDER.forEach(function (slotId) {
       var rows = slots[slotId];
@@ -955,6 +976,8 @@
       if (g) {
         gapN++;
         gapSum += g.d;
+        gapMine += g.mine;
+        gapWant += g.want;
         if (!gapWorst || g.d > gapWorst.d) gapWorst = { d: g.d, slot: slotId };
       }
       // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
@@ -978,10 +1001,19 @@
       if (gapN) {
         var gsum = el('p', 'bis-sum gap-sum');
         var avg = Math.round(gapSum * 10 / gapN) / 10;
-        gsum.appendChild(el('b', null, '装等差距'));
-        gsum.appendChild(doc.createTextNode('　能比的 ' + gapN + ' 个部位合计 '
+        var avgMine = Math.round(gapMine * 10 / gapN) / 10;
+        var avgWant = Math.round(gapWant * 10 / gapN) / 10;
+        gsum.appendChild(el('b', null, '装等对比'));
+        // **两个原始平均值摆出来**，再给差值。只给「合计差 168」的话，那是个
+        // 无法核对的数：分母是几个部位、两边各自多少，用户都看不见。
+        gsum.appendChild(doc.createTextNode('　你 '));
+        gsum.appendChild(el('b', 'iv-mine', String(avgMine)));
+        gsum.appendChild(doc.createTextNode('　这套推荐 '));
+        gsum.appendChild(el('b', 'iv-want', String(avgWant)));
+        gsum.appendChild(doc.createTextNode('　（能比的 ' + gapN + ' 个部位的平均）'));
+        gsum.appendChild(doc.createTextNode('　合计 '
           + (gapSum > 0 ? '差 ' + gapSum : gapSum < 0 ? '高 ' + (-gapSum) : '持平 0')
-          + ' 装等，平均 ' + avg + '。'));
+          + ' 装等，平均每件 ' + avg + '。'));
         if (gapWorst && gapWorst.d > 0) {
           gsum.appendChild(doc.createTextNode('　差最多的是'
             + (B.slotNames[gapWorst.slot] || ('部位 ' + gapWorst.slot))
@@ -991,6 +1023,28 @@
           '　比的是「你身上这件」和「这个部位首选那一件」的装等。'
           + 'maxroll 不给装等，推荐件的装等取自本机两份实测数据（见每一行的提示）'
           + '—— 所以这是个参考量级，不是精确到 1 点的承诺。'));
+        // **属性为什么只有一边。** 推荐件的属性有（下面每一行都印着），
+        // 而你身上那件的属性**存档里没有** —— AlterEgo 存的是名字 / 装等 / 品质 /
+        // 物品链接，没有属性字段；链接里的 bonusID 理论上能推出属性，但那要一张
+        // bonusID→属性的对照表，本机没有，猜出来的属性比不给更糟。
+        // 实测：身上 224 件里只有 52 件能在 GearInsight 的物品池里查到（23.2%），
+        // 靠那个补等于四分之三的部位空着，界面上会像是数据坏了。
+        // class 不能沿用 gap-sum —— 那个类被「每次对照渲染恰好一条汇总」
+        // 那条断言数着，共用会让计数翻倍（写完第一版就被它抓了）。
+        var stNote = el('p', 'bis-sum stat-note');
+        stNote.appendChild(el('b', null, '属性'));
+        stNote.appendChild(doc.createTextNode(
+          '　推荐件的属性印在下面每一行上（暴击 / 急速 / 精通 / 全能），'
+          + '你身上那件的属性存档里没有，所以这一栏只有一边。'));
+        stNote.appendChild(el('span', 'note',
+          '　想看这个专精该堆什么，展开上面的「属性目标」。'));
+        stNote.setAttribute('data-tip',
+          'AlterEgo 存的装备只有名字 / 装等 / 品质 / 物品链接，没有属性字段。\n'
+          + '链接里的 bonusID 理论上能推出属性，但那要一张 bonusID→属性的对照表，'
+          + '本机没有 —— 猜出来的属性比不给更糟。\n'
+          + '实测拿 GearInsight 的物品池去查，身上 224 件只对上 52 件（23.2%），'
+          + '四分之三的部位会空着。');
+        host.insertBefore(stNote, list);
         host.insertBefore(gsum, list);
       }
       host.insertBefore(sum, list);
@@ -1208,8 +1262,12 @@
       // 判据用这个部位**首选那一件**的装等（rows[0]），因为那是「换到最好」要走的距离。
       var gap = slotGap(rows, mine);
       if (gap) {
+        // 徽章上**同时给出两个原始装等**，不只给差值。
+        // 只给「差 14」的话，那个数要靠悬停提示才能核对，而这一格恰恰是用户
+        // 做决定要看的（换不换这个部位）—— 关键数字不该藏在鼠标后面。
         var gb = el('span', 'tag gap' + (gap.d > 0 ? ' behind' : (gap.d < 0 ? ' ahead' : ' even')),
-          gap.d > 0 ? '差 ' + gap.d : (gap.d < 0 ? '高 ' + (-gap.d) : '持平'));
+          gap.mine + ' → ' + gap.want + '　'
+          + (gap.d > 0 ? '差 ' + gap.d : (gap.d < 0 ? '高 ' + (-gap.d) : '持平')));
         gb.setAttribute('data-tip',
           '你 ' + gap.mine + '　首选那件 ' + gap.want + '（' + gap.srcText + '）\n'
           + (gap.d > 0 ? '换上去等于这个部位 +' + gap.d + ' 装等'
