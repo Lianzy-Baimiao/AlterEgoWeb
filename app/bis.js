@@ -2079,7 +2079,7 @@
         '这一套没有导入串（生成时串头改写失败）—— 树还是能看的。'));
     }
 
-    // 出手顺序（优先级列表）和每个首领 / 副本的说明。两块都是**英文原文**，
+    // 出手顺序（优先级列表）和每个首领 / 副本的说明。技能名是中文、句子是英文，
     // 见 renderMrNotes 的注释。
     var pr = renderMrNotes(pick.v.prio, 'mr-prio', '出手顺序',
       'maxroll 指南里的 Priority List —— 就是「技能时间轴」的文字版。');
@@ -2172,11 +2172,14 @@
   /**
    * 「出手顺序」和「各首领 / 副本说明」两块。形状一样，所以一个函数。
    *
-   * **正文原样显示英文。** 这两块里首领名、副本名、技能名都长在句子里
-   * （「Ensure Blight of Tongues is active on the interrupt add」），
-   * 而本机没有这些名词的中英对照表 —— 硬约束是不凭记忆手打中文游戏名词，
-   * 因为打错一个官方译名比留英文更糟（用户会照着一个游戏里不存在的名字去找技能）。
-   * 所以这里只做一件事：把 maxroll 的原文分组摆出来，并在标题上说明它是英文。
+   * **技能名是中文，句子是英文原文。** 技能 / 天赋名在生成时按 maxroll 标的
+   * data-wow-id 换成了官方中文名（见 tools/fetch-maxroll.js 的 substSpells），
+   * 所以「Cast Shadow Bolt as your filler」在产物里已经是「Cast 暗影箭 as your
+   * filler」—— 名字能直接拿去游戏里搜。句子没翻：整句机翻会把「unless」这类
+   * 条件翻反，而界面上看不出来。
+   *
+   * 面板这一侧**一个字都不加工**：产物给什么就显示什么。截断、去标点、再翻译
+   * 都会让它和产物不一致，测试逐字节比对就是在钉这件事。
    *
    * 用 <details> 折叠：实测一个专精有 3~9 条首领说明，全展开会把天赋树顶到屏幕外。
    */
@@ -2189,14 +2192,19 @@
     // 全用子元素，两边读出来的都是同一串字。
     var sum = el('summary');
     sum.appendChild(el('span', 'ttl', title + '　' + list.length + ' 条'));
-    sum.appendChild(el('span', 'note', '　英文原文'));
+    sum.appendChild(el('span', 'note', '　技能名中文，句子英文'));
     sum.setAttribute('data-tip', tip
-      + '\nmaxroll 的原文是英文，而首领名 / 技能名的官方中文译名本机查不到，'
-      + '所以这里不翻译 —— 编一个译名会让你照着游戏里不存在的名字去找。');
+      + '\n技能和天赋名是官方中文（按 maxroll 标的技能 ID 查的，查不到的留英文）。\n'
+      + '句子是 maxroll 的英文原文，没翻 —— 整句机翻会把「unless」这种条件翻反，'
+      + '照着打就是错的，而界面上看不出来。');
     wrap.appendChild(sum);
     list.forEach(function (r) {
       var row = el('div', 'note-row');
-      var h = el('b', null, r.n);
+      // 小节名过一遍 heroName()：出手顺序的小节名基本都是英雄天赋名
+      // （Sunfury / Hellcaller…），而 app/talent-tree.js 的子树表里有它们的
+      // 官方中文名。**这是查表不是翻译** —— 查不到就原样显示英文
+      // （首领说明的小节名是首领 / 副本名，本机没有译名，全部走这条）。
+      var h = el('b', null, heroName(r.n));
       // 带场景的那几条（实测 183 条优先级列表里有 14 条）在名字后面标出来。
       if (r.s) {
         var sc = el('em', 'scen ' + r.s, SCEN_ZH[r.s] || r.s);

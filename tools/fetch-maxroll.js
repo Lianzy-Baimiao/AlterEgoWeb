@@ -185,6 +185,41 @@ function stripRich(h) {
     .replace(/\s+/g, ' ').trim();
 }
 
+/* -------------------------------------------------- 技能名换中文（见 walkGuide） */
+
+// 官方中文名表。跑 tools\fetch-spell-names.js 生成；没有就整段留英文
+// （**不报错**：面板画得出来，只是没中文，而下面的统计会把这件事说出来）。
+var SPELL_ZH = (function () {
+  var p = path.join(__dirname, 'spell-names-zh.json');
+  if (!fs.existsSync(p)) return {};
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')).names || {}; } catch (e) { return {}; }
+})();
+
+// 替换统计 + 给 fetch-spell-names.js 用的 ID 清单。
+// 这两样都是「让漏掉的东西看得见」用的：光看产物没法分辨
+// 「这段本来就没技能名」和「表里缺这个技能」。
+var subst = { hit: 0, miss: 0, refs: {} };
+
+/**
+ * 把正文里的技能 span 换成中文名。**必须在 stripRich 之前调用** ——
+ * stripRich 会把标签连 data-wow-id 一起扒掉，之后就只剩英文名可认了，
+ * 而按英文名匹配就是在猜（同名不同技能、复数形式、大小写都会咬人）。
+ *
+ * ID 可能带后缀（实测 139 处形如 `126519:AJAC`），取前面的数字部分。
+ */
+function substSpells(h) {
+  return String(h).replace(
+    /<span class="wow-(?:spell|trait)" data-wow-id="(\d+)(?::[A-Za-z0-9]+)?"[^>]*>([^<]{1,80})<\/span>/g,
+    function (all, id, en) {
+      var clean = en.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').trim();
+      subst.refs[id] = { en: clean, kind: all.indexOf('wow-trait') >= 0 ? 'trait' : 'spell' };
+      var zh = SPELL_ZH[id];
+      if (zh) { subst.hit++; return zh; }
+      subst.miss++;
+      return all;                      // 查不到就原样留着，让 stripRich 取出英文名
+    });
+}
+
 // tab 块。坑 ①②：类名按前缀匹配；找下一块要用完整的 '<div class="_tabsV2_'。
 function tabBlocks(html) {
   var out = [];
@@ -490,9 +525,22 @@ function deriveTargets(RIO, listHtml, specIdx) {
  *   编码（`embed-tools/rotation=…`），而正文里是同一份内容且**可读**，
  *   所以取正文，不去啃那个编码。
  *
- * **这三样全是英文。** 首领名、副本名、技能名都长在句子里，本机没有它们的
- * 中英对照表，而「不凭记忆手打中文游戏名词」是硬约束 —— 所以原样保留英文，
- * 由面板在界面上说明这一段是英文原文。
+ * 技能名换中文，句子留英文（第 19 轮定的）
+ * ---------------------------------------
+ * 这两块正文原先**整段留英文**，理由是「本机没有技能名的中英对照表」。
+ * 那个理由只对了一半：本机翻遍 5339 个插件文件，1929 条英中对照里确实一条技能名
+ * 都没有 —— 但 maxroll 的正文把每个技能都标了 ID：
+ *
+ *     <span class="wow-spell" data-wow-id="686">Shadow Bolt</span>
+ *
+ * 有 ID 就不用猜。tools/fetch-spell-names.js 按 ID 备了一张官方中文名表
+ * （天赋来自 app/talent-tree.js 的暴雪 DB2 名，基础技能来自 Wowhead locale=4），
+ * 这里按 ID 替换 —— **查不到的留英文，一个字都不猜**。
+ *
+ * 只换名词，**句子仍然是英文原文**。整句翻译得由人来做：像
+ * 「hold this ability unless the boss requires otherwise」这种，机翻把
+ * 「除非」翻反了，用户照着打就是错的，而界面上看不出来。名词替换不会翻反 ——
+ * 它要么换对，要么原样不动。
  */
 function walkGuide(blocks) {
   var out = { scen: {}, boss: [], prio: [] };
@@ -524,11 +572,37 @@ function walkGuide(blocks) {
     for (var i = idx + 1; i < list.length; i++) {
       var ih = list[i].innerHTML || '';
       if (/<h[234][^>]*>/.test(ih)) break;          // 下一个标题，停
-      var t = stripRich(ih);
+      // substSpells 在 stripRich 之前：见它自己的注释，顺序颠倒就只能按英文名猜了。
+      var t = stripRich(substSpells(ih));
       if (t) parts.push(t);
       if (parts.join(' ').length > cap) break;
     }
     return parts.join(' ').slice(0, cap).trim();
+  }
+
+  /**
+   * 「Priority List」标题后面跟的是分页容器时，一页一条出手顺序。
+   *
+   * 形状（实测）：`advgb/adv-tabs`，页名在 attributes.tabHeaders（HTML 串），
+   * 正文在每个 `advgb/tab` 的 innerBlocks 里。**tab 自己的 innerHTML 只有页名**
+   * （那个 advgb-tab-body-header），所以正文必须从 innerBlocks 取，
+   * 从 tab 自己的 innerHTML 取只会又拿到页名。
+   *
+   * 不是分页容器就返回空数组，让调用者走原来那条路。
+   */
+  function tabPrio(blk, trail) {
+    if (!blk || !/adv-tabs/.test(blk.blockName || '')) return [];
+    var heads = (blk.attributes && blk.attributes.tabHeaders) || [];
+    var out2 = [];
+    (blk.innerBlocks || []).forEach(function (tab, i) {
+      var body = (tab.innerBlocks || []).map(function (c) {
+        return stripRich(substSpells(c.innerHTML || ''));
+      }).filter(Boolean).join(' ').slice(0, 900).trim();
+      if (!body) return;
+      var nm = stripRich(substSpells(heads[i] || '')) || ('第 ' + (i + 1) + ' 页');
+      out2.push({ n: nm, s: scenOf(trail.concat([nm]).join(' | ')), t: body });
+    });
+    return out2;
   }
 
   function walk(list, trail) {
@@ -563,11 +637,24 @@ function walkGuide(blocks) {
         }
         // ---- 优先级列表（技能时间轴的文字版）
         if (/priority/i.test(lab.text)) {
-          var pb = bodyAfter(list, idx, 900);
-          if (pb) {
-            // 祖先链里带场景的话记下来，界面才能分「单体优先级 / AOE 优先级」。
-            var ps = scenOf(next.join(' | '));
-            out.prio.push({ n: next[next.length - 2] || lab.text, s: ps, t: pb });
+          // 标题后面**可能是一个分页容器**而不是正文（实测 215 个 Priority 标题里
+          // 有 3 个这样：防护骑双份 + 织雾僧）。那时候取兄弟节点抓到的是分页
+          // 标签本身 —— 防护骑因此产出过一条正文只有「Lightsmith Templar」的
+          // 假条目，而真正的两份出手顺序（铸光者 / 圣殿骑士各一份）一条都没收。
+          //
+          // 这个 bug 藏了一整轮，藏在校验器的字数下界里：那句标签 18 个字符，
+          // 而下界是 10。下界现在按实测收紧到 40（真实出手顺序最短 67 字），
+          // 这种形状再也过不去了。
+          var tabbed = tabPrio(list[idx + 1], next);
+          if (tabbed.length) {
+            tabbed.forEach(function (r) { out.prio.push(r); });
+          } else {
+            var pb = bodyAfter(list, idx, 900);
+            if (pb) {
+              // 祖先链里带场景的话记下来，界面才能分「单体优先级 / AOE 优先级」。
+              var ps = scenOf(next.join(' | '));
+              out.prio.push({ n: next[next.length - 2] || lab.text, s: ps, t: pb });
+            }
           }
         }
       }
@@ -1017,7 +1104,7 @@ function writeOut(parsed, slotMap, RIO, meta) {
       slug: p.t.slug, bis: {}, alt: {}, ench: {}, tiers: [],
       talents: collectTalents(p.g.talents || [], sid, dec, ORDER,
         subOfSpec[String(sid)] || {}, tStat, p.g.scen || {}),
-      // 首领 / 副本说明和优先级列表都是**英文原文**（见 walkGuide 的注释）。
+      // 首领 / 副本说明和优先级列表：技能名已换中文、句子留英文（见 walkGuide）。
       // 去重：同一段说明在页面里会重复出现（正文讲一次、总结再讲一次）。
       boss: dedupeNotes(p.g.boss || [], nStat, 'boss'),
       prio: dedupeNotes(p.g.prio || [], nStat, 'prio')
@@ -1140,8 +1227,13 @@ function writeOut(parsed, slotMap, RIO, meta) {
         + 'g 能粘进游戏的导入串（s 改了串头：版本 130→2、treeHash→全 0）, '
         + 'sc [场景码…]（可选，st 单体 / aoe / cleave 顺劈 / multi 多目标）}…], '
         + 'boss [{n 首领或副本名, t 说明}…], prio [{n 小节名, s 场景码（可选）, t 正文}…]}',
-      note2: 'boss 和 prio 的正文是**英文原文**：首领名 / 副本名 / 技能名都长在句子里，'
-        + '本机没有这些名词的中英对照表，手打中文是禁止的（会打错游戏里的官方译名）。'
+      note2: 'boss 和 prio 的正文里，**技能 / 天赋名是官方中文，句子是英文原文**。'
+        + 'maxroll 给每个技能都标了 data-wow-id，所以中文名是按 ID 查出来的'
+        + '（tools/spell-names-zh.json：天赋取 app/talent-tree.js 里暴雪 DB2 的名字，'
+        + '基础技能取 Wowhead locale=4），查不到的那几个留英文 —— 不猜译名。'
+        + '句子不整段翻译：机翻会把「unless / 除非」这类条件翻反，用户照着打是错的'
+        + '而界面上看不出来；名词替换要么换对要么原样不动，不会翻反。'
+        + '首领名（boss[].n）也留英文，本机没有它们的官方译名。'
         + 'sc / prio[].s 只在 maxroll 自己按场景分了的时候才有 —— 实测 80 篇里只有 28 篇这么分。',
       items: 'itemId → {n 中文名, i 图标名, q 品质}（名字空字符串 = rio 池里没有，待补）'
     },
@@ -1179,7 +1271,32 @@ function writeOut(parsed, slotMap, RIO, meta) {
     + ' —— maxroll 只有一部分专精按场景分天赋，其余按英雄天赋或副本分');
   console.log('  首领 / 副本说明 ' + nStat.boss + ' 条（重复合并 ' + nStat.bossDupe
     + '），优先级列表 ' + nStat.prio + ' 条（重复合并 ' + nStat.prioDupe
-    + '，其中带场景的 ' + nStat.prioScen + '）　**英文原文**');
+    + '，其中带场景的 ' + nStat.prioScen + '）　句子是英文原文');
+  // 技能名替换的账。**必须印出来**：产物里看不出「这段本来没技能名」和
+  // 「表里缺这个技能」的区别，只有这一行能。
+  (function () {
+    var need = Object.keys(subst.refs).length;
+    var have = Object.keys(subst.refs).filter(function (id) { return SPELL_ZH[id]; }).length;
+    if (!need) { console.log('    技能名：正文里一个带 ID 的技能引用都没扫到（不对，检查一下）'); return; }
+    console.log('    技能名换中文 ' + subst.hit + ' 处，留英文 ' + subst.miss + ' 处'
+      + '（引用到 ' + need + ' 个技能，表里有 ' + have + ' 个）');
+    if (!Object.keys(SPELL_ZH).length) {
+      console.log('    ⚠ 没有 tools\\spell-names-zh.json —— 正文全是英文。'
+        + '跑 node tools\\fetch-spell-names.js 生成');
+    } else if (need > have) {
+      var miss = Object.keys(subst.refs).filter(function (id) { return !SPELL_ZH[id]; });
+      console.log('    表里缺的 ' + miss.length + ' 个（留英文）：'
+        + miss.slice(0, 8).map(function (id) { return subst.refs[id].en; }).join('、')
+        + (miss.length > 8 ? ' …' : ''));
+    }
+    // 清单写给 tools\fetch-spell-names.js —— 它靠这个知道该查哪些 ID，
+    // 而不用把「哪几段算出手顺序」的判断再实现一遍。
+    fs.writeFileSync(path.join(__dirname, '.maxroll-spell-ids.json'),
+      JSON.stringify({ v: 1, updatedAt: new Date().toISOString().slice(0, 10),
+        note: '由 tools/fetch-maxroll.js 写出：出手顺序 / 首领说明正文里引用到的技能 ID。'
+          + 'tools/fetch-spell-names.js 读它。',
+        refs: subst.refs }, null, 1) + '\n');
+  }());
   if (db2Want) {
     console.log('  rio 池里没有的 ' + db2Want + ' 件：'
       + (db2Skipped ? '跳过补名（本机没有 tools\\.db2-names\\ItemSparse.csv）'

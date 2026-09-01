@@ -44,6 +44,11 @@ tools/.rio-raw/
 # 更没有理由放进仓库。
 tools/.maxroll-raw/
 
+# tools/fetch-maxroll.js 顺手写出的「出手顺序 / 首领说明正文里引用到哪些技能 ID」
+# 清单，给 tools/fetch-spell-names.js 读。它是那次运行的副产品，重跑就重生成 ——
+# 而**译名表 tools/spell-names-zh.json 是入库的**（--report 要能离线重算产物）。
+tools/.maxroll-spell-ids.json
+
 # Editor / OS noise
 .vscode/
 .idea/

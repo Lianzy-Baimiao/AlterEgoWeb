@@ -173,9 +173,13 @@ var MUTANTS = [
     '但画出来的树和它不一致'),
 
   // 名字取错行。名字是用户唯一用来选方案的信息。
+  // 锚点第 19 轮换过一次：方案名现在走 shortNames[i]（缩短 + 重名补后缀那一轮
+  // 加的），原来那句 `t.n || '（这套没写名字）'` 已经不在文件里了。
+  // 旧锚点在这儿烂了一整轮没人发现 —— textMutant 判「锚点出现 0 次」时会报
+  // 锚点失效，那条报错就是这么被抓到的。锚点烂掉 = 这条断言根本没被验过。
   textMutant('方案名全都取第一套的', BIS,
-    "btn.appendChild(el('span', 'nm', t.n || '（这套没写名字）'));",
-    "btn.appendChild(el('span', 'nm', pick.list[0].n || '（这套没写名字）'));",
+    "btn.appendChild(el('span', 'nm', shortNames[i]));",
+    "btn.appendChild(el('span', 'nm', shortNames[0]));",
     '产物里是「'),
 
   // 点数印回产物里声明的 p。打包两条英雄天赋的方案那是 95 点 ——
@@ -342,7 +346,7 @@ var MUTANTS = [
   textMutant('说明正文被截断', BIS,
     "      row.appendChild(el('p', 'en', r.t));",
     "      row.appendChild(el('p', 'en', r.t.slice(0, 80)));",
-    '这一段是英文原文，不许加工'),
+    '面板不许加工这一段'),
 
   // 标题里的条数写死成 1。标题写「1 条」而下面 9 行，是最容易漏的那种错：
   // 折叠起来的时候用户只看得到标题。
@@ -368,7 +372,33 @@ var MUTANTS = [
   textMutant('真值里把出手顺序清空（证明「没有就不许画」在看）', RUNNER,
     "      out.push({ kind: k, list: v.talents, prio: v.prio || [], boss: v.boss || [] });",
     "      out.push({ kind: k, list: v.talents, prio: [], boss: v.boss || [] });",
-    '产物里没有出手顺序，界面却画了这一块')
+    '产物里没有出手顺序，界面却画了这一块'),
+
+  // ---- 第 19 轮：技能名换成官方中文（句子留英文） ----
+  //
+  // 这三条盯的是生成器那一侧，走 runGen()：改完 → 用缓存重生成产物 → 跑校验器。
+
+  // 替换整个不做。产物退回全英文，而**面板照样画得一切正常**（结构没变、
+  // 字数够、不重复），上面每一条 DOM 断言都通过。只有校验器那条总量下界能抓。
+  // 这就是「功能没了但套件不知道」，也是 checkZhNames() 存在的全部理由。
+  genMutant('技能名不换中文（产物退回全英文）',
+    '      var t = stripRich(substSpells(ih));',
+    '      var t = stripRich(ih);',
+    '技能名没换成中文'),
+
+  // 替换放在 stripRich **之后**。那时标签连 data-wow-id 一起被扒掉了，
+  // 正则一个都匹配不上 —— 效果等于不替换，但看代码像是做了。
+  genMutant('替换放在 stripRich 之后（顺序颠倒，等于没替换）',
+    '      var t = stripRich(substSpells(ih));',
+    '      var t = substSpells(stripRich(ih));',
+    '技能名没换成中文'),
+
+  // 分页容器那条路去掉。防护骑 / 织雾僧的出手顺序会退回「只有分页标签」的
+  // 假条目（「铸光者 圣殿骑士」8 个字），校验器的字数下界会抓住。
+  genMutant('「Priority 后面是分页容器」那条路去掉',
+    '          var tabbed = tabPrio(list[idx + 1], next);',
+    '          var tabbed = [];',
+    '正文太短或不是串')
 ];
 
 console.log('=== maxroll 天赋方案断言的变异测试 ===');

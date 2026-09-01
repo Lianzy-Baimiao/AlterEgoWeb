@@ -1373,9 +1373,14 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
  * 判据三条：
  *   · 产物里有几条，界面上就该有几行（`.note-row`）；
  *   · 标题里的条数必须和行数一致 —— 标题写「9 条」而下面 3 行，是最容易漏的错；
- *   · 每行的正文**必须原样等于产物里的字符串**。这一条盯的是「别自作聪明」：
- *     截断、去标点、翻译，任何加工都会让它和产物不一致。这些正文是英文原文，
- *     而本机没有首领名 / 技能名的中英对照表，翻译只能靠编。
+ *   · 每行的正文**必须原样等于产物里的字符串**。这一条盯的是「面板别自作聪明」：
+ *     截断、去标点、再翻一遍，任何加工都会让它和产物不一致。
+ *
+ * 翻译发生在**生成时**，不在这里：技能 / 天赋名按 maxroll 标的 data-wow-id
+ * 换成了官方中文（见 tools/fetch-maxroll.js 的 substSpells），句子留英文原文。
+ * 所以面板这一侧的规矩没变 —— 产物给什么就照搬什么。
+ * 「产物里的技能名到底换没换中文」是产物层面的事，由
+ * tools/verify-maxroll-data.js 的 checkZhNames() 用总量下界钉住。
  */
 function checkNoteBlock(label, what, box, want, statKey) {
   if (!want.length) {
@@ -1415,7 +1420,7 @@ function checkNoteBlock(label, what, box, want, statKey) {
       if (bad < 2) {
         loNote('mr 说明正文', label + ' ' + what + '第 ' + (i + 1)
           + ' 行的正文和产物不一致（产物 ' + want[i].t.length + ' 字，界面 '
-          + txt.length + ' 字）—— 这一段是英文原文，不许加工');
+          + txt.length + ' 字）—— 面板不许加工这一段，产物给什么就照搬什么');
       }
     }
   });
@@ -2556,7 +2561,7 @@ console.log(pad('　页面顺序') + 'raider.io 在 maxroll 上面 ' + stats.ord
 console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通过')
   + '（场景标签 ' + stats.mrtScen + ' 个（字与 class 不符 ' + stats.mrtScenBad
   + '），出手顺序逐条对过 ' + stats.mrtPrio + ' 行，各首领 / 副本说明 '
-  + stats.mrtBoss + ' 行　正文与产物逐字节相同，英文原文不加工）');
+  + stats.mrtBoss + ' 行　正文与产物逐字节相同，面板不加工）');
 console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked ? '通过' : '有问题')
   + '（' + stats.posChecked + ' 个专精上真点了一下：滚动位置保住 ' + stats.posScroll
   + '，折叠块展开状态保住 ' + stats.posSec + '）');

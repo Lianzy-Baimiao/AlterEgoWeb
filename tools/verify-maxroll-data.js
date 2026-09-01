@@ -77,8 +77,20 @@ function checkNotes(at, what, list, withScen) {
     ck();
     if (typeof r.n !== 'string' || !r.n.trim()) fail(where + '.n 不是非空串（名字）');
     ck();
-    if (typeof r.t !== 'string' || r.t.trim().length < 10) {
-      fail(where + '.t 正文太短或不是串：' + JSON.stringify(String(r.t).slice(0, 40)));
+    // 正文长度下界。**prio 和 boss 分开定**，因为它们的正文长度差一档：
+    // 实测 185 条出手顺序最短 67 字（中位 343），252 条首领说明最短 26 字（中位 176）。
+    //
+    // 为什么下界要卡到 40 而不是原来那个 10：防护骑 / 织雾僧的「Priority List」
+    // 标题后面跟的是一个**分页容器**而不是正文，取兄弟节点会抓到分页标签本身
+    // （「Lightsmith Templar」18 字 / 换中文后「铸光者 圣殿骑士」8 字），
+    // 于是产出一条正文只有专精名的假条目，而真正的两份出手顺序一条都没收。
+    // 门槛 10 放它过关了一整轮。40 这个数留了 27 字余量（67 - 40），
+    // 同时把「只有一两个专有名词」这种形状挡在外面 —— 那种一定是取错了节点，
+    // 不可能是 maxroll 写的出手顺序。
+    var floor = (what === '.prio') ? 40 : 20;
+    if (typeof r.t !== 'string' || r.t.trim().length < floor) {
+      fail(where + '.t 正文太短或不是串（下界 ' + floor + ' 字）：'
+        + JSON.stringify(String(r.t).slice(0, 40)));
     }
     // 名字里不许残留 HTML。实测首领名上挂过 maxroll 编辑器留下的空链接
     // （`Den of Nalorakk<a href="Legacy of Tyr"></a>`），去标签时会把 href
@@ -96,9 +108,38 @@ function checkNotes(at, what, list, withScen) {
     ck();
     if (seen[key]) fail(where + ' 和第 ' + seen[key] + ' 条完全相同 —— 去重没生效');
     else seen[key] = i + 1;
+    // 技能名换中文了没有。**逐条不能硬断言** —— 有些首领说明整段不提任何技能
+    // （「站远一点，别踩水」），那种没有汉字是对的。所以这里只计数，
+    // 下面用总量的下界来判：见 checkZhNames()。
+    ck();
+    if (/[一-鿿]/.test(r.t)) stat.zhNotes++;
+    stat.allNotes++;
   });
   if (what === '.prio') { stat.prio += list.length; if (list.length) stat.prioViews++; }
   else { stat.boss += list.length; if (list.length) stat.bossViews++; }
+}
+
+/**
+ * 「技能名真的换成中文了」的下界。
+ *
+ * 为什么必须有这一条：substSpells 坏掉、或者 tools/spell-names-zh.json 丢了，
+ * 产物会**静默退回全英文**，而上面每一条断言都照样通过（结构没变、字数够、
+ * 不重复）。那正是这个项目反复踩的假绿 —— 功能没了但套件不知道。
+ *
+ * 门槛按实测定：590/592 个技能有中文名时，437 条说明里 415 条带汉字（95%）。
+ * 剩下 22 条是整段不提任何技能的首领说明。定 70% —— 比实测低一档留余量
+ * （换赛季重抓时新技能会有一小批还没进表），但远高于「表丢了」的情形：
+ * 那时句子本身全是英文，比例会掉到 0%，这一条必红。
+ */
+function checkZhNames() {
+  ck();
+  if (!stat.allNotes) { fail('一条说明都没有 —— 这一组在验空气'); return; }
+  var pct = stat.zhNotes / stat.allNotes;
+  if (pct < 0.70) {
+    fail('只有 ' + stat.zhNotes + '/' + stat.allNotes + ' 条说明里有汉字（'
+      + Math.round(pct * 100) + '%，门槛 70%）—— 技能名没换成中文。'
+      + '要么 tools/spell-names-zh.json 丢了，要么 fetch-maxroll.js 的 substSpells 坏了');
+  }
 }
 
 /* ------------------------------------------------------------------ 顶层 */
@@ -180,7 +221,8 @@ var stat = { specs: 0, views: 0, bisRows: 0, altRows: 0, ench: 0, tiers: 0, noNa
   talents: 0, tDecoded: 0, tSpecs: 0, tBundled: 0, tShared: 0, tMax: 0, tNoTalents: 0,
   tVer2: 0, tGame: 0,
   // 第 16 轮：场景码 / 出手顺序 / 首领说明
-  tScen: 0, tScenMulti: 0, prio: 0, prioViews: 0, boss: 0, bossViews: 0, nScen: 0 };
+  tScen: 0, tScenMulti: 0, prio: 0, prioViews: 0, boss: 0, bossViews: 0, nScen: 0,
+  zhNotes: 0, allNotes: 0 };
 (function () {
   Object.keys(M.items).forEach(function (id) {
     var it = M.items[id];
@@ -374,9 +416,9 @@ var TR = null, DEC = null;
       // ---- 出手顺序 / 各首领·副本说明（第 16 轮）
       //
       // 两块形状一样：[{n 名字, t 正文, s 场景码（只有 prio 才有，且可选）}…]
-      // 正文是**英文原文** —— 首领名 / 副本名 / 技能名都长在句子里，本机没有
-      // 这些名词的中英对照表。所以这里能立的判据是「结构 + 非空 + 无重复」，
-      // 而不是「内容对不对」（那要有一份译名表才谈得上）。
+      // 正文里技能 / 天赋名是官方中文、句子是英文原文。逐条判据只到
+      // 「结构 + 非空 + 无重复」—— 句子对不对没法在这里验（那要有一份人工译文
+      // 当真值）。「技能名到底换没换中文」用总量下界判，见 checkZhNames()。
       checkNotes(sid + '/' + kind, '.prio', v.prio, true);
       checkNotes(sid + '/' + kind, '.boss', v.boss, false);
     });
@@ -384,6 +426,8 @@ var TR = null, DEC = null;
     if (nT === 0) stat.tNoTalents++;
     else stat.tSpecs++;
   });
+  // 全部说明都数完了才能判总量下界。
+  checkZhNames();
 })();
 
 /**
@@ -555,7 +599,10 @@ function report() {
   console.log('场景 / 说明 ' + stat.tScen + ' 套方案带场景码（同时属于多个场景的 '
     + stat.tScenMulti + '），出手顺序 ' + stat.prio + ' 条 / ' + stat.prioViews
     + ' 个视角（带场景 ' + stat.nScen + '），首领·副本说明 ' + stat.boss + ' 条 / '
-    + stat.bossViews + ' 个视角　**英文原文**');
+    + stat.bossViews + ' 个视角');
+  console.log('技能名     ' + stat.zhNotes + ' / ' + stat.allNotes + ' 条说明里有汉字（'
+    + Math.round(stat.zhNotes / (stat.allNotes || 1) * 100) + '%，门槛 70%）'
+    + ' —— 技能 / 天赋名换成官方中文，句子留英文原文');
   console.log('检查项     ' + checks);
 
   if (warns.length) {
