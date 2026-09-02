@@ -528,12 +528,12 @@ function checkSlotGapTarget(label) {
       if (!c.classList) return;
       if (!head && c.classList.contains('slot-head')) head = c;
     });
-    // 部位组里的装备行：.slot > .item（渲染时是平铺的兄弟节点）
-    for (var i = 0; i < n.children.length && !firstItem; i++) {
-      if (n.children[i].classList && n.children[i].classList.contains('item')) {
-        firstItem = n.children[i];
-      }
-    }
+    // 部位组里的装备行：第 21 轮改成角色栈之后，行被包进 .slot > .slot-list 里
+    // （默认折起来，点格子头展开），所以不能再假设它们是 .slot 的直接子节点。
+    // 用 walk 找第一个 .item —— 两种结构都吃得住。
+    walk(n, function (c) {
+      if (!firstItem && c.classList && c.classList.contains('item')) firstItem = c;
+    });
     if (!head || !firstItem) return;
 
     var tip = '';
@@ -3511,6 +3511,143 @@ VERIFIERS.forEach(function (v) {
   });
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
+
+// ----------------------------------------------------------------------- 角色栈
+/*
+ * 装备页的角色栈摆法（第 21 轮，用户定的「像魔兽世界角色栏一样排列」）。
+ *
+ * 原来 16 个部位一列竖着排，实战分布视角 145~225 行、整页约 8 屏，而面板宽 1160px
+ * 右边空着。现在左列 6 格 + 右列 8 格 + 武器一行，每格两行（你身上那件 / 首选那件），
+ * 完整分布收在格子里点开。
+ *
+ * 这一组盯三件事，都是「改成两行摘要」之后才可能坏的：
+ *   ① 16 个部位一个都不能少，而且在游戏里那个位置上（左列 6 个、右列 8 个、武器行）；
+ *   ② 每格都得有第二行「首选 / 最热那件」——摘要少一行，这一格就没告诉你该换什么；
+ *   ③ 完整分布默认收起、点一下展开（收起的行**还在 DOM 里**，所以别的断言口径不变）。
+ */
+(function () {
+  var before = problems.length;
+  var cells = 0, tops = 0, opened = 0, order = 0, checked = 0;
+  var LEFT = [1, 2, 3, 15, 5, 9], RIGHT = [10, 6, 7, 8, 11, 12, 13, 14], BOTTOM = [16, 17];
+  var NAMES = (g.AE_BIS || {}).slotNames || {};
+
+  specKeys.slice(0, 6).forEach(function (key) {
+    ['maxroll', 'rio'].forEach(function (view) {
+      settings.bisTab = 'gear';
+      settings.bisSpec = key;
+      settings.bisView = view;
+      settings.bisChar = '';
+      body.children.length = 0;
+      load('app/bis.js');
+      g.AE.openBis();
+      checked++;
+
+      function colNames(cls) {
+        var out = [];
+        walk(body, function (n) {
+          if (!n.classList || !n.classList.contains(cls)) return;
+          walk(n, function (m) {
+            if (!m.classList || !m.classList.contains('slot-head')) return;
+            (m.children || []).forEach(function (c) {
+              if (c.tagName === 'B' && c.textContent) out.push(String(c.textContent));
+            });
+          });
+        });
+        return out;
+      }
+      // ① 位置。左列那一段还挂着两块汇总（bis-sum），但汇总里没有 slot-head，
+      //    所以按 slot-head 里的 <b> 取名字不会被它们污染。
+      var want = {
+        left: LEFT.map(function (id) { return NAMES[id]; }).filter(Boolean),
+        right: RIGHT.map(function (id) { return NAMES[id]; }).filter(Boolean)
+      };
+      var gotL = colNames('left'), gotR = colNames('right'), gotW = colNames('weapons');
+      var label = key + '/' + view;
+      if (gotL.join(',') !== want.left.join(',')) {
+        problems.push('角色栈：' + label + ' 左列是「' + gotL.join(' ')
+          + '」，该是「' + want.left.join(' ') + '」（照游戏角色栏的位置）');
+      } else if (gotR.join(',') !== want.right.join(',')) {
+        problems.push('角色栈：' + label + ' 右列是「' + gotR.join(' ')
+          + '」，该是「' + want.right.join(' ') + '」');
+      } else {
+        order++;
+      }
+      if (!gotW.length) {
+        problems.push('角色栈：' + label + ' 武器那一行是空的（主手 / 副手没画）');
+      }
+
+      // ② 每格两行；③ 默认收起、点一下展开。
+      var slots = [];
+      walk(body, function (n) {
+        if (n.classList && n.classList.contains('slot')) slots.push(n);
+      });
+      cells += slots.length;
+      slots.forEach(function (sl) {
+        var head = null, top = null, listBox = null;
+        (sl.children || []).forEach(function (c) {
+          if (!c.classList) return;
+          if (c.classList.contains('slot-head')) head = c;
+          if (c.classList.contains('slot-top')) top = c;
+          if (c.classList.contains('slot-list')) listBox = c;
+        });
+        if (!top) {
+          problems.push('角色栈：' + label + ' 有一格没画「首选 / 最热那件」那一行'
+            + ' —— 这一格就没说该换成什么');
+          return;
+        }
+        tops++;
+        if (!listBox || !listBox.children.length) {
+          problems.push('角色栈：' + label + ' 有一格的完整分布没渲染出来');
+          return;
+        }
+        // 键盘也得能开：完整分布只靠悬停的话，用键盘和触屏的人拿不到。
+        if (head && (head.attrs || {})['role'] !== 'button') {
+          problems.push('角色栈：' + label + ' 格子头不是 role=button —— 键盘打不开');
+        }
+        if (head && (head.attrs || {})['tabindex'] !== '0') {
+          problems.push('角色栈：' + label + ' 格子头没有 tabindex，Tab 键跳不到');
+        }
+        // 收起 / 展开是 class 控制的（CSS 收 .slot-list），所以判 class。
+        if (sl.classList.contains('open')) {
+          problems.push('角色栈：' + label + ' 有一格默认就是展开的');
+        } else if (head) {
+          head.click();
+          if (!sl.classList.contains('open')) {
+            problems.push('角色栈：' + label + ' 点格子头之后没展开');
+          } else {
+            if ((head.attrs || {})['aria-expanded'] !== 'true') {
+              problems.push('角色栈：' + label + ' 展开了但 aria-expanded 还是 false');
+            }
+            head.click();
+            if (sl.classList.contains('open')) {
+              problems.push('角色栈：' + label + ' 再点一下没收回去');
+            } else {
+              opened++;
+            }
+          }
+        }
+      });
+    });
+  });
+
+  if (checked < 12) problems.push('角色栈：只渲染了 ' + checked + ' 次，这一组没跑起来');
+  if (order !== checked) {
+    problems.push('角色栈：位置对上的只有 ' + order + '/' + checked + ' 次');
+  }
+  if (cells < 12 * 14) {
+    problems.push('角色栈：一共只画了 ' + cells + ' 格，太少（16 个部位 × ' + checked + ' 次渲染）');
+  }
+  if (tops !== cells) {
+    problems.push('角色栈：' + cells + ' 格里只有 ' + tops + ' 格有「首选那件」那一行');
+  }
+  if (opened !== cells) {
+    problems.push('角色栈：' + cells + ' 格里只有 ' + opened + ' 格能点开再收回');
+  }
+  console.log(pad('角色栈') + (problems.length > before ? '有问题' : '通过')
+    + '（' + checked + ' 次渲染 × 16 个部位 = ' + cells + ' 格：位置照游戏角色栏 '
+    + order + '/' + checked + '，每格都有「首选那件」那一行 ' + tops
+    + '，完整分布默认收起、点开再收回 ' + opened + '）');
+})();
 
 // ----------------------------------------------------------------------- 天赋归并
 /*

@@ -1144,8 +1144,67 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 .bar-row .track .fill { display: block; height: 100%; opacity: .75; }
 .bar-row b { width: 46px; text-align: right; color: var(--fg2); flex: none; font-weight: 600; }
 
-/* ---- 部位列表（纵向长方形的主体） */
+/* ---- 部位列表：角色栈（第 21 轮，用户定的「像魔兽世界角色栏一样排列」）
+
+   原来是一列 16 个部位竖着排：实战分布视角 145~225 行、最深的一格 29 行，整页约
+   8 屏，而面板宽 1160px 右边空着一大片 —— 信息很多但一眼看不到几条。
+   现在照游戏角色栏摆：左列 6 格（头 颈 肩 背 胸 腕）+ 右列 8 格（手 腰 腿 脚
+   戒1 戒2 饰1 饰2）+ 武器一行。左列短两格（这份数据没有衬衣 / 战袍），那块空地
+   放「装等对比」和「属性」两块汇总，也就是游戏里角色模型的位置。
+
+   每格两行：第一行「你身上那件 + 装等差距」，第二行「首选 / 最热那件 + 插槽 · 轨道」。
+   完整分布还在 DOM 里（.slot-list），默认收起来，点格子头展开。 */
 .bis-slots { display: flex; flex-direction: column; gap: 7px; }
+.bis-slots.doll {
+  display: grid;
+  /* 两列等宽。1fr 1fr 而不是 auto：格子里名字长短差很多，auto 会让两列宽度
+     跟着最长那个名字跳，左右就对不齐了。 */
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.doll-col { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+/* 武器那一行跨两列，并排放主手 / 副手 —— 和游戏里一样在最下面。 */
+.doll-row.weapons {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 0;
+}
+/* 窄窗口（半屏、小笔记本）退回一列，否则两列各 150px，名字全省略号。 */
+@media (max-width: 760px) {
+  .bis-slots.doll, .doll-row.weapons { grid-template-columns: 1fr; }
+}
+/* 汇总块放在左列底下时，去掉它自己的外边距，跟格子对齐。 */
+.doll-col .bis-sum { margin: 0; }
+
+/* ---- 每格第二行：首选 / 最热那一件 */
+.slot-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+.slot-top .star { color: var(--accent); flex: none; }
+.slot-top .use { color: var(--fg2); flex: none; min-width: 34px; }
+.slot-top b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.slot-top .sub { color: var(--fg2); flex: none; }
+.slot-top .tag { font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid var(--line); color: var(--fg2); flex: none; }
+
+/* ---- 完整分布：默认收起来，点格子头展开 */
+.slot-list { display: none; border-top: 1px solid var(--line); }
+.slot.open .slot-list { display: block; }
+/* 展开时给格子一个标记，免得「点了没反应」的错觉（分布可能很长，要滚才看得到）。 */
+.slot.open { box-shadow: 0 0 0 1px var(--accent) inset; }
 .slot {
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -1168,6 +1227,10 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 .slot-head {
   display: flex;
   align-items: baseline;
+  /* 点格子头展开 / 收起完整分布（第 21 轮）。换行是必需的：一格只有半个面板宽，
+     而这一行有部位名 + 样本量 + 你身上那件 + 装等差距四样东西。 */
+  cursor: pointer;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 4px 8px;
   background: var(--bg3);

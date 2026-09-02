@@ -51,6 +51,22 @@
    */
   var PAIRED = { 11: 12, 12: 11, 13: 14, 14: 13 };
 
+  /*
+   * 角色栈的摆位（第 21 轮用户定的：「像魔兽世界角色栏一样排列」）。
+   *
+   * 为什么要改：原来 16 个部位是**一列竖着排**，而每格里那份使用率分布不截断 ——
+   * 实测实战分布视角 145~225 行、最深的一格 29 行，整页约 8 屏；同时面板宽
+   * 1160px，右边一大片空着。也就是「信息很多但一眼看不到几条」。
+   *
+   * 摆法照游戏里的角色栏：左列 6 格（头 颈 肩 背 胸 腕）、右列 8 格
+   * （手 腰 腿 脚 戒1 戒2 饰1 饰2）、武器在最下面一行。游戏里左列还有衬衣和战袍，
+   * 这份数据没有那两格（对强度没影响），所以左列短两格 —— 那块空地正好放
+   * 「装等对比」汇总，也就是游戏里角色模型的位置。
+   */
+  var DOLL_LEFT = [1, 2, 3, 15, 5, 9];
+  var DOLL_RIGHT = [10, 6, 7, 8, 11, 12, 13, 14];
+  var DOLL_BOTTOM = [16, 17];
+
   function inRows(rows, itemId) {
     for (var i = 0; rows && i < rows.length; i++) {
       if (rows[i][0] === itemId) return true;
@@ -1028,7 +1044,17 @@
     // ---- 部位
     var slots = conv ? conv.rows : (s[view] || {});
     var ch = currentChar();
-    var list = el('div', 'bis-slots');
+    /*
+     * 角色栈：左列 / 右列 / 武器行（见 DOLL_LEFT 那段）。**每格照旧带着完整的分布行**，
+     * 只是默认折起来（CSS 收掉，点格子头展开）—— 这样「一眼看到 16 个部位」和
+     * 「要细看时不用换页」两件事都成立，而且产物里那份不截断的分布还在 DOM 里，
+     * 校验器和渲染断言（图标 / 轨道 / 插槽 / 使用率 / 成对判定）一条都不用改口径。
+     */
+    var list = el('div', 'bis-slots doll');
+    var colL = el('div', 'doll-col left');
+    var colR = el('div', 'doll-col right');
+    var rowW = el('div', 'doll-row weapons');
+    var cells = {};
     var missing = 0, matched = 0, unknown = 0;
     // 装等差距的汇总：能比的部位数、总差值、差最多的那个部位。
     // 「能比的部位数」要单独记 —— 不记的话「差 168 装等」这个数没有分母，
@@ -1076,9 +1102,20 @@
         if (!gapWorst || g.d > gapWorst.d) gapWorst = { d: g.d, slot: slotId };
       }
       // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
-      list.appendChild(renderSlot(slotId, rows, mine, hit,
-        conv && conv.n ? conv.n[slotId] : null, hitVia, worn, twinId));
+      cells[slotId] = renderSlot(slotId, rows, mine, hit,
+        conv && conv.n ? conv.n[slotId] : null, hitVia, worn, twinId);
     });
+
+    // 按角色栈的位置摆进去。**没有数据的部位不占格**（rows 为空时上面就 return 了），
+    // 所以这里按名单取，缺的自然跳过。名单外的部位（真有的话）追加到武器行后面，
+    // 免得静默丢掉一整格。
+    DOLL_LEFT.forEach(function (id) { if (cells[id]) { colL.appendChild(cells[id]); delete cells[id]; } });
+    DOLL_RIGHT.forEach(function (id) { if (cells[id]) { colR.appendChild(cells[id]); delete cells[id]; } });
+    DOLL_BOTTOM.forEach(function (id) { if (cells[id]) { rowW.appendChild(cells[id]); delete cells[id]; } });
+    Object.keys(cells).forEach(function (id) { rowW.appendChild(cells[id]); });
+    list.appendChild(colL);
+    list.appendChild(colR);
+    if (rowW.children.length) list.appendChild(rowW);
     host.appendChild(list);
 
     // 选了个别的职业的角色：currentChar() 已经把他挡在对照之外（见那里的说明），
@@ -1174,8 +1211,14 @@
           'AlterEgo 存的装备只有名字 / 装等 / 品质 / 物品链接，没有属性字段。\n'
           + '链接里的 bonusID 能推出属性，但要一张 bonusID→属性的对照表，本机没有。\n'
           + '拿随包那份物品池去查，身上 224 件只对上 52 件，四分之三的部位会空着。');
-        host.insertBefore(stNote, list);
-        host.insertBefore(gsum, list);
+        /*
+         * 这两块挂进**左列底下**，也就是游戏里角色模型的位置。
+         * 左列只有 6 格（游戏里那两格衬衣 / 战袍这份数据没有），右列 8 格，
+         * 天生空出两格的高度 —— 汇总放那儿，等于零成本填满，而且它讲的正是
+         * 「你和推荐差多少」，和旁边一格一格的差距徽章是同一件事的合计。
+         */
+        colL.appendChild(gsum);
+        colL.appendChild(stNote);
       }
       host.insertBefore(sum, list);
     }
@@ -1460,9 +1503,90 @@
     }
     wrap.appendChild(head);
 
+    /*
+     * 第二行：**首选 / 最热那一件**。角色栈那种格子只有两行的高度，所以第一行给
+     * 「你身上那件」，第二行给「该换成什么」—— 这两行合起来就是这一格的全部用途。
+     * 完整分布仍然在下面（默认折起来，点这一格的头展开），另外也塞进悬停提示里。
+     */
+    var top = rows[0] || null;
+    if (top) {
+      var tRi = (top[3] === -1 ? rioItem(top[0]) : (top[3] === -2 ? mrItem(top[0]) : null));
+      var tName = (tRi && tRi.n) || (B.items[top[0]] || {}).n || ('物品 ' + top[0]);
+      var line = el('div', 'slot-top');
+      // 星号 + 分量：rio 有真实使用率和人数，maxroll 只有名次（它不是统计）。
+      var badge = mrRows ? 'BiS' : (typeof top[2] === 'number' ? pct(top[2]) : '—');
+      line.appendChild(el('span', 'star', '★'));
+      line.appendChild(el('span', 'use', badge));
+      var nmT = el('b', null, tName);
+      if (tRi && tRi.q && L.qualityColors[tRi.q]) nmT.style.color = L.qualityColors[tRi.q];
+      line.appendChild(nmT);
+      if (top[1]) line.appendChild(el('span', 'sub', String(top[1])));
+      // 插槽 / 轨道这两个徽章跟着首选那件走（用户要求格子里要能看到）。
+      if (tRi && tRi.gmax) {
+        var sk2 = el('span', 'tag sock', tRi.gmax > 1 ? '插槽 ×' + tRi.gmax : '插槽');
+        sk2.setAttribute('data-tip', '首选那件至少有 ' + tRi.gmax + ' 个插槽');
+        line.appendChild(sk2);
+      }
+      var trk2 = top[5] ? trackLabel(top[5]) : '';
+      if (trk2) {
+        var tb2 = el('span', 'tag trk', trk2);
+        tb2.setAttribute('data-tip', '首选那件的升级轨道');
+        line.appendChild(tb2);
+      }
+      wrap.appendChild(line);
+    }
+
+    /*
+     * 完整分布：**默认折起来**（CSS 收掉 .slot-list，点格子头展开）。
+     * 不是「不渲染」—— 行还在 DOM 里，所以图标 / 轨道 / 插槽 / 使用率 / 成对判定
+     * 那些断言的口径一条都没变，产物那份不截断的分布也还看得到。
+     */
+    var listBox = el('div', 'slot-list');
     rows.forEach(function (r, i) {
-      wrap.appendChild(renderItem(r, i === 0, mine, worn));
+      listBox.appendChild(renderItem(r, i === 0, mine, worn));
     });
+    wrap.appendChild(listBox);
+
+    // 悬停提示：前 8 件 + 还有多少件。**放在格子头上**，所以不展开也能看个大概。
+    var tipLines = rows.slice(0, 8).map(function (r) {
+      var ri2 = (r[3] === -1 ? rioItem(r[0]) : (r[3] === -2 ? mrItem(r[0]) : null));
+      var nm2 = (ri2 && ri2.n) || (B.items[r[0]] || {}).n || ('物品 ' + r[0]);
+      var who2 = (r[3] === -1 && r[6] != null && sampleN)
+        ? '　' + r[6] + '/' + sampleN + ' 人'
+        : '';
+      return (typeof r[2] === 'number' ? pct(r[2]) : '') + '　' + nm2
+        + (r[1] ? '　' + r[1] : '') + who2;
+    });
+    if (rows.length > 8) tipLines.push('… 还有 ' + (rows.length - 8) + ' 件');
+    tipLines.push('（点这一格展开全部）');
+    head.setAttribute('data-tip', (B.slotNames[slotId] || ('部位 ' + slotId))
+      + (sampleN ? '　样本 ' + sampleN + ' 人' : '') + '\n' + tipLines.join('\n'));
+
+    /*
+     * 点格子头展开 / 收起这一格的完整分布。**不用 <details>**：那会把两行摘要塞进
+     * <summary> 里，而摘要里已经有徽章和它们各自的提示，嵌套起来点击目标会打架。
+     *
+     * 键盘也要能用：完整分布只靠悬停提示的话，用键盘的人和触屏都拿不到。
+     * 所以这一行是 role=button + tabindex=0 + Enter/空格，并且用 aria-expanded
+     * 说出当前是展开还是收起。
+     */
+    head.setAttribute('role', 'button');
+    head.setAttribute('tabindex', '0');
+    head.setAttribute('aria-expanded', 'false');
+    function toggleSlot() {
+      var open = !wrap.classList.contains('open');
+      if (open) wrap.classList.add('open');
+      else wrap.classList.remove('open');
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    head.addEventListener('click', toggleSlot);
+    head.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        if (e.preventDefault) e.preventDefault();
+        toggleSlot();
+      }
+    });
+
     return wrap;
   }
 
