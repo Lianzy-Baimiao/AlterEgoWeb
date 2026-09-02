@@ -3204,7 +3204,7 @@ console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked
  * 所以这一组专门去那 3 个专精上点。
  */
 (function checkFallbackSecShut() {
-  var done = 0, bad = 0;
+  var done = 0, bad = 0, done2 = 0;
   specKeys.forEach(function (key) {
     if (done >= 2) return;
     var sid = (B.specs[key] || {}).specId;
@@ -3249,12 +3249,67 @@ console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked
       problems.push('兜底折叠块：' + key + ' 的「热门英雄天赋」收起来之后，'
         + '点一下套路又自己打开了 —— 源码里那句写死的 open 会盖掉用户的动作');
     }
+
+    /*
+     * 顺带验这一页上的「人」到底是不是人。
+     *
+     * AE_TALENTS 的 p 是「人·首领」的记录（每个类别 8 个首领 × 5 人 = 40 行），
+     * 同一个角色跨首领会反复出现。原来 chip 写「天神御师 40 人 100%」而真实只有
+     * 12 个角色（3.3×），「热门套路」表头写「人数」填的也是条数。
+     * 真值在这里**独立算一遍**（按 名字|服务器|大区 去重），不问面板。
+     */
+    // AE_TALENTS 的键是「职业/专精」，没有英雄那一段（bis 的 key 有三段），
+    // 所以要按 app/bis.js 那边同样的规则退一步取（第一版直接用三段 key，
+    // 一条都没匹配上，done2 恒为 0 —— 又一个印着「0 次」的空转）。
+    var T2 = g.AE_TALENTS;
+    var base2 = key.split('/').slice(0, 2).join('/');
+    var tdData = T2 && T2.specs ? (T2.specs[key] || T2.specs[base2]) : null;
+    var cat = (settings.bisTalentCat || 'raid');
+    var encs = tdData && tdData.content ? (tdData.content[cat] || []) : [];
+    var seen = {}, rowN = 0;
+    encs.forEach(function (enc) {
+      (enc.p || []).forEach(function (p) { rowN++; seen[p[2] + '|' + p[3] + '|' + p[4]] = 1; });
+    });
+    var truth = Object.keys(seen).length;
+    if (truth) {
+      var sumTxt = '';
+      (again.children || []).forEach(function (c) {
+        if (c.tagName === 'SUMMARY') sumTxt = String(c.textContent || '');
+      });
+      var m2 = /（(\d+) 个角色/.exec(sumTxt);
+      if (!m2) {
+        bad++;
+        problems.push('兜底折叠块：' + key + ' 的「热门英雄天赋」标题没写角色数：' + sumTxt);
+      } else if (Number(m2[1]) !== truth) {
+        bad++;
+        problems.push('兜底折叠块：' + key + ' 标题写「' + m2[1] + ' 个角色」，'
+          + '独立去重算出来是 ' + truth + ' 个（' + rowN + ' 条「人·首领」记录）'
+          + ' —— 这个数是条数不是人数');
+      } else {
+        done2++;
+      }
+      // 每个 chip 的人数不许超过角色总数（超了就说明还在数条数）。
+      walk(again, function (n) {
+        if (!n.classList || !n.classList.contains('chip')) return;
+        var mm = /(\d+) 人/.exec(String(n.textContent || ''));
+        if (mm && Number(mm[1]) > truth) {
+          bad++;
+          problems.push('兜底折叠块：' + key + ' 有个英雄天赋写着 ' + mm[1]
+            + ' 人，而这个类别一共只有 ' + truth + ' 个不同角色');
+        }
+      });
+    }
   });
   if (done < 2) {
     problems.push('兜底折叠块：只在 ' + done + ' 个专精上跑到（该有 3 个走兜底那条路）');
   }
-  console.log(pad('　兜底折叠块') + (bad ? '有问题' : '通过')
-    + '（' + done + ' 个走插件兜底的专精：默认展开、收起后不许自己弹回来）');
+  if (done2 < 2) {
+    problems.push('兜底折叠块：「角色数」只在 ' + done2 + ' 个专精上对过真值，太少');
+  }
+  console.log(pad('　兜底那条路') + (bad ? '有问题' : '通过')
+    + '（' + done + ' 个走插件兜底的专精：折叠块默认展开、收起后不许自己弹回来；'
+    + '「热门英雄天赋」的角色数按 名字|服务器|大区 独立去重复核 ' + done2 + ' 次'
+    + '（原来印的是「人·首领」条数，最多虚高 3.6 倍））');
 })();
 
 // ---- 无障碍

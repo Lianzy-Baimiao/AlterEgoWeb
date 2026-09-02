@@ -2876,12 +2876,23 @@
     return out;
   }
 
-  /** 这个类别里每套天赋被多少人用。 */
+  /**
+   * 这个类别里每套天赋被**多少个不同的角色**用。
+   *
+   * 按角色去重，不是数行数：`p` 是「人·首领」的记录（8 个首领 × 5 人 = 40 行），
+   * 同一个人跨首领会反复出现。实测最极端的专精 40 条只对应 11 个角色。
+   * 「套路 #3·5人」这种按钮原来印的是条数，虚高最多 3.6 倍。
+   * 角色身份 = 名字 + 服务器下标 + 大区（p = [套路, 英雄, 名字, 服务器, 大区]）。
+   */
   function buildUsage(td) {
-    var m = {};
+    var sets = {};
     (td.content[state.tcat] || []).forEach(function (enc) {
-      (enc.p || []).forEach(function (p) { m[p[0]] = (m[p[0]] || 0) + 1; });
+      (enc.p || []).forEach(function (p) {
+        (sets[p[0]] || (sets[p[0]] = {}))[p[2] + '|' + p[3] + '|' + p[4]] = 1;
+      });
     });
+    var m = {};
+    Object.keys(sets).forEach(function (k) { m[k] = Object.keys(sets[k]).length; });
     return m;
   }
 
@@ -3178,47 +3189,69 @@
     var T = talents();
     var wrap = el('div', 'bis-bstats');
 
-    // 这个类别里，各英雄天赋 / 各套天赋分别被多少人用
+    /*
+     * 这个类别里，各英雄天赋 / 各套天赋分别被**多少个不同的角色**用。
+     *
+     * **不能按行数算。** `p` 是「人·首领」的记录：每个专精每个类别恒定 8 个首领
+     * × 5 人 = 40 行，同一个人跨首领会反复出现。实测全局 4797 条记录只对应
+     * 3332 个不同角色（1.44×），最极端的是酿酒僧「冲分」40 条 / **11 个**角色
+     * （3.64×）、织雾僧「冲分」40 条 / 12 个。原来 chip 上写「天神御师 40 人 100%」，
+     * 而真实只有 12 个角色；「热门套路」表里那列表头写着「人数」，填的也是条数
+     * （印 5 而真实 2 个、印 4 而真实 **1** 个）。
+     * 角色身份 = 名字 + 服务器下标 + 大区（`p` = [套路, 英雄, 名字, 服务器, 大区]）。
+     */
     var list = td.content[state.tcat] || [];
-    var heroCount = {}, buildCount = {}, players = 0;
+    var heroSets = {}, buildSets = {}, everyone = {}, rows = 0;
+    function who(p) { return p[2] + '|' + p[3] + '|' + p[4]; }
     list.forEach(function (enc) {
       (enc.p || []).forEach(function (p) {
-        players++;
+        rows++;
+        var k = who(p);
+        everyone[k] = 1;
         var hero = heroName(T.heroes[p[1]]);
-        heroCount[hero] = (heroCount[hero] || 0) + 1;
-        buildCount[p[0]] = (buildCount[p[0]] || 0) + 1;
+        (heroSets[hero] || (heroSets[hero] = {}))[k] = 1;
+        (buildSets[p[0]] || (buildSets[p[0]] = {}))[k] = 1;
       });
     });
+    var players = Object.keys(everyone).length;
+    function sizeOf(m) { return Object.keys(m).length; }
     if (!players) return wrap;
 
     var h = el('details', 'sec');
     h.setAttribute('open', 'open');
-    h.appendChild(el('summary', null, '热门英雄天赋　（' + players + ' 条记录）'));
+    var hs = el('summary', null, '热门英雄天赋　（' + players + ' 个角色'
+      + (rows !== players ? '，' + rows + ' 条记录' : '') + '）');
+    if (rows !== players) {
+      hs.setAttribute('data-tip', '这份数据是按「人·首领」记的：同一个角色在几个首领榜上'
+        + '各出现一次，所以 ' + rows + ' 条记录只对应 ' + players + ' 个不同的角色。\n'
+        + '下面的人数和百分比都是**按角色去重后**的。');
+    }
+    h.appendChild(hs);
     var chips = el('div', 'chips');
-    Object.keys(heroCount).sort(function (a, b) { return heroCount[b] - heroCount[a]; })
+    Object.keys(heroSets).sort(function (a, b) { return sizeOf(heroSets[b]) - sizeOf(heroSets[a]); })
       .forEach(function (hero) {
         var c = el('span', 'chip hero');
         c.appendChild(el('b', null, hero));
-        c.appendChild(el('span', 'n', heroCount[hero] + ' 人　'
-          + pct(heroCount[hero] / players * 100)));
+        c.appendChild(el('span', 'n', sizeOf(heroSets[hero]) + ' 人　'
+          + pct(sizeOf(heroSets[hero]) / players * 100)));
         chips.appendChild(c);
       });
     h.appendChild(chips);
     wrap.appendChild(h);
 
     var b = el('details', 'sec');
-    b.appendChild(el('summary', null, '热门套路　（同一套天赋被多少人用）'));
-    var top = Object.keys(buildCount)
-      .sort(function (x, y) { return buildCount[y] - buildCount[x]; })
+    b.appendChild(el('summary', null, '热门套路　（同一套天赋被多少个角色用）'));
+    var top = Object.keys(buildSets)
+      .sort(function (x, y) { return sizeOf(buildSets[y]) - sizeOf(buildSets[x]); })
       .slice(0, 10);
     var tbl = el('table', 'bis-tbl');
     var thead = el('tr');
-    ['套路', '人数', '点数'].forEach(function (t) { thead.appendChild(el('th', null, t)); });
+    ['套路', '角色数', '点数'].forEach(function (t) { thead.appendChild(el('th', null, t)); });
     tbl.appendChild(thead);
     top.forEach(function (idx) {
       var tr = el('tr');
       tr.appendChild(el('td', null, '#' + idx));
-      tr.appendChild(el('td', null, String(buildCount[idx])));
+      tr.appendChild(el('td', null, String(sizeOf(buildSets[idx]))));
       tr.appendChild(el('td', null, String(buildPoints(td, Number(idx)))));
       tbl.appendChild(tr);
     });
