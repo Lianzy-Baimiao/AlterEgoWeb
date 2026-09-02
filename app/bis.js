@@ -1508,14 +1508,31 @@
      * 「你身上那件」，第二行给「该换成什么」—— 这两行合起来就是这一格的全部用途。
      * 完整分布仍然在下面（默认折起来，点这一格的头展开），另外也塞进悬停提示里。
      */
+    /*
+     * **行少的格子直接把行摆出来，不折叠**（第 21 轮用户定的：「最佳推荐请保持图标
+     * 和替代项」）。maxroll 那边一格最多 4 行（实测分布 {1:14, 2:1106, 3:118, 4:6}）——
+     * 首选 + 替代加起来就那么点，折起来只会把「替代项」藏掉，还得多点一下。
+     * 实战分布那边一格 5~29 行，摘要 + 点开才有意义。
+     * 判据用**行数**而不是视角：rio 里的副手这类瘦格子（2~5 行）也一样直接摆出来。
+     */
+    var flat = mrRows || rows.length <= 4;
+    if (flat) wrap.classList.add('flat');
+
     var top = rows[0] || null;
-    if (top) {
+    if (top && !flat) {
       var tRi = (top[3] === -1 ? rioItem(top[0]) : (top[3] === -2 ? mrItem(top[0]) : null));
       var tName = (tRi && tRi.n) || (B.items[top[0]] || {}).n || ('物品 ' + top[0]);
       var line = el('div', 'slot-top');
       // 星号 + 分量：rio 有真实使用率和人数，maxroll 只有名次（它不是统计）。
       var badge = mrRows ? 'BiS' : (typeof top[2] === 'number' ? pct(top[2]) : '—');
       line.appendChild(el('span', 'star', '★'));
+      // 图标也要留（用户要求）——只有名字的一行认起来比有图标慢得多。
+      var tImg = iconImg(top[0], 20, tRi ? tRi.i : '');
+      if (tImg) {
+        var ic2 = el('span', 'icon sm');
+        ic2.appendChild(tImg);
+        line.appendChild(ic2);
+      }
       line.appendChild(el('span', 'use', badge));
       var nmT = el('b', null, tName);
       if (tRi && tRi.q && L.qualityColors[tRi.q]) nmT.style.color = L.qualityColors[tRi.q];
@@ -1546,6 +1563,8 @@
       listBox.appendChild(renderItem(r, i === 0, mine, worn));
     });
     wrap.appendChild(listBox);
+    // flat 的格子到这儿就完了：行都摆着，没有可折的东西，也就不给点击和悬停提示。
+    if (flat) return wrap;
 
     // 悬停提示：前 8 件 + 还有多少件。**放在格子头上**，所以不展开也能看个大概。
     var tipLines = rows.slice(0, 8).map(function (r) {

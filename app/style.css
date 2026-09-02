@@ -1198,11 +1198,17 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
   min-width: 0;
 }
 .slot-top .sub { color: var(--fg2); flex: none; }
+/* 摘要行里的小图标。装备行里那个是 30px，这里 20px —— 一行只有 ~22px 高。 */
+.slot-top .icon.sm { width: 20px; height: 20px; flex: none; line-height: 0; }
+.slot-top .icon.sm img { width: 20px; height: 20px; border-radius: 3px; display: block; }
 .slot-top .tag { font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid var(--line); color: var(--fg2); flex: none; }
 
-/* ---- 完整分布：默认收起来，点格子头展开 */
+/* ---- 完整分布：默认收起来，点格子头展开。
+   **行少的格子（.flat）不折**：maxroll 一格最多 4 行（首选 + 替代），折起来只会把
+   替代项藏掉；rio 里的瘦格子（副手这类 2~5 行）同理。 */
 .slot-list { display: none; border-top: 1px solid var(--line); }
-.slot.open .slot-list { display: block; }
+.slot.open .slot-list, .slot.flat .slot-list { display: block; }
+.slot.flat .slot-head { cursor: default; }
 /* 展开时给格子一个标记，免得「点了没反应」的错觉（分布可能很长，要滚才看得到）。 */
 .slot.open { box-shadow: 0 0 0 1px var(--accent) inset; }
 .slot {

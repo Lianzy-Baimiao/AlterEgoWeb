@@ -3527,7 +3527,8 @@ VERIFIERS.forEach(function (v) {
  */
 (function () {
   var before = problems.length;
-  var cells = 0, tops = 0, opened = 0, order = 0, checked = 0;
+  var cells = 0, tops = 0, opened = 0, order = 0, checked = 0, flats = 0, flatIcons = 0;
+  var byView = { maxroll: { cells: 0, flat: 0 }, rio: { cells: 0, flat: 0 } };
   var LEFT = [1, 2, 3, 15, 5, 9], RIGHT = [10, 6, 7, 8, 11, 12, 13, 14], BOTTOM = [16, 17];
   var NAMES = (g.AE_BIS || {}).slotNames || {};
 
@@ -3582,6 +3583,7 @@ VERIFIERS.forEach(function (v) {
         if (n.classList && n.classList.contains('slot')) slots.push(n);
       });
       cells += slots.length;
+      byView[view].cells += slots.length;
       slots.forEach(function (sl) {
         var head = null, top = null, listBox = null;
         (sl.children || []).forEach(function (c) {
@@ -3590,10 +3592,45 @@ VERIFIERS.forEach(function (v) {
           if (c.classList.contains('slot-top')) top = c;
           if (c.classList.contains('slot-list')) listBox = c;
         });
+        /*
+         * 两种格子，判据不同（第 21 轮用户定的「最佳推荐请保持图标和替代项」）：
+         *   · flat（行 ≤4，maxroll 全是这种）：**行直接摆着**，所以不该有摘要行，
+         *     也不该能折 —— 折起来会把「替代项」藏掉；
+         *   · 其余（rio 的深格子，5~29 行）：给一行摘要（带图标）+ 点开看全部。
+         */
+        var isFlat = sl.classList.contains('flat');
+        if (isFlat) {
+          flats++;
+          byView[view].flat++;
+          if (top) {
+            problems.push('角色栈：' + label + ' 有一格行数很少却还画了摘要行 ——'
+              + ' 行都摆着了，摘要是重复的');
+          }
+          if (!listBox || !listBox.children.length) {
+            problems.push('角色栈：' + label + ' 有一格是 flat 但一行都没画');
+          } else {
+            var withIcon = 0;
+            (listBox.children || []).forEach(function (row) {
+              walk(row, function (x) { if (x.tagName === 'IMG') withIcon++; });
+            });
+            if (!withIcon) {
+              problems.push('角色栈：' + label + ' 有一格的装备行一个图标都没有');
+            } else {
+              flatIcons++;
+            }
+          }
+          return;
+        }
         if (!top) {
           problems.push('角色栈：' + label + ' 有一格没画「首选 / 最热那件」那一行'
             + ' —— 这一格就没说该换成什么');
           return;
+        }
+        // 摘要行也要有图标（用户要求：只有名字的一行认起来慢得多）。
+        var sumIcon = 0;
+        walk(top, function (x) { if (x.tagName === 'IMG') sumIcon++; });
+        if (!sumIcon) {
+          problems.push('角色栈：' + label + ' 摘要行没有图标');
         }
         tops++;
         if (!listBox || !listBox.children.length) {
@@ -3637,16 +3674,34 @@ VERIFIERS.forEach(function (v) {
   if (cells < 12 * 14) {
     problems.push('角色栈：一共只画了 ' + cells + ' 格，太少（16 个部位 × ' + checked + ' 次渲染）');
   }
-  if (tops !== cells) {
-    problems.push('角色栈：' + cells + ' 格里只有 ' + tops + ' 格有「首选那件」那一行');
+  if (tops + flats !== cells) {
+    problems.push('角色栈：' + cells + ' 格里，摘要行 ' + tops + ' 格 + 直接摆行 '
+      + flats + ' 格，加起来不等于总数');
   }
-  if (opened !== cells) {
-    problems.push('角色栈：' + cells + ' 格里只有 ' + opened + ' 格能点开再收回');
+  if (opened !== tops) {
+    problems.push('角色栈：有摘要行的 ' + tops + ' 格里只有 ' + opened + ' 格能点开再收回');
+  }
+  if (flatIcons !== flats) {
+    problems.push('角色栈：直接摆行的 ' + flats + ' 格里只有 ' + flatIcons + ' 格有图标');
+  }
+  /*
+   * maxroll 那边一格最多 4 行（实测 {1:14, 2:1106, 3:118, 4:6}），所以
+   * **「最佳推荐」视角每一格都该是直接摆行的** —— 那正是用户要的「保持图标和替代项」。
+   * 实战分布那边反过来：绝大多数格子 5~29 行，该给摘要 + 点开。
+   */
+  if (byView.maxroll.flat !== byView.maxroll.cells) {
+    problems.push('角色栈：最佳推荐视角 ' + byView.maxroll.cells + ' 格里只有 '
+      + byView.maxroll.flat + ' 格把行直接摆出来 —— 剩下的把替代项折起来藏掉了');
+  }
+  if (byView.rio.flat > byView.rio.cells / 2) {
+    problems.push('角色栈：实战分布视角 ' + byView.rio.flat + '/' + byView.rio.cells
+      + ' 格没折 —— 那边一格 5~29 行，全摆出来又回到一列 8 屏那个样子了');
   }
   console.log(pad('角色栈') + (problems.length > before ? '有问题' : '通过')
     + '（' + checked + ' 次渲染 × 16 个部位 = ' + cells + ' 格：位置照游戏角色栏 '
-    + order + '/' + checked + '，每格都有「首选那件」那一行 ' + tops
-    + '，完整分布默认收起、点开再收回 ' + opened + '）');
+    + order + '/' + checked + '，行少的直接摆出来（带图标）' + flats
+    + ' 格（最佳推荐 ' + byView.maxroll.flat + '/' + byView.maxroll.cells
+    + ' 全摆着），行多的给带图标的摘要行 + 点开再收回 ' + opened + ' 格）');
 })();
 
 // ----------------------------------------------------------------------- 天赋归并
