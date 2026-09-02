@@ -2395,10 +2395,14 @@
     // 全用子元素，两边读出来的都是同一串字。
     var sum = el('summary');
     sum.appendChild(el('span', 'ttl', title + '　' + list.length + ' 条'));
-    sum.appendChild(el('span', 'note', '　技能名中文，句子英文'));
+    // **不能再写「句子英文」。** 第 19 轮加了人工整句模板（tools/translate-prio.js），
+    // 现在大半句子已经是中文了，而这句标签还说「英文原文，没翻」——
+    // 用户读着中文句子，被告知这是原文，于是对「译错了」这种可能完全没有防备。
+    sum.appendChild(el('span', 'note', '　技能名中文，句子中英混排'));
     sum.setAttribute('data-tip', tip
       + '\n技能和天赋名是官方中文（按 maxroll 标的技能 ID 查的，查不到的留英文）。\n'
-      + '句子是 maxroll 的英文原文，没翻 —— 整句机翻会把「unless」这种条件翻反，'
+      + '句子按人工写的**整句**模板译：命中模板的整句变中文，没命中的整句原样留英文。\n'
+      + '不做半句翻译、不做 AI 润色 —— 机翻会把「unless」这种条件翻反，'
       + '照着打就是错的，而界面上看不出来。');
     wrap.appendChild(sum);
     list.forEach(function (r) {

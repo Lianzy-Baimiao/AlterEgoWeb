@@ -61,7 +61,11 @@ function load(f) {
 ['app/class-names.js', 'app/lua-parser.js', 'app/parser-tests.js', 'app/labels.js',
  'app/model.js',
  'app/settings.js', 'app/columns.js', 'app/layouts.js', 'app/model-tests.js',
- 'app/export.js', 'app/talent-decode.js', 'app/bis.js', 'app/bis-tests.js'].forEach(function (f) {
+ 'app/export.js', 'app/talent-decode.js',
+ // history.js 在这个名单里是为了验「周趋势和主表同口径」那条（它导出了 distill）。
+ // 之前它一次都没被加载过 —— 也就是趋势那一整块在 node 套件里零覆盖。
+ 'app/history.js',
+ 'app/bis.js', 'app/bis-tests.js'].forEach(function (f) {
   if (!load(f)) throw new Error('缺文件：' + f);
 });
 
@@ -3848,6 +3852,32 @@ VERIFIERS.forEach(function (v) {
   }
   g.AE_SETTINGS = keep;
 
+  /*
+   * ⑦ 周趋势的「本周大秘境本数」必须和主表那一列同一个定义（**只数大秘境**）。
+   *
+   * 原来趋势那边是 mythicPlus + mythic + heroic 三者之和，于是同一个号同一周，
+   * 主表和导出写 4、趋势写 5 —— 而趋势视图的全部用途就是比较数字。
+   * 用合成快照验：一条 Lua，4 大秘境 + 1 史诗 + 2 英雄。
+   */
+  checks++;
+  if (!S.distillForTest) {
+    problems.push('口径与文案：history.js 没导出 distillForTest，⑦验不了');
+  } else {
+    var lua = 'AlterEgoDB = { ["global"] = { ["characters"] = { ["g1"] = { '
+      + '["info"] = { ["name"] = "甲", ["realm"] = "服" }, '
+      + '["mythicplus"] = { ["numCompletedDungeonRuns"] = { '
+      + '["mythicPlus"] = 4, ["mythic"] = 1, ["heroic"] = 2 } } } } } }';
+    var d0 = S.distillForTest({ sources: [{ id: 's1', lua: lua }] })['s1/g1'] || {};
+    if (d0.runs !== 4) {
+      problems.push('口径与文案：趋势里的「本周大秘境本数」算出 ' + d0.runs
+        + '，主表那一列只数大秘境（该是 4）—— 两个视图两个数');
+    }
+    checks++;
+    if (d0.runsAll !== 7) {
+      problems.push('口径与文案：合计本数算出 ' + d0.runsAll + '，该是 7（4+1+2）');
+    }
+  }
+
   console.log(pad('口径与文案')
     + (problems.length > before ? '有问题' : '通过')
     + '（' + checks + ' 项：团本列「界面 ⇔ 导出」合成 2 组 + 真实 '
@@ -3855,7 +3885,8 @@ VERIFIERS.forEach(function (v) {
     + '宝库「还需」逐行对差额 ' + vaultLines + ' 行；'
     + 'persist 的键 ' + pk.length + ' 个全在默认表里；'
     + '文案提到的文件 ' + nf.length + ' 个全在包里；'
-    + 'maxroll 池里 q=0 的 ' + zeroQ + ' 件都能从别处拿到真品质）');
+    + 'maxroll 池里 q=0 的 ' + zeroQ + ' 件都能从别处拿到真品质；'
+  + '周趋势的「本周大秘境本数」和主表同口径（合成快照 4 大秘境 + 1 史诗 + 2 英雄 → 4））');
 })();
 
 // ----------------------------------------------------------------------- 并发池

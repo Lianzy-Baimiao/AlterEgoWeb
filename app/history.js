@@ -115,7 +115,12 @@
           level: info.level || 0,
           ilvl: ilvl.level || 0,
           rating: mp.rating || 0,
-          runs: (runs.mythicPlus || 0) + (runs.mythic || 0) + (runs.heroic || 0),
+          // **只数大秘境**，和主表 / 导出同一个口径（app/columns.js 那一列的注释
+          // 讲了为什么：史诗 / 英雄是非钥石难度，答的是另一个问题）。
+          // 原来这里是三者之和，于是同一个号同一周，主表写 4、趋势写 5 ——
+          // 而这个视图的全部用途就是比较数字。合计仍然留在下面 runsAll 里。
+          runs: (runs.mythicPlus || 0),
+          runsAll: (runs.mythicPlus || 0) + (runs.mythic || 0) + (runs.heroic || 0),
           perDungeon: perDungeon,
           vault: vaultUnlocked,
           map: map,
@@ -201,7 +206,8 @@
     var metrics = [
       { id: 'rating', label: '大秘境评分', get: function (r) { return r.rating; } },
       { id: 'ilvl', label: '装等', get: function (r) { return r.ilvl ? Math.ceil(r.ilvl) : 0; } },
-      { id: 'runs', label: '本周完成本数', get: function (r) { return r.runs; } },
+      // 标签写清是哪一种「完成」—— 和主表那一列同名同义（都只数大秘境）。
+      { id: 'runs', label: '本周大秘境本数', get: function (r) { return r.runs; } },
       {
         id: 'vault', label: '宝库解锁', text: function (r) {
           return L.vaultTypeOrder.map(function (t) {
@@ -271,6 +277,10 @@
   }
 
   // ------------------------------------------------------------------- entry
+
+  // 口径能被单独验：趋势里的「本周大秘境本数」必须和主表那一列同一个定义
+  // （只数大秘境）。第 20 轮这两处曾经差一个数（主表 4、趋势 5）。
+  AE.distillForTest = distill;
 
   AE.openTrends = function () {
     var view = doc.getElementById('trend');
