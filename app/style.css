@@ -83,6 +83,12 @@ body { display: flex; flex-direction: column; }
 header {
   display: flex;
   align-items: center;
+  /* **必须允许换行。** header 有 11 个可见项，自然宽约 1140px（存过布局方案后
+     约 1320px）。body 是 overflow:hidden，所以不换行就既没有横向滚动条、也没有
+     第二个入口 —— 1366×768 开 175% 缩放（→781 CSS px）时排在最后的「设置」会被
+     推出视口右缘裁掉，而列显隐 / 筛选 / 外观 / 布局 / 数据源全在那个面板里。 */
+  flex-wrap: wrap;
+  row-gap: 6px;
   gap: 14px;
   padding: 8px 14px;
   background: var(--bg2);
@@ -681,7 +687,12 @@ table.mini-table td.overtime { color: var(--bad); }
   #grid-wrap { overflow: visible; max-height: none; contain: none; }
   #grid thead th { position: static; }
   #grid th.sticky-col, #grid td.sticky-col { position: static; }
-  html, body { background: #fff; color: #000; }
+  /* **height/overflow 也得放开。** 上面把 #grid-wrap 的 overflow/max-height/contain
+     都重置了，说明本意是让表格跨页流；但 html,body 那条 `height:100%; overflow:hidden`
+     在打印里照旧生效，分页媒体里 body 正好一页高，表格溢出后被裁掉 ——
+     40 个小号的看板只印得出第一页装得下的十几行，纸上还没有任何「还有后续」的提示。 */
+  html, body { background: #fff; color: #000; height: auto; overflow: visible; }
+  #app { height: auto; overflow: visible; }
 }
 
 /* -------------------------------------------------------------- 备份箱 vault */
