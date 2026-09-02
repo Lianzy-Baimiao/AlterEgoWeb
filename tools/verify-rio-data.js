@@ -148,12 +148,15 @@ var slotNums = {};
 
 // ------------------------------------------------------------------ 物品表
 var itemIds = {};
+// 带插槽的物品数。**不能挂在下面那个 stat 上** —— 它是在这个块之后才声明的，
+// var 提升让它在这里是 undefined，赋值当场抛异常。
+var gemStat = { gemmed: 0 };
 (function () {
   var items = R.items || {};
   var ids = Object.keys(items);
   ck();
   if (!ids.length) fail('items 是空的');
-  var noName = [], badQ = 0, noIcon = [];
+  var noName = [], badQ = 0, noIcon = [], badGmax = [], gemmed = 0;
   ids.forEach(function (id) {
     itemIds[id] = 1;
     ck();
@@ -163,7 +166,38 @@ var itemIds = {};
     // 品质 0~7（粗糙 … 传家宝）。给 0 说明 raider.io 那边没给，不该发生。
     if (typeof it.q !== 'number' || it.q < 1 || it.q > 7) badQ++;
     if (!it.i) noIcon.push(id);
+    /*
+     * 宝石那两个字段是**两种东西**，界面上分别用在不同的地方：
+     *   · sock = 有多少个采样角色在这件上镶了宝石（热门度那一类的量，可以上千）
+     *   · gmax = 单件上见过最多几颗宝石 = **这件至少有几个插槽**（游戏上限 3）
+     *
+     * 这一条是第 20 轮那次事故的反向守卫：面板拿 sock 当插槽数印出了
+     * 「插槽 ×1349」。所以这里钉死 gmax 的上界，并要求两个字段口径一致 ——
+     * 宝石只能镶在插槽里，所以「有人镶过」和「见过至少一颗」必须同时成立。
+     */
+    ck();
+    if (typeof it.gmax !== 'number' || it.gmax < 0 || it.gmax > 3
+        || it.gmax !== Math.floor(it.gmax)) {
+      badGmax.push(id + ':' + it.gmax);
+    }
+    ck();
+    if ((it.sock > 0) !== (it.gmax > 0)) {
+      fail('物品 ' + id + ' 的 sock=' + it.sock + ' 和 gmax=' + it.gmax
+        + ' 对不上 —— 宝石只能镶在插槽里，两个字段必须同时为 0 或同时非 0');
+    }
+    if (it.gmax > 0) gemmed++;
   });
+  ck();
+  if (badGmax.length) {
+    fail(badGmax.length + ' 件物品的 gmax 不是 0~3 的整数（' + badGmax.slice(0, 6).join(',')
+      + '）—— 它记的是**插槽数**，游戏里上限就是 3。'
+      + '超了说明它又变回「镶过宝石的人数」了（那是 sock）');
+  }
+  ck();
+  if (!gemmed) {
+    fail('一件带插槽的物品都没有 —— gmax 整列是 0，插槽徽章在界面上会全部消失');
+  }
+  gemStat.gemmed = gemmed;
   ck();
   // 中文名是换数据源的硬要求：面板现在显示中文，退回英文是功能退化。
   // DB2 对本机实测命中 100%，所以这里要求「一个都不许缺」，不是一个比例。
@@ -396,6 +430,7 @@ console.log('榜单样本   每专精最少 ' + (stat.minSpecN === Infinity ? '?
 console.log('装备样本   每专精最少 ' + (stat.minGear === Infinity ? '?' : stat.minGear)
   + ' 人，合计 ' + stat.gearTotal + ' 人，每部位最少 '
   + (stat.minSlotN === Infinity ? '?' : stat.minSlotN) + ' 人');
+console.log('插槽       ' + gemStat.gemmed + ' 件物品带插槽（gmax 1~3，即「单件上见过最多几颗宝石」）—— sock 是「多少人镶过」，两回事');
 console.log('检查项     ' + checks);
 
 if (warns.length) {

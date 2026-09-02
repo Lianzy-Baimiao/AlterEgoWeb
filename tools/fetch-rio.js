@@ -598,11 +598,24 @@ function aggregate(roster, gears) {
       if (!itemMeta[id]) {
         itemMeta[id] = {
           i: it.icon || '', q: it.item_quality || 0,
-          sock: 0, seen: 0
+          sock: 0, gmax: 0, seen: 0
         };
       }
       itemMeta[id].seen++;
-      if (it.gems && it.gems.length) itemMeta[id].sock++;
+      /*
+       * 宝石两个数，**分开存，因为它们是两种东西**：
+       *   · sock  = 有多少个采样角色在这件上镶了宝石（热门度那一类的量）
+       *   · gmax  = 单件上见过最多几颗宝石 → **这件至少有几个插槽**
+       *
+       * 第 20 轮的事故：面板拿 sock 当插槽数印，于是「插槽 ×1349」
+       * （阿曼尼督军的指环，1349 个角色镶过），而游戏里插槽上限是 3。
+       * 275 件里 159 件的 sock > 3 —— 那些数不可能是插槽数。
+       * 宝石只能镶在插槽里，所以「见过 N 颗」就是「至少 N 个插槽」的硬证据；
+       * 本机缓存实测 gmax 分布 {1: 506, 2: 41, 3: 1}，和游戏上限一致。
+       */
+      var ng = (it.gems && it.gems.length) || 0;
+      if (ng) itemMeta[id].sock++;
+      if (ng > itemMeta[id].gmax) itemMeta[id].gmax = ng;
     });
   });
 
@@ -670,7 +683,7 @@ function emit(agg, names, meta) {
   var items = {};
   Object.keys(agg.itemMeta).forEach(function (id) {
     var m = agg.itemMeta[id];
-    items[id] = { n: names.map[id] || '', i: m.i, q: m.q, sock: m.sock };
+    items[id] = { n: names.map[id] || '', i: m.i, q: m.q, sock: m.sock, gmax: m.gmax };
   });
 
   var obj = {
@@ -688,7 +701,9 @@ function emit(agg, names, meta) {
         + '「一套」按**解出来的天赋**算，不按字节，见 tools/group-loadouts.js）, '
         + 'loUniq 一共多少套}',
       slots: '槽位编号 → {n 这个部位的样本量, d: [[itemId, 人数, 平均装等], …] 按人数降序}',
-      items: 'itemId → {n 中文名, i 图标名, q 品质, sock 带宝石的次数}'
+      items: 'itemId → {n 中文名, i 图标名, q 品质, '
+        + 'sock 有多少个采样角色在这件上镶了宝石（**不是插槽数**）, '
+        + 'gmax 单件上见过最多几颗宝石 = 这件至少有几个插槽}'
     },
     items: items,
     specs: specTable

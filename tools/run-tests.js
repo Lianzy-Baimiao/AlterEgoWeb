@@ -159,6 +159,7 @@ var problems = [];
 var SRC_LEAK = /GearInsight|插件(自带|那份|那条|参照表)|来自插件|插件的(统计|数据|参照表)/i;
 
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
+              sock: 0, sockBad: 0,
               // rioRenders 数的是**所有**画过 rio 视角的渲染（专精循环 + 视角迁移
               // + 对照角色那三组都算），mainRio 只数专精循环那一轮。
               // 下面「每个专精各一次」那条断言必须用 mainRio：用总数的话，
@@ -345,6 +346,23 @@ function checkRender(label) {
       if (!/^\S+ [1-6]\/6$/.test(n.textContent)) {
         stats.trkBad++;
         if (stats.trkBad < 4) problems.push(label + ' 轨道徽章文字不对：' + n.textContent);
+      }
+    }
+    /*
+     * 插槽徽章。**这一条盯的是「印出来的数是插槽数，不是热门度」**。
+     * 第 20 轮真踩过：面板拿 rio 的 sock（有多少个角色在这件上镶过宝石）当插槽数，
+     * 印出「插槽 ×1349」，而游戏里插槽上限是 3。现在用的是 gmax（单件上见过
+     * 最多几颗宝石），所以文字只可能是「插槽」或「插槽 ×2」/「插槽 ×3」。
+     */
+    if (n.classList && n.classList.contains('sock')) {
+      stats.sock++;
+      if (!/^插槽( ×[23])?$/.test(n.textContent)) {
+        stats.sockBad++;
+        if (stats.sockBad < 4) {
+          problems.push(label + ' 插槽徽章文字不对：「' + n.textContent
+            + '」—— 只能是「插槽」或「插槽 ×2」/「插槽 ×3」（游戏里插槽上限 3）。'
+            + '出现更大的数说明它印的是 sock（多少人镶过），不是 gmax（插槽数）');
+        }
       }
     }
     // 部位头上的徽章有**三种**，按 class 分开验，不能共用一条正则：
@@ -2521,6 +2539,7 @@ if (stats.tico !== stats.tnodes) {
 console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问题' : '通过')
   + '（' + stats.renders + ' 次渲染，' + stats.imgs + ' 个图标，占位块 ' + stats.ph
   + '，轨道徽章 ' + stats.trk + '，部位组 ' + stats.slots
+  + '，插槽徽章 ' + stats.sock + '（文字不对 ' + stats.sockBad + '）'
   + '，图标全部懒加载 ' + stats.imgLazy + '）');
 // 这一行必须打印：装等和差距是第 16 轮加的，而「加了计数器、写了断言、
 // 既不打印也没下界」在本仓库出过一次 —— 那次整块功能没被画过，套件照样全绿。
