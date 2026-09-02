@@ -106,8 +106,10 @@ var MUTANTS = [
 
   // 整块不画。下界断言的意义就在这里。
   textMutant('装等差距徽章整块不画', BIS,
-    '      var gap = slotGap(rows, mine);\n      if (gap) {',
-    '      var gap = slotGap(rows, mine);\n      if (false) {',
+    // 锚点跟着代码走：slotGap 第 21 轮多了一个参数（成对去重之后，比的是这一格
+    // 推荐的那件，不一定是 rows[0]）。
+    '      var gap = slotGap(rows, mine, pi);\n      if (gap) {',
+    '      var gap = slotGap(rows, mine, pi);\n      if (false) {',
     '装等差距徽章只画了 0 个'),
 
   // **符号反过来。** 文字和 class 会一起翻，两者依然一致 ——
@@ -132,7 +134,7 @@ var MUTANTS = [
   // 抓它必须从 DOM 里另找一个来源：这个部位**第一行**画出来的装等
   // （见 run-tests.js 的 checkSlotGapTarget）。
   textMutant('差距拿列表最后一件比，而不是首选那件', BIS,
-    '    var top = rows[0];\n    var want = top[1];',
+    '    var top = rows[pickIdx > 0 && rows[pickIdx] ? pickIdx : 0];\n    var want = top[1];',
     '    var top = rows[rows.length - 1];\n    var want = top[1];',
     '比的不是首选那一件'),
 

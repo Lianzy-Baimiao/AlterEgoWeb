@@ -1064,6 +1064,34 @@
     // 光给一个「合计差 168」是个无法核对的断言（分母和两边的基数都看不见）。
     var gapMine = 0, gapWant = 0;
 
+    /*
+     * 成对的两格**不许推荐同一件**（第 21 轮用户报的：「实战分布里 2 个戒指是一样的，
+     * 实际上不能带同一个，需要去重」）。
+     *
+     * 为什么会一样：rio 的 finger1 / finger2 是**两份独立采样**，而戴在哪个孔是玩家
+     * 随手插的，所以同一枚热门戒指在两份里都排第一。实测 80 对里 **51 对（64%）**
+     * 首选是同一件（奥法两格都是「窃来的珍贵指环」，42 人 / 40 人）。
+     * maxroll 那边只有 2/160 对撞（编辑自己列重了），同一条规则一起管。
+     *
+     * 去重的办法是**第二格往下取一件**，而不是把两份分布合起来重算：
+     * 合起来要换一个分母（200 个戒指孔）、把每一行的百分比含义也改掉，
+     * 而这里要解决的只是「别推荐两枚一样的」。每一格印的仍然是它自己那份采样里的
+     * 真实人数和百分比。
+     */
+    var pick = {};
+    function pickFor(slotId, rows) {
+      var twin = PAIRED[slotId];
+      var taken = twin ? pick[twin] : 0;
+      var idx = 0;
+      if (taken) {
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i][0] !== taken) { idx = i; break; }
+        }
+      }
+      pick[slotId] = rows[idx] ? rows[idx][0] : 0;
+      return idx;
+    }
+
     SLOT_ORDER.forEach(function (slotId) {
       var rows = slots[slotId];
       if (!rows || !rows.length) return;
@@ -1093,7 +1121,10 @@
         else if (hit) matched++;
         else missing++;
       }
-      var g = slotGap(rows, mine);
+      // 这一格推荐哪一件（成对的第二格要跳过另一格已经占掉的那件）。
+      // SLOT_ORDER 里 11 在 12 前面、13 在 14 前面，所以取的时候另一格已经定了。
+      var pickIdx = pickFor(slotId, rows);
+      var g = slotGap(rows, mine, pickIdx);
       if (g) {
         gapN++;
         gapSum += g.d;
@@ -1103,7 +1134,7 @@
       }
       // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
       cells[slotId] = renderSlot(slotId, rows, mine, hit,
-        conv && conv.n ? conv.n[slotId] : null, hitVia, worn, twinId);
+        conv && conv.n ? conv.n[slotId] : null, hitVia, worn, twinId, pickIdx);
     });
 
     // 按角色栈的位置摆进去。**没有数据的部位不占格**（rows 为空时上面就 return 了），
@@ -1353,9 +1384,11 @@
    * **两边都得是真数字才算。** 缺一边就返回 null，界面上于是不画这个徽章 ——
    * 把缺的一边当 0 会算出「差 689 装等」这种数，比不画糟得多。
    */
-  function slotGap(rows, mine) {
+  function slotGap(rows, mine, pickIdx) {
     if (!mine || !mine.itemLevel || !rows || !rows.length) return null;
-    var top = rows[0];
+    // 比的是**这一格推荐的那件**，不一定是 rows[0] —— 戒指 / 饰品成对去重之后，
+    // 第二格推荐的是这一对里的第二件（见 renderGear 里 pickFor 那段）。
+    var top = rows[pickIdx > 0 && rows[pickIdx] ? pickIdx : 0];
     var want = top[1];
     if (!want) return null;
     var srcText = top[3] === -2
@@ -1374,7 +1407,7 @@
    *   · BisData：只能显示覆盖率（列出来那几件的使用率之和），并说明列表被截断了。
    *     本机实测 1264 个部位组里，覆盖率中位数只有 72.9%，206 组不到 50%。
    */
-  function renderSlot(slotId, rows, mine, hit, sampleN, hitVia, worn, twinId) {
+  function renderSlot(slotId, rows, mine, hit, sampleN, hitVia, worn, twinId, pickIdx) {
     var B = bis();
     var wrap = el('div', 'slot');
 
@@ -1467,7 +1500,7 @@
       // ---- 装等差距。「对上 / 没对上」只说了款式，说不了**差多远** ——
       // 身上这件正好是推荐的第 3 选择、装等却低 20，界面上和「完全穿对了」长得一样。
       // 判据用这个部位**首选那一件**的装等（rows[0]），因为那是「换到最好」要走的距离。
-      var gap = slotGap(rows, mine);
+      var gap = slotGap(rows, mine, pi);
       if (gap) {
         // 徽章上**同时给出两个原始装等**，不只给差值。
         // 只给「差 14」的话，那个数要靠悬停提示才能核对，而这一格恰恰是用户
@@ -1518,7 +1551,8 @@
     var flat = mrRows || rows.length <= 4;
     if (flat) wrap.classList.add('flat');
 
-    var top = rows[0] || null;
+    var pi = (pickIdx > 0 && rows[pickIdx]) ? pickIdx : 0;
+    var top = rows[pi] || null;
     if (top && !flat) {
       var tRi = (top[3] === -1 ? rioItem(top[0]) : (top[3] === -2 ? mrItem(top[0]) : null));
       var tName = (tRi && tRi.n) || (B.items[top[0]] || {}).n || ('物品 ' + top[0]);
@@ -1560,7 +1594,7 @@
      */
     var listBox = el('div', 'slot-list');
     rows.forEach(function (r, i) {
-      listBox.appendChild(renderItem(r, i === 0, mine, worn));
+      listBox.appendChild(renderItem(r, i === pi, mine, worn));
     });
     wrap.appendChild(listBox);
     // flat 的格子到这儿就完了：行都摆着，没有可折的东西，也就不给点击和悬停提示。

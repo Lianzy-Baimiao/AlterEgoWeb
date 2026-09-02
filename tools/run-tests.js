@@ -3529,6 +3529,7 @@ VERIFIERS.forEach(function (v) {
   var before = problems.length;
   var cells = 0, tops = 0, opened = 0, order = 0, checked = 0, flats = 0, flatIcons = 0;
   var byView = { maxroll: { cells: 0, flat: 0 }, rio: { cells: 0, flat: 0 } };
+  var pairsChecked = 0, pairsDupe = 0;
   var LEFT = [1, 2, 3, 15, 5, 9], RIGHT = [10, 6, 7, 8, 11, 12, 13, 14], BOTTOM = [16, 17];
   var NAMES = (g.AE_BIS || {}).slotNames || {};
 
@@ -3576,6 +3577,50 @@ VERIFIERS.forEach(function (v) {
       if (!gotW.length) {
         problems.push('角色栈：' + label + ' 武器那一行是空的（主手 / 副手没画）');
       }
+
+      /*
+       * **成对的两格不许推荐同一件**（第 21 轮用户报的）。
+       * rio 的 finger1/finger2 是两份独立采样，同一枚热门戒指在两份里都排第一 ——
+       * 实测 80 对里 51 对（64%）撞了，而游戏里不能戴两枚一样的。
+       * 判据只看画出来的东西：每格里带 .top 的那一行的名字，两格必须不同。
+       */
+      function pickName(slotName) {
+        var out = '';
+        walk(body, function (n) {
+          if (out || !n.classList || !n.classList.contains('slot')) return;
+          var mine2 = '';
+          walk(n, function (m) {
+            if (!m.classList) return;
+            if (m.classList.contains('slot-head')) {
+              (m.children || []).forEach(function (c) {
+                if (c.tagName === 'B' && !mine2) mine2 = String(c.textContent || '');
+              });
+            }
+          });
+          if (mine2 !== slotName) return;
+          walk(n, function (m) {
+            if (out || !m.classList) return;
+            if (m.classList.contains('item') && m.classList.contains('top')) {
+              walk(m, function (x) {
+                if (!out && x.tagName === 'B' && x.textContent) out = String(x.textContent);
+              });
+            }
+          });
+        });
+        return out;
+      }
+      [['戒指1', '戒指2'], ['饰品1', '饰品2']].forEach(function (pr) {
+        var n1 = pickName(pr[0]), n2 = pickName(pr[1]);
+        if (!n1 || !n2) return;
+        pairsChecked++;
+        if (n1 === n2) {
+          pairsDupe++;
+          if (pairsDupe < 4) {
+            problems.push('角色栈：' + label + ' ' + pr[0] + ' 和 ' + pr[1]
+              + ' 推荐的是同一件「' + n1 + '」—— 游戏里不能戴两枚一样的，得往下取一件');
+          }
+        }
+      });
 
       // ② 每格两行；③ 默认收起、点一下展开。
       var slots = [];
@@ -3693,6 +3738,10 @@ VERIFIERS.forEach(function (v) {
     problems.push('角色栈：最佳推荐视角 ' + byView.maxroll.cells + ' 格里只有 '
       + byView.maxroll.flat + ' 格把行直接摆出来 —— 剩下的把替代项折起来藏掉了');
   }
+  if (pairsChecked < 12) {
+    problems.push('角色栈：只验了 ' + pairsChecked + ' 对「戒指/饰品不许推荐同一件」，太少'
+      + '（12 次渲染 × 2 对 = 24）');
+  }
   if (byView.rio.flat > byView.rio.cells / 2) {
     problems.push('角色栈：实战分布视角 ' + byView.rio.flat + '/' + byView.rio.cells
       + ' 格没折 —— 那边一格 5~29 行，全摆出来又回到一列 8 屏那个样子了');
@@ -3701,7 +3750,8 @@ VERIFIERS.forEach(function (v) {
     + '（' + checked + ' 次渲染 × 16 个部位 = ' + cells + ' 格：位置照游戏角色栏 '
     + order + '/' + checked + '，行少的直接摆出来（带图标）' + flats
     + ' 格（最佳推荐 ' + byView.maxroll.flat + '/' + byView.maxroll.cells
-    + ' 全摆着），行多的给带图标的摘要行 + 点开再收回 ' + opened + ' 格）');
+    + ' 全摆着），行多的给带图标的摘要行 + 点开再收回 ' + opened + ' 格'
+    + '，成对的两格不推荐同一件 ' + (pairsChecked - pairsDupe) + '/' + pairsChecked + '）');
 })();
 
 // ----------------------------------------------------------------------- 天赋归并
