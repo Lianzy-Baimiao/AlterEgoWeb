@@ -54,6 +54,11 @@
 
       // Columns: {columnId: true} means hidden.
       hiddenColumns: {},
+      // 列的默认显隐**播种过了没有**。判据必须是这个标记，不能拿
+      // 「hiddenColumns 是不是空的」当首次运行 —— 设置里「全部显示」/「只留基础」
+      // 那两个按钮干的事正好是把它清空，于是那两个按钮的效果活不过一次刷新
+      // （第 20 轮实测：33 列会悄悄回到隐藏）。播种代码在 app/render.js。
+      columnsSeeded: false,
       hiddenGroups: {},
 
       // Column layout. Both orders are PARTIAL on purpose: anything they do not
@@ -191,7 +196,17 @@
       // but keeps the character/source choices, which stay meaningful.
       o.hiddenColumns = {};
       o.hiddenGroups = {};
+      o.columnsSeeded = false;                   // 列状态清了，播种也要重新来
       o.schemaVersion = SCHEMA;
+    }
+    /*
+     * 老存档里没有 columnsSeeded 这个键。**不能让它们重新播种一次** ——
+     * 那会把用户手动打开过的 defaultHidden 列（职业 / 种族 / 护甲…）和
+     * 上赛季货币列重新按默认隐藏一遍，等于悄悄改掉他的选择。
+     * 判据：已经有隐藏列了，就说明播种早就发生过。
+     */
+    if (o.columnsSeeded === undefined) {
+      o.columnsSeeded = !!(o.hiddenColumns && Object.keys(o.hiddenColumns).length);
     }
     // headerMode gained a third value; the old 'abbr' meant the English one.
     if (o.headerMode === 'abbr') o.headerMode = 'en';

@@ -508,10 +508,18 @@
     state.columns = AE.orderColumns(AE.buildColumns(model), settings);
     state.ctx = { model: model, settings: settings };
 
-    // Seed column defaults on first run: honour the addon's own hidden-currency
-    // choice, each column's defaultHidden, and hide previous expansions'
-    // currencies (30+ columns of dead crests otherwise).
-    if (!Object.keys(settings.hiddenColumns).length) {
+    /*
+     * 首次运行给列的默认显隐播种：尊重插件自己隐藏的货币、每列的 defaultHidden、
+     * 以及上个资料片的死纹章（不隐藏的话是 30 多列废列）。
+     *
+     * **判据是一个显式的标记，不是「hiddenColumns 是不是空的」。**
+     * 原来用空判：而 设置 → 列 上面那两个按钮（「全部显示」/「只留基础」）干的事
+     * 恰好就是把 hiddenColumns 清成 {}，于是下一次加载被当成新装，33 列
+     * （5 个 defaultHidden + 28 个上赛季货币）又被隐藏回去 —— 用户按下的那个
+     * 按钮活不过一次刷新。反方向也一样错：换赛季后 hiddenColumns 非空，新冒出来的
+     * 死纹章列**不会**被自动隐藏，而那正是这段代码写来防的事。
+     */
+    if (!settings.columnsSeeded) {
       var offSeason = model.columns.offSeasonCurrencies || {};
       state.columns.forEach(function (c) {
         if (c.defaultHidden) settings.hiddenColumns[c.id] = true;
@@ -521,6 +529,10 @@
         }
         if (offSeason[c.currencyId]) settings.hiddenColumns[c.id] = true;
       });
+      settings.columnsSeeded = true;
+      // 播种只该发生一次，所以**必须落盘** —— 不落盘的话下次加载又是 false，
+      // 「全部显示」照样会被盖掉（这就是原来那个 bug 的机制）。
+      if (AE.saveSettings) AE.saveSettings(settings);
     }
 
     if (!state.styleEl) {

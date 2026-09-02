@@ -3763,6 +3763,36 @@ VERIFIERS.forEach(function (v) {
   if (checks < 12) {
     problems.push('口径与文案：只跑到 ' + checks + ' 项检查，这一组没跑起来');
   }
+
+  /*
+   * ⑥ 老存档不许被重新「播种」列的默认显隐。
+   *
+   * 列的播种（隐藏 defaultHidden 和上赛季货币）现在靠 settings.columnsSeeded 这个
+   * 显式标记，而不是「hiddenColumns 是不是空的」。老存档里没有这个键，如果当成
+   * 「没播种过」，就会把用户手动打开过的列重新按默认隐藏一遍 —— 悄悄改掉他的选择。
+   * 走的是 AE_SETTINGS（保存到文件那条路）+ AE.loadSettings()，不碰私有函数。
+   */
+  var keep = g.AE_SETTINGS;
+  var schema = (loaded && loaded.settings && loaded.settings.schemaVersion) || 1;
+  function seededFor(hidden) {
+    g.AE_SETTINGS = {
+      schemaVersion: schema, savedAt: Date.now() + 10000, hiddenColumns: hidden
+    };
+    var r = S.loadSettings();
+    return r && r.settings ? r.settings.columnsSeeded : null;
+  }
+  checks++;
+  if (seededFor({ 'cur:3445': true }) !== true) {
+    problems.push('口径与文案：老存档（已有隐藏列、没有 columnsSeeded 键）被判成'
+      + '「没播种过」—— 下次打开会把用户手动打开过的列重新隐藏一遍');
+  }
+  checks++;
+  if (seededFor({}) !== false) {
+    problems.push('口径与文案：真正的新存档（一个隐藏列都没有）被判成「播种过了」'
+      + ' —— 那 33 列默认隐藏就再也不会生效');
+  }
+  g.AE_SETTINGS = keep;
+
   console.log(pad('口径与文案')
     + (problems.length > before ? '有问题' : '通过')
     + '（' + checks + ' 项：团本列「界面 ⇔ 导出」合成 2 组 + 真实 '
