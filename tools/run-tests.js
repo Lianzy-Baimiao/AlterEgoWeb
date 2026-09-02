@@ -200,7 +200,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               // 点一下之后位置有没有丢（滚动 / 折叠块展开状态）
               // 第 18 轮：块顺序（rio 在上）/ 树列顺序（英雄在前）
               ordChecked: 0, ordRio: 0, ordCols: 0, ordHero: 0,
-              posChecked: 0, posScroll: 0, posSec: 0, mrtKindSaved: 0,
+              posChecked: 0, posScroll: 0, posSec: 0, posSecShut: 0, mrtKindSaved: 0,
               switchChecked: 0, switchReset: 0,
               // 视角迁移（第 16 轮撤掉 GearInsight 那两个视角）
               vmChecked: 0, vmMigrated: 0, vmWrote: 0,
@@ -2294,6 +2294,27 @@ specKeys.forEach(function (key) {
       } else {
         stats.posSec++;
       }
+      /*
+       * **反方向也要验：收起来的块不许自己弹回去。**
+       * 只验「展开状态保住」抓不到这个 bug：默认写死 `open` 的块（插件兜底那条路上的
+       * 「热门英雄天赋」）收起来之后，下一次重建又被硬置成打开，因为记状态那段
+       * 只有「记着是开的就打开」，没有反向的 removeAttribute，而关掉时还 delete 了键。
+       */
+      still.removeAttribute('open');
+      if (still.dispatch) still.dispatch('toggle');
+      findBtns('mrb')[0].click();
+      var again = null;
+      walk(body, function (n) {
+        if (!again && n.tagName === 'DETAILS') again = n;
+      });
+      if (!again) {
+        problems.push('天赋 ' + key + ' 收起折叠块之后重建，块没了');
+      } else if (again.getAttribute('open') != null) {
+        problems.push('天赋 ' + key + ' 收起来的折叠块在点了一下方案之后又自己打开了'
+          + ' —— 「收起来」这个动作活不过一次重建');
+      } else {
+        stats.posSecShut++;
+      }
     }
     // 复位，别影响后面那些断言
     body.scrollTop = 0;
@@ -3126,6 +3147,10 @@ if (stats.switchChecked && stats.switchReset !== stats.switchChecked) {
 if (stats.posSec < 10) {
   problems.push('折叠块的展开状态只在 ' + stats.posSec + ' 个专精上保住，太少');
 }
+if (stats.posSecShut < 10) {
+  problems.push('折叠块的**收起**状态只在 ' + stats.posSecShut + ' 个专精上保住，太少'
+    + ' —— 这个方向是另一个 bug（默认写死 open 的块会自己弹回来）');
+}
 
 if (stats.mrtBuildSw < 20) problems.push('「换方案」只点过 ' + stats.mrtBuildSw + ' 次，太少');
 if (stats.mrtSubSw < 5) problems.push('「换英雄树」只点过 ' + stats.mrtSubSw + ' 次，太少');
@@ -3166,7 +3191,71 @@ console.log(pad('　场景 / 说明') + (stats.mrtScenBad ? '有问题' : '通�
   + '　正文与产物逐字节相同，面板不加工；首领说明已撤，画出来就报错）');
 console.log(pad('　点了不丢位置') + (stats.posScroll === stats.posChecked ? '通过' : '有问题')
   + '（' + stats.posChecked + ' 个专精上真点了一下：滚动位置保住 ' + stats.posScroll
-  + '，折叠块展开状态保住 ' + stats.posSec + '）');
+  + '，折叠块展开状态保住 ' + stats.posSec
+  + '、收起状态保住 ' + stats.posSecShut + '）');
+
+/*
+ * **默认写死 `open` 的折叠块收起来之后，不许自己弹回去。**
+ *
+ * 上面那条「收起状态保住」跑在 maxroll 那条路上，而那边的块默认都是合着的 ——
+ * 去掉反向还原的逻辑它照样全绿（实测过：变异体没被抓到）。真正会弹回来的是
+ * 插件兜底那条路上的「热门英雄天赋」，它在源码里被硬置成 open，只出现在
+ * maxroll 缺天赋方案的那 3 个专精（武器战 71 / 平衡德 102 / 织雾僧 270）。
+ * 所以这一组专门去那 3 个专精上点。
+ */
+(function checkFallbackSecShut() {
+  var done = 0, bad = 0;
+  specKeys.forEach(function (key) {
+    if (done >= 2) return;
+    var sid = (B.specs[key] || {}).specId;
+    if (!sid || mrTalentTruth(sid)) return;        // 有 maxroll 方案的不走兜底那条路
+    settings.bisTab = 'talents';
+    settings.bisSpec = key;
+    body.children.length = 0;
+    load('app/bis.js');
+    g.AE.openBis();
+
+    function findHero() {
+      var hit = null;
+      walk(body, function (n) {
+        if (hit || n.tagName !== 'DETAILS') return;
+        (n.children || []).forEach(function (c) {
+          if (c.tagName === 'SUMMARY' && /热门英雄天赋/.test(String(c.textContent || ''))) hit = n;
+        });
+      });
+      return hit;
+    }
+    var sec = findHero();
+    if (!sec) return;
+    done++;
+    if (sec.getAttribute('open') == null) {
+      bad++;
+      problems.push('兜底折叠块：' + key + ' 的「热门英雄天赋」默认该是展开的');
+    }
+    sec.removeAttribute('open');
+    if (sec.dispatch) sec.dispatch('toggle');
+    // 点一下「套路」里的按钮触发整块重建。
+    var btn = null;
+    walk(body, function (n) {
+      if (btn || !n.classList || !n.classList.contains('tree-pick')) return;
+      (n.children || []).forEach(function (c) { if (!btn && c.tagName === 'BUTTON') btn = c; });
+    });
+    if (!btn) { problems.push('兜底折叠块：' + key + ' 找不到「套路」按钮，这一条跑不动'); return; }
+    btn.click();
+    var again = findHero();
+    if (!again) { problems.push('兜底折叠块：' + key + ' 重建后「热门英雄天赋」没了'); return; }
+    if (again.getAttribute('open') != null) {
+      bad++;
+      problems.push('兜底折叠块：' + key + ' 的「热门英雄天赋」收起来之后，'
+        + '点一下套路又自己打开了 —— 源码里那句写死的 open 会盖掉用户的动作');
+    }
+  });
+  if (done < 2) {
+    problems.push('兜底折叠块：只在 ' + done + ' 个专精上跑到（该有 3 个走兜底那条路）');
+  }
+  console.log(pad('　兜底折叠块') + (bad ? '有问题' : '通过')
+    + '（' + done + ' 个走插件兜底的专精：默认展开、收起后不许自己弹回来）');
+})();
 
 // ---- 无障碍
 // 这一组全是「实测已经是 0，写成硬断言钉住」，不是给未来留的余量。

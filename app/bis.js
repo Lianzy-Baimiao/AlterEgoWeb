@@ -743,15 +743,20 @@
   /** 记住这一块的展开状态，并接上 toggle 事件。renderSec 之后调用。 */
   function trackSec(node) {
     var k = secKey(node);
+    // **两个方向都要走。** 原来只有「记着是开的就打开」，没有反向的 removeAttribute，
+    // 于是任何**默认写死 open** 的块（插件兜底那条路上的「热门英雄天赋」）一旦收起来，
+    // 下一次 render() 重建时又被硬置成打开 —— 「收起来」这个动作活不过一次点击。
     if (openSecs[k]) node.setAttribute('open', 'open');
+    else if (openSecs[k] === 0 && node.removeAttribute) node.removeAttribute('open');
     node.addEventListener('toggle', function () {
       // 读 open 状态要两条路都走：浏览器给 node.open（布尔属性），
       // 测试脚手架只有 getAttribute。少一条这段在其中一边就是空转。
       var isOpen = (node.open !== undefined)
         ? node.open
         : (node.getAttribute && node.getAttribute('open') != null);
-      if (isOpen) openSecs[k] = 1;
-      else delete openSecs[k];
+      // **关掉要记成 0，不能 delete。** delete 之后「用户手动收起来了」和
+      // 「从来没动过」在下一次渲染时长得一样，于是默认写死 open 的块又被打开。
+      openSecs[k] = isOpen ? 1 : 0;
     });
   }
 
@@ -1778,7 +1783,16 @@
         '数据来自 ' + ((R && R.source) || 'raider.io') + '，'
         + '抓取日期 ' + ((R && R.updatedAt) || '?') + '，赛季 ' + ((R && R.season) || '?') + '。'
         + '这个专精统计了 ' + (rs.nGear || 0) + ' 个角色的实际装备'
-        + (rs.n && rs.n !== rs.nGear ? '（榜上 ' + rs.n + ' 人，其中 ' + rs.nGear + ' 人拿到了装备）' : '')
+        // **原来写「榜上 500 人，其中 99 人拿到了装备」，那是把设计说成了故障。**
+        // 500 是天赋串的抓取上限（每个专精都恰好 500），装备是**只查榜前 100 名**
+        // （生成器里 TARGET=100，日志原话「每专精分数最高的 100 个」），
+        // 实际失败的只有 0~2 人。所以这两个数描述的是**两批人**：
+        // 装备 = 榜前 100，天赋串 = 榜前 500。不说清的话看起来像 400 人的装备丢了。
+        + (rs.n && rs.n !== rs.nGear
+          ? '（装备只查榜前 ' + Math.max(100, rs.nGear) + ' 名，'
+            + rs.nGear + ' 人查到了；下面天赋串那一块用的是榜前 ' + rs.n + ' 名，'
+            + '两块描述的不是同一批人）'
+          : '')
         + '。'));
       p.appendChild(el('br'));
       p.appendChild(doc.createTextNode(
