@@ -2352,15 +2352,27 @@
     // 而职业树 / 专精树在同一个专精的十套方案之间差别很小。
     // 先给最能区分的那棵，长的两棵往后放。插件那条路同样调了顺序，
     // 两条路的形状必须一致，否则退到插件那份时整页会换个样子。
-    var cols = el('div', 'tree-cols');
-    [[heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
-     [sp.classNodes, '职业天赋'],
-     [sp.specNodes, '专精天赋']
+    // 分**两行**放，不是让三棵树自己去 wrap（第 20 轮用户报的）。
+    //
+    // 三棵树宽度是 370（英雄）/ 518（职业）/ 518（专精）。原来三棵在一个
+    // .tree-cols 里一起 flex-wrap，于是常见宽度下排成「英雄 + 职业」一行、
+    // 「专精」孤零零占第二行 —— 两棵大小差一倍的凑一行，另一棵同样大的反而
+    // 单独一行，看起来像排版坏了。
+    //
+    // 现在固定成：英雄自己一行（它最窄，也是「这是哪一套」的标识，第 18 轮定的
+    // 要放最前），职业和专精一行（两棵一样宽，凑一行是齐的）。
+    // 窄到放不下两棵 518 时它们还是会 wrap，那时一行一棵，仍然整齐。
+    var heroRow = el('div', 'tree-cols hero-row');
+    var mainRow = el('div', 'tree-cols main-row');
+    [[heroRow, heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
+     [mainRow, sp.classNodes, '职业天赋'],
+     [mainRow, sp.specNodes, '专精天赋']
     ].forEach(function (g) {
-      var grid = renderTreeGrid(sp, g[0] || [], out.nr, g[1]);
-      if (grid) cols.appendChild(grid);
+      var grid = renderTreeGrid(sp, g[1] || [], out.nr, g[2]);
+      if (grid) g[0].appendChild(grid);
     });
-    box.appendChild(cols);
+    if (heroRow.children.length) box.appendChild(heroRow);
+    if (mainRow.children.length) box.appendChild(mainRow);
     return box;
   }
 
@@ -2988,20 +3000,24 @@
       + '高亮的是点了的节点，鼠标放上去看详情。');
     box.appendChild(info);
 
-    var cols = el('div', 'tree-cols');
     var heroIds = (sp.heroNodes || []).filter(function (id) {
       var n = TR.nodes[id];
       return n && (!sub || n[6] === sub);
     });
-    // 顺序和 maxroll 那条路一致：英雄天赋在最前。理由见 renderMrTree 的同一处。
-    [[heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
-     [sp.classNodes, '职业天赋'],
-     [sp.specNodes, '专精天赋']
+    // 顺序和分行都跟 maxroll 那条路一致：英雄自己一行、职业+专精一行。
+    // 理由见 renderMrTree 的同一处 —— **两条路的形状必须一样**，
+    // 否则退到插件那份时整页会换个样子。
+    var heroRow2 = el('div', 'tree-cols hero-row');
+    var mainRow2 = el('div', 'tree-cols main-row');
+    [[heroRow2, heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
+     [mainRow2, sp.classNodes, '职业天赋'],
+     [mainRow2, sp.specNodes, '专精天赋']
     ].forEach(function (g) {
-      var grid = renderTreeGrid(sp, g[0] || [], nr, g[1]);
-      if (grid) cols.appendChild(grid);
+      var grid = renderTreeGrid(sp, g[1] || [], nr, g[2]);
+      if (grid) g[0].appendChild(grid);
     });
-    box.appendChild(cols);
+    if (heroRow2.children.length) box.appendChild(heroRow2);
+    if (mainRow2.children.length) box.appendChild(mainRow2);
 
     return box;
   }

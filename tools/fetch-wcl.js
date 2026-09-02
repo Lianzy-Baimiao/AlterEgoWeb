@@ -305,51 +305,107 @@ function findFights(zone, cb) {
  * 名单生成 20 个别名。两次都进缓存，中断重跑不会重复问。
  *
  * 专精不问 WCL，从串头解（见文件头）。所以第二次请求只要串本身。
+ *
+ * 返回 `[{ ch: 角色身份, str: 导入串 }…]`。**必须带角色身份** ——
+ * 见 aggregate() 上面那段：不带的话同一个人会被数几十次。
  */
 function harvest(f, cb) {
   var key = 'fight-' + f.code + '-' + f.fightID;
-  gql(key + '-a',
-    '{ reportData { report(code: "' + f.code + '") { fights(fightIDs: ['
-      + f.fightID + ']) { id friendlyPlayers } } } }',
+  // 报告里每个 actorID 是谁。**按报告缓存，不按战斗** —— 一个报告里 actorID
+  // 是稳定的，而一个报告通常有好几场被榜收录的战斗（一晚打 9 个首领）。
+  // 实测 831 场战斗只落在 710 个报告里，按报告缓存省下 120 次请求。
+  actors(f.code, function (ea, byId) {
+    if (ea) { cb(ea); return; }
+    gql(key + '-a',
+      '{ reportData { report(code: "' + f.code + '") { fights(fightIDs: ['
+        + f.fightID + ']) { id friendlyPlayers } } } }',
+      function (e, j) {
+        if (e) { cb(e); return; }
+        var rep = j.data && j.data.reportData && j.data.reportData.report;
+        var fi = rep && rep.fights && rep.fights[0];
+        var ids = (fi && fi.friendlyPlayers) || [];
+        if (!ids.length) { cb(null, []); return; }
+        var aliases = ids.map(function (id, k) {
+          return 'p' + k + ': talentImportCode(actorID: ' + id + ')';
+        }).join(' ');
+        gql(key + '-b',
+          '{ reportData { report(code: "' + f.code + '") { fights(fightIDs: ['
+            + f.fightID + ']) { ' + aliases + ' } } } }',
+          function (e2, j2) {
+            if (e2) { cb(e2); return; }
+            var fr = j2.data.reportData.report.fights[0] || {};
+            var out = [];
+            // 别名是按 ids 的下标生成的（p0、p1…），所以 pN ↔ ids[N]。
+            // 这个对应关系是这里唯一把「串」和「人」连起来的东西，别改顺序。
+            Object.keys(fr).forEach(function (k) {
+              if (!fr[k]) return;
+              var idx = Number(String(k).slice(1));
+              var who = byId[ids[idx]];
+              if (!who) return;              // 认不出是谁的串就不要 —— 没法去重
+              out.push({ ch: who, str: fr[k] });
+            });
+            cb(null, out);
+          });
+      });
+  });
+}
+
+/**
+ * 一个报告里 actorID → 角色身份。
+ *
+ * 身份优先用 `gameID`（角色在游戏里的唯一 ID），拿不到才退回 `名字@服务器`。
+ * 为什么不直接用名字：跨服重名是真的（而且团本榜是全球的）。
+ */
+var actorCache = {};
+function actors(code, cb) {
+  if (actorCache[code]) { cb(null, actorCache[code]); return; }
+  gql('actors-' + code,
+    '{ reportData { report(code: "' + code + '") { masterData '
+      + '{ actors(type: "Player") { id gameID name server } } } } }',
     function (e, j) {
       if (e) { cb(e); return; }
       var rep = j.data && j.data.reportData && j.data.reportData.report;
-      var fi = rep && rep.fights && rep.fights[0];
-      var ids = (fi && fi.friendlyPlayers) || [];
-      if (!ids.length) { cb(null, []); return; }
-      var aliases = ids.map(function (id, k) {
-        return 'p' + k + ': talentImportCode(actorID: ' + id + ')';
-      }).join(' ');
-      gql(key + '-b',
-        '{ reportData { report(code: "' + f.code + '") { fights(fightIDs: ['
-          + f.fightID + ']) { ' + aliases + ' } } } }',
-        function (e2, j2) {
-          if (e2) { cb(e2); return; }
-          var fr = j2.data.reportData.report.fights[0] || {};
-          var out = [];
-          Object.keys(fr).forEach(function (k) {
-            if (fr[k]) out.push(fr[k]);
-          });
-          cb(null, out);
-        });
+      var list = (rep && rep.masterData && rep.masterData.actors) || [];
+      var byId = {};
+      list.forEach(function (a) {
+        if (!a || a.id == null) return;
+        byId[a.id] = a.gameID ? ('g' + a.gameID)
+          : ((a.name || '?') + '@' + (a.server || '?'));
+      });
+      actorCache[code] = byId;
+      cb(null, byId);
     });
 }
 
 /* ------------------------------------------------------------------- 聚合 */
 
 /**
- * 一堆串 → 每个专精按人数降序的去重列表。
+ * 一堆 {ch 角色, str 串} → 每个专精按**人数**降序的去重列表。
  *
  * 专精从**串头**解（8 位版本 + 16 位 specID）。解不开、版本不是 2、
  * specID 不认识的**全部丢掉并计数** —— 一条解不开的串放进产物，
  * 用户复制粘贴进游戏得到「无效」，而界面上看不出来。
  *
- * 排序规则和 app/bis.js 的 rioLoadouts() 一致（人数降序，同人数按串本身），
+ * **按角色去重，不是按出场次数。** 这是第 20 轮用户报出来的 bug：
+ * 采样是按「战斗」走的（831 场），而一个团队一晚要打 9 个首领、还有多次尝试 ——
+ * 同一个角色带着同一套天赋会在几十场战斗里被数几十次。于是：
+ *   · 产物里的 n 是**出场次数**，而面板上写的是「N 名玩家」，那是假话；
+ *   · 排名前几条被同一批人反复顶高，分布看起来假的集中。
+ * 实测神圣骑 n=807 而前 6 条占 485（60%），敬效贼 677 里前 6 占 532（79%），
+ * 而鲜血 DK 是 8% —— 后者才是真实的多样性（大秘境那半也是 8% 这个量级）。
+ *
+ * 所以计数单位是「多少个**不同的角色**用过这一串」，n 是「多少个不同的角色」。
+ * 同一个角色在不同夜晚换过天赋的话，他在每一套里各算一次 —— 那是真实情况
+ * （他确实用过两套），而不是把他按最后一次覆盖掉。
+ *
+ * 排序规则和 app/bis.js 的 loadoutsOf() 一致（人数降序，同人数按串本身），
  * 否则同一个「#1 热门」在两块里指的不是同一串。
  */
-function aggregate(strings, ORDER, TREE) {
-  var bySpec = {}, stat = { total: 0, ok: 0, badDecode: 0, badVer: 0, badSpec: 0 };
-  strings.forEach(function (s) {
+function aggregate(rows, ORDER, TREE) {
+  var bySpec = {}, stat = { total: 0, ok: 0, badDecode: 0, badVer: 0, badSpec: 0, dupe: 0 };
+  rows.forEach(function (row) {
+    var s = row && row.str, ch = row && row.ch;
+    if (!s || !ch) return;
     stat.total++;
     var r;
     try { r = DEC.decode(s, ORDER); } catch (e) { stat.badDecode++; return; }
@@ -358,23 +414,30 @@ function aggregate(strings, ORDER, TREE) {
     var sp = TREE.specs[String(r.spec)];
     if (!sp) { stat.badSpec++; return; }
     stat.ok++;
-    var b = bySpec[r.spec] || (bySpec[r.spec] = { n: 0, count: {} });
-    b.n++;
-    b.count[s] = (b.count[s] || 0) + 1;
+    var b = bySpec[r.spec] || (bySpec[r.spec] = { chars: {}, byStr: {} });
+    // 同一个角色 + 同一套串，出现多少次都只算一次。
+    var seen = b.byStr[s] || (b.byStr[s] = {});
+    if (seen[ch]) { stat.dupe++; return; }
+    seen[ch] = 1;
+    b.chars[ch] = 1;
   });
   var out = {};
   Object.keys(bySpec).forEach(function (sid) {
     var b = bySpec[sid];
-    var list = Object.keys(b.count).sort(function (x, y) {
-      if (b.count[y] !== b.count[x]) return b.count[y] - b.count[x];
+    var count = {};
+    Object.keys(b.byStr).forEach(function (s) { count[s] = Object.keys(b.byStr[s]).length; });
+    var list = Object.keys(count).sort(function (x, y) {
+      if (count[y] !== count[x]) return count[y] - count[x];
       return x < y ? -1 : x > y ? 1 : 0;
     });
     out[sid] = {
       cls: TREE.specs[sid].cls, specEn: TREE.specs[sid].specEn,
-      n: b.n, uniq: list.length,
-      // 只留前 30 种。实测一个专精 400 人能有 380 种不同的串（每个人都有点
+      // n = **多少个不同的角色**（不是出场次数，见上面那段）
+      n: Object.keys(b.chars).length,
+      uniq: list.length,
+      // 只留前 30 种。实测一个专精几百人能有几百种不同的串（每个人都有点
       // 自己的微调），全存下来产物会膨胀到几 MB，而面板只画前几条。
-      loadouts: list.slice(0, 30).map(function (s) { return [s, b.count[s]]; })
+      loadouts: list.slice(0, 30).map(function (s) { return [s, count[s]]; })
     };
   });
   return { specs: out, stat: stat };
@@ -425,7 +488,8 @@ function quotaStop() {
 }
 
 function run(raid, list, ORDER, TREE) {
-  var strings = [], done = 0, failed = 0, i = 0;
+  // rows 是 {ch 角色, str 串}，不是裸串 —— 去重要靠 ch，见 aggregate()。
+  var rows = [], done = 0, failed = 0, i = 0;
   var t0 = Date.now();
 
   (function step() {
@@ -450,11 +514,11 @@ function run(raid, list, ORDER, TREE) {
           if (failed < 4) console.log('  ' + f.code + '#' + f.fightID + ' 取不到：'
             + e.message.slice(0, 70));
         } else {
-          arr.forEach(function (s) { strings.push(s); });
+          arr.forEach(function (r2) { rows.push(r2); });
         }
         if (done % 25 === 0 || done === list.length) {
           process.stdout.write('\r  harvest ' + done + '/' + list.length
-            + '，串 ' + strings.length + '，失败 ' + failed
+            + '，串 ' + rows.length + '，失败 ' + failed
             + '，缓存命中 ' + net.cacheHit + '   ');
         }
         step();
@@ -467,11 +531,13 @@ function run(raid, list, ORDER, TREE) {
     if (hitQuota) {
       console.log('  配额到门槛了，先聚合已经抓到的这些。');
     }
-    var agg = aggregate(strings, ORDER, TREE);
+    var agg = aggregate(rows, ORDER, TREE);
     var st = agg.stat;
-    console.log('\n串 ' + st.total + ' 条：能用 ' + st.ok
+    console.log('\n串 ' + st.total + ' 条（按出场算）：能用 ' + st.ok
       + '，解不开 ' + st.badDecode + '，版本不是 2 的 ' + st.badVer
       + '，specID 不认识的 ' + st.badSpec);
+    console.log('  按角色去重丢掉 ' + st.dupe + ' 条重复出场'
+      + '（同一个人同一套天赋在多场战斗里被反复采到）—— 剩下的才叫「人数」');
     var sids = Object.keys(agg.specs);
     console.log('覆盖 ' + sids.length + ' / ' + Object.keys(TREE.specs).length + ' 个专精');
     var thin = sids.filter(function (s) { return agg.specs[s].n < 20; });
@@ -497,18 +563,37 @@ function run(raid, list, ORDER, TREE) {
       note: '团本里真实玩家的官方天赋导入串，**原样转发**，面板没有改动一个字符。'
         + '专精是从串头（8 位版本 + 16 位 specID）解出来的，不是问 WCL 要的 —— '
         + '串本身就是答案，比另一个字段更可信。'
-        + '每个专精只留前 30 种串（实测一个专精 400 人能有 380 种，'
-        + '人人都有微调，全存下来产物会膨胀到几 MB 而面板只画前几条）。'
+        + '**n 和每条串的计数都是「多少个不同的角色」，不是出场次数。** '
+        + '采样是按战斗走的，而一个团队一晚要打 9 个首领还有多次尝试，'
+        + '同一个角色带着同一套天赋会在几十场战斗里被采到 —— 不去重的话 n 会'
+        + '虚高好几倍，而且排名前几条被同一批人反复顶高，分布看起来假的集中'
+        + '（第 20 轮的真 bug：神圣骑 n=807 而前 6 条占 485）。'
+        + '去重用 WCL 的 gameID（角色在游戏里的唯一 ID），拿不到才退回 名字@服务器。'
+        + '同一个角色在不同夜晚换过天赋的话，他在每一套里各算一次 —— 他确实用过两套。'
+        + '每个专精只留前 30 种串（人人都有点微调，全存下来产物会膨胀到几 MB，'
+        + '而面板只画前几条）。'
         + '样本量按专精差别很大：一队 20 人只有 2~3 个坦克 / 治疗。',
       fmt: {
-        specs: 'specId → {cls, specEn, n 采样人数, uniq 去重后多少种, '
-          + 'loadouts [[串, 多少人用]…]（人数降序，最多 30 条）}'
+        specs: 'specId → {cls, specEn, n 多少个不同的角色, uniq 去重后多少种串, '
+          + 'loadouts [[串, 多少个不同的角色用它]…]（人数降序，最多 30 条）}'
       },
       fights: done,
       specs: agg.specs
     };
     var js = '/* 自动生成，勿手改。生成器：tools/fetch-wcl.js */\n'
       + 'window.AE_WCL = ' + JSON.stringify(obj) + ';\n';
+    // **一个专精都没有就不许写盘。**
+    // 第 20 轮真踩了：加了 actors 那一步之后 --report 因为缓存里没有 actors-*
+    // 全军覆没，然后它照样把一个 2 KB 的空产物写了上去，把好的那份冲掉。
+    // 「跑失败了」和「结果是空的」必须是两件事 —— 后者不该覆盖前一份好数据。
+    if (!sids.length) {
+      console.log('\n一个专精都没聚合出来 —— **不写盘**，保住原来那份 app/wcl-data.js。');
+      console.log('  ' + (REPORT_ONLY
+        ? '--report 只用缓存：缺的那些请求先跑一次不带 --report 的完整抓取。'
+        : '看上面的失败原因。'));
+      process.exitCode = 1;
+      return;
+    }
     fs.writeFileSync(OUT, js);
     console.log('\n产物 app/wcl-data.js  ' + Math.round(Buffer.byteLength(js) / 1024) + ' KB');
     console.log('网络：查询 ' + net.q + '，缓存命中 ' + net.cacheHit

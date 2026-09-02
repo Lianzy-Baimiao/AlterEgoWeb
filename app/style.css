@@ -1007,7 +1007,7 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
  * 而且和这个项目里另外两个面板一个量级（#trend 900、#vault 760）。
  * 用 clamp 不用媒体查询：能放几棵树是个**连续**的关系，
  * 断点会在 1279/1280 之间造出一个「宽 1 px 版面全变」的台阶。 */
-#bis { width: clamp(320px, 72vw, 1160px); }
+#bis { width: clamp(320px, 84vw, 1160px); }
 /* contain: content —— 面板每次点击都整块重建，而里面有三棵天赋树（各 ~33 个
    绝对定位的节点）。没有它的话浏览器要把这一块的布局和绘制放在整页的上下文里算;
    有了它，重建的影响被关在这个盒子内。和 #grid-wrap 上那句 contain: paint 同一个
@@ -1559,3 +1559,11 @@ em.scen.multi { color: var(--accent); opacity: .8; }
 .slot-head .tag.gap { white-space: nowrap; }
 .bis-sum .warn { color: var(--warn); font-weight: 600; }
 .bis-foot { margin-top: 14px; color: var(--fg3); font-size: 11px; line-height: 1.6; }
+
+/* 树列分两行（第 20 轮）：英雄自己一行，职业 + 专精一行。
+ * 见 app/bis.js 里 renderMrTree 那段注释 —— 让三棵一起 wrap 会排出
+ * 「英雄 + 职业」一行、「专精」孤零零一行：两棵大小差一倍的凑一行，
+ * 而同样大的那棵单独一行，看着像排版坏了。
+ * 行间距用 margin 不用父级的 gap：.bis-tree 里还有别的东西（点数说明那一行），
+ * 统一 gap 会把那些也顶开。 */
+.tree-cols.main-row { margin-top: 14px; }
