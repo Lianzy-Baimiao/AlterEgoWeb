@@ -197,7 +197,7 @@ var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, 
               mrtSpecs: 0, mrtRenders: 0, mrtBox: 0, mrtTree: 0, mrtBtns: 0,
               mrtName: 0, mrtNameShort: 0, mrtNameUniq: 0, mrtNameTag: 0, mrtSpec: 0, mrtDecl: 0, mrtCopy: 0, mrtGameOk: 0,
               mrtCopyClick: 0,
-              mrtPts: 0, mrtPtsSplit: 0, mrtMany: 0, mrtManySeen: 0,
+              mrtPts: 0, mrtPtsSplit: 0, mrtHeadSum: 0, mrtMany: 0, mrtManySeen: 0,
               mrtSubBar: 0, mrtBundle: 0, mrtKindSw: 0, mrtBuildSw: 0, mrtSubSw: 0,
               // 第 16 轮：场景标签 / 出手顺序 / 各首领·副本说明
               mrtScen: 0, mrtScenSeen: 0, mrtScenBad: 0, mrtPrio: 0, mrtBoss: 0,
@@ -1298,20 +1298,31 @@ function mrDecode(specId, t) {
   if (out.spec !== Number(specId)) {
     return { err: '串头 specID ' + out.spec + ' != ' + specId };
   }
-  var pts = 0, subs = {}, base = 0, per = {}, sel = {};
+  var pts = 0, subs = {}, base = 0, per = {}, sel = {}, off = 0;
+  // 哪些节点会被画进三棵树里。**画不进去的那些要单独记**：选「哪一条英雄天赋」
+  // 那一下本身也花 1 点，而那个节点不在 classNodes / specNodes / heroNodes 任何一份里
+  // （109 个样本里 105 个是这样）。所以「三棵树表头相加」天生比「共 N 点」少这 1 点，
+  // 界面上那句话现在把它说出来了，这里则用它把两个数对上账。
+  var inTree = {};
+  var spDef = TREE && TREE.specs ? TREE.specs[String(specId)] : null;
+  if (spDef) {
+    [].concat(spDef.classNodes || [], spDef.specNodes || [], spDef.heroNodes || [])
+      .forEach(function (id) { inTree[id] = 1; });
+  }
   out.nodes.forEach(function (n) {
     if (!n.inSpec) return;
     sel[String(n.id)] = 1;
     if (!n.purchased) return;              // 白给的不占点数
     var r = (typeof n.rank === 'number' ? n.rank : 1);
     pts += r;
+    if (!inTree[n.id]) off += r;
     var row = TREE && TREE.nodes ? TREE.nodes[n.id] : null;
     var sub = row && row[6];
     if (sub) { subs[sub] = 1; per[sub] = (per[sub] || 0) + r; }
     else base += r;
   });
   return {
-    pts: pts, base: base, per: per, sel: sel,
+    pts: pts, base: base, per: per, sel: sel, off: off,
     subs: Object.keys(subs).map(Number).sort(function (a, b) { return a - b; })
   };
 }
@@ -1574,6 +1585,35 @@ function checkMrTalents(label, specId, boxes, notes, btns, subBtns, lit, taVals,
     } else {
       stats.mrtPts++;
       if ((t.h || []).length > 1) stats.mrtPtsSplit++;
+    }
+  }
+
+  /*
+   * **三棵树的表头相加，必须等于上面那句「共 N 点」。**
+   *
+   * 这两个数上下相邻，用户加一下就能对 —— 而它们原来永远不等（实测 167 套方案
+   * 167 套都差 1~3 点）：「共 N 点」只算花点买的（解码器 out.pts 在 purchased 时
+   * 才累加），而树表头把 nr 里所有 rank 都加了，白给的节点也算进去了。
+   * 判据用上面那套 legal（游戏里配得出来的点数），所以打包两条英雄树的情况天然覆盖。
+   */
+  if (Object.keys(legal).length) {
+    var headSum = 0, heads = 0;
+    walk(body, function (n) {
+      if (!n.classList || !n.classList.contains('tree-grid-head')) return;
+      (n.children || []).forEach(function (c) {
+        var mm = /^(\d+) 点$/.exec(String(c.textContent || ''));
+        if (mm) { headSum += Number(mm[1]); heads++; }
+      });
+    });
+    if (heads < 2) {
+      loNote('树表头点数没画', label + ' 只找到 ' + heads + ' 个树表头点数');
+    } else if (!legal[headSum + (d.off || 0)]) {
+      loNote('树表头点数加不起来', label + ' 三棵树的表头相加是 ' + headSum
+        + ' 点，加上不画在树里的 ' + (d.off || 0) + ' 点还是配不出 '
+        + Object.keys(legal).join(' / ') + ' 点 —— 表头要么算了白给的节点，'
+        + '要么漏了花点买的');
+    } else {
+      stats.mrtHeadSum++;
     }
   }
 
@@ -3006,6 +3046,10 @@ if (stats.mrtDecl !== stats.mrtRenders) {
   problems.push('产物声明的点数 / 英雄子树只独立解码复核过 ' + stats.mrtDecl + ' 次，渲染 '
     + stats.mrtRenders + ' 次');
 }
+if (stats.mrtHeadSum !== stats.mrtRenders) {
+  problems.push('三棵树表头相加对上「共 N 点」的只有 ' + stats.mrtHeadSum + ' 次，渲染 '
+    + stats.mrtRenders + ' 次 —— 不一一对应');
+}
 if (stats.mrtPts !== stats.mrtRenders) {
   problems.push('「印出来的点数是游戏里配得出来的」只验过 ' + stats.mrtPts + ' 次，渲染 '
     + stats.mrtRenders + ' 次');
@@ -3172,6 +3216,7 @@ console.log(pad('maxroll 天赋') + (stats.mrtSpecs === MRT_SPECS
   + ' 次渲染，方案按钮 ' + stats.mrtBtns + '，画出来的树和高亮那一套同一套 '
   + stats.mrtTree
   + '，点数与英雄子树独立解码复核 ' + stats.mrtDecl
+  + '，三棵树表头相加 == 「共 N 点」 ' + stats.mrtHeadSum
   + '，印的点数游戏里配得出来 ' + stats.mrtPts + '（其中打包两条的 '
   + stats.mrtPtsSplit + '）'
   + '，多个小节共用说清楚 ' + stats.mrtMany

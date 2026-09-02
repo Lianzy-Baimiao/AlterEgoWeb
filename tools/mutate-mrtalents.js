@@ -225,9 +225,11 @@ var MUTANTS = [
   // 界面上出现一个游戏里做不到的形状。字节比串的那一版抓不到这个 ——
   // 串是对的，树才是错的。锚点带上前两行：同样的筛子在插件那条路上也有一份。
   textMutant('两条英雄树的节点一起点亮', BIS,
-    '（实测）。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
+    // 锚点跟着代码走：heroIds 那段第 20 轮挪到了「共 N 点」那句之前（那句要拿它
+    // 算「三棵树里画了多少点」），所以前面那行注释不再紧挨着它了。
+    '算「三棵树里画了多少点」。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
       + '      var n = TR.nodes[id];\n      return n && (!sub || n[6] === sub);',
-    '（实测）。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
+    '算「三棵树里画了多少点」。\n    var heroIds = (sp.heroNodes || []).filter(function (id) {\n'
       + '      var n = TR.nodes[id];\n      return n && (!sub || !!n[6]);',
     '和这一套的任一条子树都不吻合'),
 

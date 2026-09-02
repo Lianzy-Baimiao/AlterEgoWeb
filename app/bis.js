@@ -2467,6 +2467,14 @@
     var si = (state.mrSub >= 0 && state.mrSub < subs.length) ? state.mrSub : 0;
     var sub = subs[si] || 0;
 
+    // 只画选中那条英雄树的节点。不筛的话两条树的节点会摆在同一张网格上，
+    // 坐标是各自树内的 5×5，直接叠成一团（实测）。
+    // **算在这里**：下面那句「共 N 点」要拿它算「三棵树里画了多少点」。
+    var heroIds = (sp.heroNodes || []).filter(function (id) {
+      var n = TR.nodes[id];
+      return n && (!sub || n[6] === sub);
+    });
+
     if (subs.length > 1) {
       var sbar = el('div', 'tree-pick');
       sbar.appendChild(el('span', 'lb', '英雄天赋'));
@@ -2490,17 +2498,29 @@
         + (mine ? '：现在这条是 ' + mine + ' 点' : '')
         + '；职业树和专精树两条共用。'));
     } else {
+      /*
+       * **「共 N 点」和下面三棵树的表头得能对上账。**
+       *
+       * 实测差 1 点，而且不是算错：选「哪一条英雄天赋」那一下本身也花 1 点，
+       * 而那个节点不在 classNodes / specNodes / heroNodes 任何一份里，
+       * 所以哪棵树都不画它（109 个样本里 105 个是这样，另 4 个是 0）。
+       * 两个数上下相邻，不说清就是「加一下对不上」。
+       */
+      var drawn = 0;
+      [].concat(sp.classNodes || [], sp.specNodes || [], heroIds).forEach(function (id) {
+        if (out.nr[id] && !out.granted[id]) drawn += out.nr[id].rank;
+      });
+      var off = out.pts - drawn;
       box.appendChild(el('p', 'note',
         '共 ' + out.pts + ' 点，英雄天赋：' + (sub ? subTreeName(sub) : '这套没点')
-        + '。高亮的是点了的节点，鼠标放上去看详情。'));
+        + '。高亮的是点了的节点，鼠标放上去看详情。'
+        + (off > 0
+          ? '（下面三棵树里 ' + drawn + ' 点，另 ' + off
+            + ' 点是「选哪条英雄天赋」那一下 —— 它不画在任何一棵树里。）'
+          : '')));
     }
 
-    // 只画选中那条英雄树的节点。不筛的话两条树的节点会摆在同一张网格上，
-    // 坐标是各自树内的 5×5，直接叠成一团（实测）。
-    var heroIds = (sp.heroNodes || []).filter(function (id) {
-      var n = TR.nodes[id];
-      return n && (!sub || n[6] === sub);
-    });
+
     // **英雄天赋排在最前面**（用户第 18 轮定的）。游戏里三棵树是职业 → 专精 →
     // 英雄，但这个面板不是拿来照着点的：英雄天赋是「这套方案是哪一套」的标识
     // （方案列表上的徽章、上面那个选择条、名字里的区分后缀都是它），
@@ -2523,7 +2543,7 @@
      [mainRow, sp.classNodes, '职业天赋'],
      [mainRow, sp.specNodes, '专精天赋']
     ].forEach(function (g) {
-      var grid = renderTreeGrid(sp, g[1] || [], out.nr, g[2]);
+      var grid = renderTreeGrid(sp, g[1] || [], out.nr, g[2], out.granted);
       if (grid) g[0].appendChild(grid);
     });
     if (heroRow.children.length) box.appendChild(heroRow);
@@ -3029,7 +3049,7 @@
    * 画一棵（职业 / 专精 / 英雄）。
    * ids 里不在本次要画的节点已经筛掉了，连线只在本棵内部画。
    */
-  function renderTreeGrid(sp, ids, nr, title) {
+  function renderTreeGrid(sp, ids, nr, title, granted) {
     var TR = tree();
     var list = ids.filter(function (id) { return TR.nodes[id]; });
     if (!list.length) return null;
@@ -3037,8 +3057,17 @@
     var cx = clusterIndex(list.map(function (id) { return TR.nodes[id][0]; }));
     var cy = clusterIndex(list.map(function (id) { return TR.nodes[id][1]; }));
 
+    /*
+     * 表头这个点数**只算花点买的**，白给的节点（granted）不算 —— 和上面
+     * 「共 N 点」用的是同一个口径（app/talent-decode.js 里 out.pts 只在
+     * purchased 时累加，那条是拿 raider.io 的 grantedNode 真值比过 32 份角色的）。
+     * 原来这里把 nr 里所有 rank 都加了，于是三棵树的表头相加比「共 N 点」多 1~3 点，
+     * 而那两个数上下相邻，加一下就对不上（实测 167 套 maxroll 方案 167 套都不等）。
+     */
     var pts = 0;
-    list.forEach(function (id) { if (nr[id]) pts += nr[id].rank; });
+    list.forEach(function (id) {
+      if (nr[id] && !(granted && granted[id])) pts += nr[id].rank;
+    });
 
     var wrap = el('div', 'tree-grid');
     var head = el('div', 'tree-grid-head');
