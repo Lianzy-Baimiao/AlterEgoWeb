@@ -1074,10 +1074,29 @@
     if (ch) {
       var sum = el('p', 'bis-sum');
       sum.appendChild(el('b', null, ch.name));
-      sum.appendChild(doc.createTextNode('　对上 ' + matched + ' 件，差 ' + missing + ' 件'
-        + (unknown ? '，' + unknown + ' 个部位存档里没记录' : '') + '。'));
-      sum.appendChild(el('span', 'note',
-        '　「对上」= 身上这件正好在该部位的推荐列表里。装等更高的同名替代品不算。'));
+      /*
+       * **两个视角这句话说的不是同一件事，所以用词也不一样。**
+       *   · 最佳推荐（maxroll）：列表是编辑挑的几件，「对上」= 你穿的正是推荐件。
+       *   · 实战分布（rio）：列表是 100 个采样玩家穿过的**一切**，不截断 ——
+       *     全库 7249 行里 2273 行（31.4%）是「恰好 1 个人穿」。在这里说「对上」
+       *     会让「和 1/100 的人一样」看起来跟「和 88/100 的人一样」一个分量。
+       * 原来两个视角共用同一句解释（「「对上」= 身上这件正好在该部位的推荐列表里」），
+       * 于是同一个角色同一套装备，切个视角这个数从 12 变成 7，含义也换了，
+       * 而屏幕上没有任何东西提示这件事。
+       */
+      if (rs) {
+        sum.appendChild(doc.createTextNode('　榜上见过 ' + matched + ' 件，没见过 '
+          + missing + ' 件' + (unknown ? '，' + unknown + ' 个部位存档里没记录' : '') + '。'));
+        sum.appendChild(el('span', 'note',
+          '　这个视角不是推荐，是统计：「榜上见过」= 采样里**至少有一个人**穿过它。'
+          + '分布不截断，所以只有 1 个人穿的也算见过 —— 每一行后面的人数才是分量。'));
+      } else {
+        sum.appendChild(doc.createTextNode('　对上 ' + matched + ' 件，差 ' + missing + ' 件'
+          + (unknown ? '，' + unknown + ' 个部位存档里没记录' : '') + '。'));
+        sum.appendChild(el('span', 'note',
+          '　「对上」= 身上这件正好在该部位的推荐列表里。装等更高的同名替代品不算。'
+          + '戒指和饰品按一对算 —— 两个格子在游戏里等价，戴在哪个孔都算对上。'));
+      }
       // ---- 装等差距汇总。「差 13 件」说不出**差多远**，这一行说。
       // 分母写出来：能比的只有 gapN 个部位（存档没记的、推荐件查不到装等的都比不了）。
       if (gapN) {
@@ -1117,8 +1136,15 @@
         stNote.appendChild(doc.createTextNode(
           '　推荐件的属性印在下面每一行上（暴击 / 急速 / 精通 / 全能），'
           + '你身上那件的属性存档里没有，所以这一栏只有一边。'));
-        stNote.appendChild(el('span', 'note',
-          '　想看这个专精该堆什么，展开上面的「属性目标」。'));
+        // 「展开上面的『属性目标』」**只在那一块真的画出来时才说**。
+        // 上面 renderStatTargets 是 `if (!rs)` 才画的（实战分布视角不画它），
+        // 而这句话原来无条件画，于是在那个视角里指向一个屏幕上不存在的折叠块 ——
+        // 和第 19 轮「和下面 maxroll 的方案不是同一套」指向空白是同一类错：
+        // **方位词和它指的那个东西必须一起判断。**
+        if (!rs) {
+          stNote.appendChild(el('span', 'note',
+            '　想看这个专精该堆什么，展开上面的「属性目标」。'));
+        }
         stNote.setAttribute('data-tip',
           'AlterEgo 存的装备只有名字 / 装等 / 品质 / 物品链接，没有属性字段。\n'
           + '链接里的 bonusID 能推出属性，但要一张 bonusID→属性的对照表，本机没有。\n'
@@ -1343,6 +1369,22 @@
       }
       m.appendChild(nm);
       if (mine.itemLevel) m.appendChild(el('span', 'sub', ' ' + mine.itemLevel));
+      /*
+       * 实战分布视角里，「命中」得**带上人数**才有意义：分布不截断，
+       * 全库 31.4% 的行只有 1 个人穿。命中一件 1/100 的东西和命中 88/100 的头盔
+       * 原来在界面上长得一模一样，提示里也不说人数。
+       */
+      var mineRow = null;
+      if (hit && hitVia === 'self' && rows.length && rows[0][3] === -1) {
+        for (var mi = 0; mi < rows.length; mi++) {
+          if (rows[mi][0] === mine.itemId) { mineRow = rows[mi]; break; }
+        }
+      }
+      if (mineRow && sampleN) {
+        m.setAttribute('data-tip', '榜上 ' + (mineRow[6] || 0) + '/' + sampleN
+          + ' 个人穿这件（' + pct((mineRow[6] || 0) * 100 / sampleN) + '）。\n'
+          + '这个视角是统计不是推荐 —— 分布不截断，所以「见过」不等于「多数人这么穿」。');
+      } else {
       m.setAttribute('data-tip', hit
         ? (hitVia === 'twin'
           ? '你身上这件在' + (B.slotNames[twinId] || ('部位 ' + twinId))
@@ -1351,6 +1393,7 @@
           : '你身上这件就在推荐列表里')
         : '你身上这件不在推荐列表里'
           + (twinId ? '（另一个' + (twinId >= 13 ? '饰品' : '戒指') + '格的列表也查过了）' : ''));
+      }
       head.appendChild(m);
 
       // ---- 装等差距。「对上 / 没对上」只说了款式，说不了**差多远** ——
@@ -1372,11 +1415,22 @@
         head.appendChild(gb);
       }
     } else if (currentChar()) {
-      // 不能写「空着」——AlterEgo 的 equipment 是稀疏的，这里分不出
-      // 「真没穿」和「插件没记这个部位」。本机实测有角色只存了 7 个部位。
-      var e = el('span', 'mine empty', '· 存档里没这个部位');
+      /*
+       * 这一格**照样画**（用户定的：那是游戏的装备格子，为空也是格子），
+       * 但不能再写「登录一次那个角色就会补上」—— 那句话对拿双手武器的人是假的。
+       *
+       * 实测：rio 产物里 636 个部位组只有 7 个样本量 ≤10 人，**全是副手**
+       * （惩戒骑 / 野德 / 踏风僧都是 100 个采样角色里只有 2 个那一格有东西），
+       * 因为这些专精拿双手武器，副手本来就该是空的。他登录一万次也不会有副手。
+       * AlterEgo 的 equipment 又确实是稀疏的（本机有角色只存了 7 个部位），
+       * 所以这两种情况在数据里分不开 —— 那就**两种都说**，不挑一个断言。
+       */
+      var e = el('span', 'mine empty', '· 这一格是空的');
       e.setAttribute('data-tip',
-        'AlterEgo 只记它抓到的部位，缺格子不代表你没穿。登录一次那个角色就会补上');
+        '两种可能，数据里分不开：\n'
+        + '① 这一格本来就该空着 —— 拿双手武器就没有副手（这个专精的采样里，'
+        + '这一格多半也是空的，看部位标题那个 N）；\n'
+        + '② AlterEgo 只记它抓到的部位，这一格可能没扫到 —— 那种情况登录一次那个角色就会补上。');
       head.appendChild(e);
     }
     wrap.appendChild(head);
@@ -2275,7 +2329,7 @@
     var act = el('div', 'lo-act');
     var copy = button('复制', 'primary mr-copy', function () {
       if (AE.copyWithToast) AE.copyWithToast(b.g, '天赋导入串');
-      else if (AE.toast) AE.toast({ title: '请手动选中上面的串按 Ctrl+C', kind: 'warn' });
+      else if (AE.toast) AE.toast({ title: '请手动选中上面的串按 Ctrl+C', kind: 'bad' });
     });
     copy.setAttribute('data-tip',
       '复制后在游戏里打开天赋界面，右下角「导入」粘贴。\n'
@@ -2572,6 +2626,19 @@
     }
     var cur = kinds[ki];
     var lo = cur.lo;
+    /*
+     * **团本那半不画百分比。**
+     *
+     * 两家的计数单位不一样，而分母只有一个 lo.total：
+     *   · 大秘境（rio）：一个角色只采到一条天赋串，所以「用这一套的人数 / 采样人数」
+     *     是真的占比，各套相加 ≤ 100%（实测最紧的专精下界 499/500）。
+     *   · 团本（WCL）：一个角色在不同夜晚换过天赋，会在他用过的**每一套**里各算一次。
+     *     实测 13 个专精的套数比人数还多（鲜血 DK 406 人 / 458 套），8 个专精光前 30 套
+     *     的人数之和就超过采样人数。最刺眼的是生存猎：2 个人 4 套，四个按钮各「1人」，
+     *     原来每个提示都写「占 50%」—— 加起来 200%。
+     * 所以团本那边只说人数，并在提示里讲清「同一个人可能用过多套」。
+     */
+    var showPct = cur.k !== 'raid';
 
     var idx = state.loadout;
     if (!(idx >= 0) || idx >= lo.list.length) idx = 0;
@@ -2630,9 +2697,13 @@
         });
       b.setAttribute('data-tip', kd.k === 'raid'
         ? '团本（史诗难度）首领榜上玩家的天赋，来自 Warcraft Logs。\n'
-          + '样本按专精差别很大：一队 20 人只有 2~3 个坦克 / 治疗。'
+          + '样本按专精差别很大：一队 20 人只有 2~3 个坦克 / 治疗。\n'
+          + '这里的人数是「多少个不同的角色」；同一个人在不同夜晚换过天赋的话，'
+          + '他在用过的每一套里各算一次，所以各套人数相加可能超过这个数。'
         : '大秘境每专精排行榜上玩家的天赋，来自 raider.io。\n'
-          + '每个专精的样本量比较均匀。');
+          + '**这 ' + kd.lo.total + ' 人是抓取上限**（每个专精都只取榜前 '
+          + kd.lo.total + ' 名），不是榜上一共这么多人 —— '
+          + '所以别拿它和团本那个数比热度。\n一个角色只采一条天赋，所以百分比是真的占比。');
       kbar.appendChild(b);
     });
     box.appendChild(kbar);
@@ -2645,8 +2716,11 @@
           state.loadout = i;
           render();
         });
-      b.setAttribute('data-tip', lo.count[t] + ' 名玩家用这一串，占 '
-        + pct(lo.count[t] * 100 / lo.total));
+      b.setAttribute('data-tip', showPct
+        ? lo.count[t] + ' 名玩家用这一串，占 ' + pct(lo.count[t] * 100 / lo.total)
+        : lo.count[t] + ' 个角色用过这一串。**这一类不给百分比** —— '
+          + '同一个人换过天赋会在多套里各算一次，各套人数相加可能超过采样人数'
+          + '（' + lo.total + ' 人），除出来的比例加起来会超过 100%');
       bar.appendChild(b);
     });
     box.appendChild(bar);
@@ -2663,11 +2737,12 @@
     var act = el('div', 'lo-act');
     var copy = button('复制', 'primary lo-copy', function () {
       if (AE.copyWithToast) AE.copyWithToast(str, '天赋导入串');
-      else if (AE.toast) AE.toast({ title: '请手动选中下面的串按 Ctrl+C', kind: 'warn' });
+      else if (AE.toast) AE.toast({ title: '请手动选中下面的串按 Ctrl+C', kind: 'bad' });
     });
     copy.setAttribute('data-tip', '复制后在游戏里打开天赋界面，右下角「导入」粘贴');
     act.appendChild(copy);
-    act.appendChild(el('span', 'n', lo.count[str] + ' 人用这一串　'
+    act.appendChild(el('span', 'n',
+      lo.count[str] + (showPct ? ' 人用这一串　' : ' 个角色用过这一串　')
       + str.length + ' 个字符'));
     box.appendChild(act);
 

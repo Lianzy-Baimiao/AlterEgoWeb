@@ -819,7 +819,9 @@ function checkPairedSlots(label) {
     var out = null;
     walk(body, function (n) {
       if (out || !n.classList || !n.classList.contains('bis-sum')) return;
-      var m = /对上 (\d+) 件，差 (\d+) 件/.exec(String(n.textContent || ''));
+      // 两个视角用词不同（实战分布说「榜上见过 / 没见过」，最佳推荐说「对上 / 差」）——
+      // 两种都要认，不然 rio 那一半抓不到这一行，断言会静默变成「没数据」。
+      var m = /(?:对上|榜上见过) (\d+) 件，(?:差|没见过) (\d+) 件/.exec(String(n.textContent || ''));
       if (m) out = m[1] + '/' + m[2];
     });
     return out;
