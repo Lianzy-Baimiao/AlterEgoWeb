@@ -36,6 +36,28 @@
   // 部位显示顺序。slotId 来自 GearInsight 的 GearReader.lua（4 = 衬衣，数据里没有）。
   var SLOT_ORDER = [1, 2, 3, 15, 5, 9, 10, 6, 7, 8, 11, 12, 13, 14, 16, 17];
 
+  /**
+   * 可互换的成对槽位：戒指 11/12、饰品 13/14。
+   *
+   * **为什么必须成对判断**：游戏里两个戒指格、两个饰品格是等价的，一件戒指戴在
+   * 哪个孔完全是玩家插进去的顺序。而推荐数据是按孔位存的（maxroll 的
+   * 「戒指1 / 戒指2」、rio 榜上采到的 finger1 / finger2），于是按孔位逐格比会
+   * 得出自相矛盾的结论：第 20 轮实测，一件阿曼尼督军的指环在同一屏上既出现在
+   * 「戒指1」的替代表里（没有已拥有底色，看着像你没这件），又在「戒指2」头上被
+   * 写成「你身上这件不在推荐列表里」。maxroll 的 80 个视角里 78 个两个戒指的列表
+   * 不同、80 个两个饰品的列表不同，160 组配对槽位里 **156 组**在两件调换后就断掉。
+   *
+   * 主副手（16/17）**故意不配对** —— 那两个格子在游戏里不等价，武器不能互换着戴。
+   */
+  var PAIRED = { 11: 12, 12: 11, 13: 14, 14: 13 };
+
+  function inRows(rows, itemId) {
+    for (var i = 0; rows && i < rows.length; i++) {
+      if (rows[i][0] === itemId) return true;
+    }
+    return false;
+  }
+
   // 职业 -> 该职业的专精 key 列表，第一次渲染时从数据里建。
   var byClass = null;
 
@@ -995,12 +1017,23 @@
       var rows = slots[slotId];
       if (!rows || !rows.length) return;
       var mine = equippedAt(ch, slotId);
-      var hit = false;
+      /*
+       * 命中判定**按一对算**（戒指 11/12、饰品 13/14，见 PAIRED 那段）。
+       * `hitVia` 记的是「在这个孔的列表里命中」还是「在另一个孔的列表里命中」——
+       * 后者要在提示里说清楚，否则用户会以为面板把孔位搞反了。
+       */
+      var twinId = PAIRED[slotId] || 0;
+      var twinRows = twinId ? slots[twinId] : null;
+      var twin = twinId ? equippedAt(ch, twinId) : null;
+      var hit = false, hitVia = '';
       if (mine && mine.itemId) {
-        for (var i = 0; i < rows.length; i++) {
-          if (rows[i][0] === mine.itemId) { hit = true; break; }
-        }
+        if (inRows(rows, mine.itemId)) { hit = true; hitVia = 'self'; }
+        else if (inRows(twinRows, mine.itemId)) { hit = true; hitVia = 'twin'; }
       }
+      // 「你已经有这件了」的底色也按一对算：戴在另一个孔里同样是有。
+      var worn = [];
+      if (mine && mine.itemId) worn.push(mine.itemId);
+      if (twin && twin.itemId) worn.push(twin.itemId);
       // 「没有记录」和「不匹配」得分开算。AlterEgo 存的 equipment 是稀疏的
       // （本机实测：一个角色 16 个部位齐全，另一个只有 7 个），把没记录的
       // 算成「差一件」会凭空多出十几件根本没查过的装备。
@@ -1019,7 +1052,7 @@
       }
       // conv.n 可能整个不存在（maxroll 那份没有样本量），所以这里不假设它在。
       list.appendChild(renderSlot(slotId, rows, mine, hit,
-        conv && conv.n ? conv.n[slotId] : null));
+        conv && conv.n ? conv.n[slotId] : null, hitVia, worn, twinId));
     });
     host.appendChild(list);
 
@@ -1247,7 +1280,7 @@
    *   · BisData：只能显示覆盖率（列出来那几件的使用率之和），并说明列表被截断了。
    *     本机实测 1264 个部位组里，覆盖率中位数只有 72.9%，206 组不到 50%。
    */
-  function renderSlot(slotId, rows, mine, hit, sampleN) {
+  function renderSlot(slotId, rows, mine, hit, sampleN, hitVia, worn, twinId) {
     var B = bis();
     var wrap = el('div', 'slot');
 
@@ -1311,8 +1344,13 @@
       m.appendChild(nm);
       if (mine.itemLevel) m.appendChild(el('span', 'sub', ' ' + mine.itemLevel));
       m.setAttribute('data-tip', hit
-        ? '你身上这件就在推荐列表里'
-        : '你身上这件不在推荐列表里');
+        ? (hitVia === 'twin'
+          ? '你身上这件在' + (B.slotNames[twinId] || ('部位 ' + twinId))
+            + '的推荐列表里 —— 两个' + (twinId >= 13 ? '饰品' : '戒指')
+            + '格在游戏里是等价的，戴在哪个孔不影响强度，所以算对上了'
+          : '你身上这件就在推荐列表里')
+        : '你身上这件不在推荐列表里'
+          + (twinId ? '（另一个' + (twinId >= 13 ? '饰品' : '戒指') + '格的列表也查过了）' : ''));
       head.appendChild(m);
 
       // ---- 装等差距。「对上 / 没对上」只说了款式，说不了**差多远** ——
@@ -1344,7 +1382,7 @@
     wrap.appendChild(head);
 
     rows.forEach(function (r, i) {
-      wrap.appendChild(renderItem(r, i === 0, mine));
+      wrap.appendChild(renderItem(r, i === 0, mine, worn));
     });
     return wrap;
   }
@@ -1355,7 +1393,7 @@
   // **rio 视角多一位**：`[…, 轨道码, 人数]`，而且来源下标固定是 **-1**。
   // 用 -1 当标记而不是 undefined，是为了让「rio 的行」和「BisData 里来源下标为 0
   // 的行」区分得开 —— 0 是一个合法下标（srcs[0] 是真的来源），拿假值判断会把它吞掉。
-  function renderItem(r, isTop, mine) {
+  function renderItem(r, isTop, mine, worn) {
     var B = bis();
     var itemId = r[0], ilvl = r[1], usage = r[2], srcIdx = r[3], mx = r[4], trk = r[5];
     var isRio = srcIdx === -1, people = r[6];
@@ -1376,7 +1414,13 @@
     var srcText = src[0] || '', cat = src[1] || '', boss = src[2] || '';
 
     var row = el('div', 'item' + (isTop ? ' top' : ''));
-    if (mine && mine.itemId === itemId) row.classList.add('have');
+    // 「你已经有这件了」的底色。**worn 是这个孔和它成对的那个孔一起看**
+    // （戒指 11/12、饰品 13/14）：同一枚戒指戴在哪个孔都是有，按孔位判会让
+    // 「戒指1」的列表里那件明明戴着却不上色（第 20 轮实测过这个自相矛盾的界面）。
+    var wornHere = worn && worn.length
+      ? worn.indexOf(itemId) >= 0
+      : !!(mine && mine.itemId === itemId);
+    if (wornHere) row.classList.add('have');
 
     // 图标：包里有图就出图，没有就出一个占位块。
     // rio 的物品自带图标名，所以这里把它当 fallback 传进去 —— app/item-icons.js
@@ -1407,13 +1451,18 @@
     if (q != null && L.qualityColors[q]) name.style.color = L.qualityColors[q];
     main.appendChild(name);
 
-    // 插槽标记。这是 B6 卡了很久的东西：BisData 只存 bonusIDs，要判断「这件有没有
-    // 插槽」得拿 raidbots 的 116 个插槽 bonusID 清单去比。rio 的 profile 直接给
-    // bonuses，生成器已经解成 sock（实测 494 件带插槽），所以这里白拿。
-    if (ri && ri.sock) {
-      var sk = el('span', 'tag sock', ri.sock > 1 ? '插槽 ×' + ri.sock : '插槽');
-      sk.setAttribute('data-tip', '这件装备带 ' + ri.sock + ' 个插槽'
-        + '（从 raider.io 给的 bonusID 解出来的）');
+    // 插槽标记。**用 gmax，不是 sock**（第 20 轮的事故）：
+    //   · sock = 有多少个采样角色在这件上镶了宝石 —— 是热门度，能上千；
+    //   · gmax = 单件上见过最多几颗宝石 = **这件至少有几个插槽**（游戏上限 3）。
+    // 原来这里印的是 sock，于是出现「插槽 ×1349」（阿曼尼督军的指环，1349 个
+    // 角色镶过），275 件里 159 件的数超过 3 —— 那不可能是插槽数。
+    // 宝石只能镶在插槽里，所以「见过 N 颗」是「至少 N 个插槽」的硬证据。
+    if (ri && ri.gmax) {
+      var sk = el('span', 'tag sock', ri.gmax > 1 ? '插槽 ×' + ri.gmax : '插槽');
+      sk.setAttribute('data-tip', '这件至少有 ' + ri.gmax + ' 个插槽'
+        + '（榜上见过有人在它上面镶了 ' + ri.gmax + ' 颗宝石）。\n'
+        + '榜上一共 ' + ri.sock + ' 个角色给这件镶过宝石。\n'
+        + '插槽可能更多 —— 采样里没人镶满的话这里就看不出来。');
       main.appendChild(sk);
     }
 

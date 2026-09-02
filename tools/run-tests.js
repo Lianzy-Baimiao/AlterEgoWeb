@@ -160,6 +160,8 @@ var SRC_LEAK = /GearInsight|插件(自带|那份|那条|参照表)|来自插件|
 
 var stats = { renders: 0, imgs: 0, ph: 0, badSrc: 0, trk: 0, trkBad: 0, cov: 0, covBad: 0, slots: 0,
               sock: 0, sockBad: 0,
+              pairCase: 0, pairBad: 0,
+              swapCases: 0, swapBad: 0,
               // rioRenders 数的是**所有**画过 rio 视角的渲染（专精循环 + 视角迁移
               // + 对照角色那三组都算），mainRio 只数专精循环那一轮。
               // 下面「每个专精各一次」那条断言必须用 mainRio：用总数的话，
@@ -703,10 +705,213 @@ specKeys.forEach(function (key) {
       load('app/bis.js');
       g.AE.openBis();
       checkRender('对照/' + c.name + '/' + view);
+      checkPairedSlots('对照/' + c.name + '/' + view);
       stats.gapSlots++;
     });
     stats.gapChars++;
   });
+})();
+
+/**
+ * **戒指 / 饰品按一对判**（第 20 轮用户定的）。
+ *
+ * 游戏里两个戒指格、两个饰品格是等价的，一件戒指戴在哪个孔是玩家插进去的顺序；
+ * 而推荐数据是按孔位存的。按孔位逐格比会画出自相矛盾的界面：同一枚戒指在
+ * 「戒指1」的替代表里没有已拥有底色（像你没这件），同时在「戒指2」头上被写成
+ * 「你身上这件不在推荐列表里」。实测 160 组配对槽位里 156 组在两件调换后就断掉。
+ *
+ * 这条断言**只看画出来的东西**，不重算推荐列表（重算等于把面板的逻辑抄一遍，
+ * 那是恒等式）。不变量是：
+ *   如果「戒指1」戴的那件出现在「戒指2」列出来的行里，那么
+ *     ① 「戒指1」头上必须是 ✓（对上），
+ *     ② 「戒指2」里那一行必须有已拥有底色（have）。
+ * 反过来同理。饰品 13/14 一样。
+ */
+function checkPairedSlots(label) {
+  var blocks = {};
+  walk(body, function (n) {
+    if (!n.classList || !n.classList.contains('slot')) return;
+    var name = '', mineName = '', ok = false, rows = [], have = {};
+    walk(n, function (m) {
+      if (!m.classList) return;
+      if (m.classList.contains('slot-head')) {
+        (m.children || []).forEach(function (c2) {
+          if (c2.tagName === 'B' && !name) name = String(c2.textContent || '');
+          if (c2.classList && c2.classList.contains('mine')) {
+            ok = c2.classList.contains('ok');
+            // **名字要从那个没有 class 的 span 里取**，不是整块的 textContent：
+            // 那一块是「✓ 」+ 名字 + 装等（`.sub`），拿整块文字会带上装等，
+            // 和下面行里的名字永远配不上 —— 第一版就是这样让 pairCase 恒为 0 的。
+            (c2.children || []).forEach(function (c3) {
+              if (!mineName && c3.tagName === 'SPAN' && !c3.className) {
+                mineName = String(c3.textContent || '');
+              }
+            });
+          }
+        });
+      }
+      if (m.classList.contains('item')) {
+        var t = '';
+        walk(m, function (x) {
+          if (!t && x.tagName === 'B' && x.textContent) t = String(x.textContent);
+        });
+        if (t) { rows.push(t); if (m.classList.contains('have')) have[t] = 1; }
+      }
+    });
+    if (name) blocks[name] = { mine: mineName, ok: ok, rows: rows, have: have };
+  });
+
+  [['戒指1', '戒指2'], ['饰品1', '饰品2']].forEach(function (pr) {
+    [[pr[0], pr[1]], [pr[1], pr[0]]].forEach(function (ab) {
+      var A = blocks[ab[0]], Bk = blocks[ab[1]];
+      if (!A || !Bk || !A.mine) return;
+      // 「装等更高的同名替代品」在两边的行名相同，所以按名字比就够了。
+      if (Bk.rows.indexOf(A.mine) < 0) return;
+      stats.pairCase++;
+      if (!A.ok) {
+        stats.pairBad++;
+        if (stats.pairBad < 4) {
+          problems.push(label + ' ' + ab[0] + '「' + A.mine + '」在' + ab[1]
+            + '的推荐列表里，头上却是「·」—— 戒指/饰品两个格子在游戏里等价，'
+            + '按孔位逐格比会把同一件既算成「没有」又算成「不推荐」');
+        }
+      }
+      if (!Bk.have[A.mine]) {
+        stats.pairBad++;
+        if (stats.pairBad < 4) {
+          problems.push(label + ' ' + ab[1] + '里那行「' + A.mine
+            + '」没有已拥有底色，而这件正戴在' + ab[0]);
+        }
+      }
+    });
+  });
+}
+
+/**
+ * **两只戒指调个位置，「对上 N 件」不许变。**
+ *
+ * 这是「戒指/饰品按一对判」最硬的判据，而且**不用重算推荐列表**：游戏里两个戒指格
+ * 等价，所以把 A、B 两枚戒指换个孔戴，结论必须完全一样。按孔位逐格比的话这个数会跳
+ * （实测 maxroll 的 160 组配对槽位里 156 组两边列表不同），所以这条断言正对着那个 bug。
+ *
+ * 造样本的办法是**克隆一个真角色再把两只戒指的物品链接对调**，不是凭空编一个角色 ——
+ * 编的角色装备形状容易和真数据不一样，测出来的东西就不算数。
+ */
+(function checkRingSwap() {
+  var SW = [['FINGER0SLOT', 'FINGER1SLOT'], ['TRINKET0SLOT', 'TRINKET1SLOT']];
+  function idOf(it) {
+    var m = it && it.link ? /item:(\d+)/.exec(it.link) : null;
+    return m ? m[1] : '';
+  }
+  var cands = (model.characters || []).filter(function (c) {
+    if (!c.equipment) return false;
+    return SW.some(function (p) {
+      var a = c.equipment[p[0]], b = c.equipment[p[1]];
+      return a && b && idOf(a) && idOf(b) && idOf(a) !== idOf(b);
+    });
+  });
+  if (!cands.length) {
+    problems.push('戒指调位：本机找不到一个「两只戒指/饰品不同」的角色 —— 这一条在验空气');
+    return;
+  }
+
+  function matchedOf() {
+    var out = null;
+    walk(body, function (n) {
+      if (out || !n.classList || !n.classList.contains('bis-sum')) return;
+      var m = /对上 (\d+) 件，差 (\d+) 件/.exec(String(n.textContent || ''));
+      if (m) out = m[1] + '/' + m[2];
+    });
+    return out;
+  }
+
+  cands.slice(0, 3).forEach(function (c) {
+    var key = null;
+    for (var i = 0; i < specKeys.length; i++) {
+      if (specKeys[i].split('/')[0] === c.classFile) { key = specKeys[i]; break; }
+    }
+    if (!key) return;
+    // 克隆 + 对调。克隆体挂在 model.characters 上，用一个不会撞的 key。
+    var twin = JSON.parse(JSON.stringify(c));
+    twin.key = c.key + '#swap';
+    twin.name = c.name + '（对调）';
+    SW.forEach(function (p) {
+      var a = twin.equipment[p[0]], b = twin.equipment[p[1]];
+      if (a && b) { twin.equipment[p[0]] = b; twin.equipment[p[1]] = a; }
+    });
+    model.characters.push(twin);
+
+    /*
+     * 再造一个**「戒指戴反了」**的样本：从这个专精 rio 榜单里挑一件
+     * **只在戒指2 出现、戒指1 没有**的戒指，塞进克隆体的戒指1 孔。
+     *
+     * 为什么要专门造：本机真实装备里一组都没有这种局面（pairCase 一直是 0），
+     * 而它正是这次要修的那个 bug 的形状 —— 不造出来，上面那条 DOM 不变量就是空转。
+     */
+    var planted = null;
+    var sid = (B.specs[key] || {}).specId;
+    var RS = g.AE_RIO && g.AE_RIO.specs && g.AE_RIO.specs[String(sid)];
+    if (RS && RS.slots && RS.slots['11'] && RS.slots['12']) {
+      var in11 = {};
+      RS.slots['11'].d.forEach(function (r) { in11[r[0]] = 1; });
+      for (var j = 0; j < RS.slots['12'].d.length; j++) {
+        var id12 = RS.slots['12'].d[j][0];
+        if (in11[id12]) continue;
+        var meta = g.AE_RIO.items[String(id12)];
+        var slotIt = twin.equipment.FINGER0SLOT;
+        if (!meta || !meta.n || !slotIt || !slotIt.link) break;
+        planted = JSON.parse(JSON.stringify(twin));
+        planted.key = c.key + '#planted';
+        planted.name = c.name + '（戴反）';
+        planted.equipment.FINGER0SLOT = {
+          link: slotIt.link.replace(/item:\d+/, 'item:' + id12),
+          name: meta.n, itemLevel: slotIt.itemLevel, quality: meta.q
+        };
+        model.characters.push(planted);
+        break;
+      }
+    }
+
+    ['maxroll', 'rio'].forEach(function (view) {
+      function renderFor(charKey) {
+        settings.bisTab = 'gear';
+        settings.bisSpec = key;
+        settings.bisView = view;
+        settings.bisChar = charKey;
+        body.children.length = 0;
+        load('app/bis.js');
+        g.AE.openBis();
+        // 顺手让上面那条 DOM 不变量也跑在**对调后**的样本上 —— 原始装备里
+        // 「戴在另一个孔的推荐件」本机一组都没有（pairCase=0），而对调过的样本
+        // 天然会造出这种局面，断言这才不是空转的。
+        checkPairedSlots('戒指调位/' + charKey + '/' + view);
+        return matchedOf();
+      }
+      var before2 = renderFor(c.key);
+      var after = renderFor(twin.key);
+      // 「戴反了」那个样本只在 rio 视角有意义（挑件是从 rio 榜单里挑的）。
+      if (planted && view === 'rio') renderFor(planted.key);
+      stats.swapCases++;
+      if (before2 == null || after == null) {
+        problems.push('戒指调位：' + c.name + '/' + view + ' 没抓到「对上 N 件」那一行');
+        return;
+      }
+      if (before2 !== after) {
+        stats.swapBad++;
+        problems.push('戒指调位：' + c.name + '/' + view + ' 把两只戒指/饰品换个孔之后，'
+          + '「对上/差」从 ' + before2 + ' 变成了 ' + after
+          + ' —— 两个戒指格在游戏里等价，换个孔不该改变结论（说明还在按孔位逐格比）');
+      }
+    });
+    // 用完就摘掉，别让克隆体污染后面的断言。
+    [twin, planted].forEach(function (x) {
+      var ix = x ? model.characters.indexOf(x) : -1;
+      if (ix >= 0) model.characters.splice(ix, 1);
+    });
+  });
+  if (stats.swapCases < 2) {
+    problems.push('戒指调位：只跑了 ' + stats.swapCases + ' 组，这一条没跑起来');
+  }
 })();
 
 /**
@@ -2543,14 +2748,23 @@ console.log(pad('渲染检查') + (problems.length ? problems.length + ' 个问�
   + '，图标全部懒加载 ' + stats.imgLazy + '）');
 // 这一行必须打印：装等和差距是第 16 轮加的，而「加了计数器、写了断言、
 // 既不打印也没下界」在本仓库出过一次 —— 那次整块功能没被画过，套件照样全绿。
-console.log(pad('装等 / 差距') + '通过（视角按钮 2 个，旧视角 '
+// **判词自己算，不许写死「通过」。** 下面那条「跨职业对照」的注释早就写了这句，
+// 而它上面这一行一直是硬写的 '通过' —— 第 20 轮验戒指配对的变异体时当场看到：
+// 判错 30 个、swap 变了 1 组，这一行照样印「通过」，问题只出现在下面的清单里。
+// 一行印着通过、一行印着问题，是最容易让人只看前一行的形状。
+var gapPass = !stats.gapBad && !stats.gapTopBad && !stats.pairBad && !stats.swapBad
+  && stats.gapMath === stats.gapBadge && stats.gapSum === stats.gapSlots;
+console.log(pad('装等 / 差距') + (gapPass ? '通过' : '有问题') + '（视角按钮 2 个，旧视角 '
   + stats.vmMigrated + ' 个存档值迁到「最佳推荐」；装等来源 GearInsight '
   + stats.ivGi + ' 行、raider.io ' + stats.ivRio + ' 行、查不到 ' + stats.ivNone
   + ' 行、印成 0 的 ' + stats.ivZero + ' 行；对照 ' + stats.gapChars
   + ' 个角色 × 2 个视角，差距徽章 ' + stats.gapBadge + ' 个（文字与颜色不符 '
   + stats.gapBad + '，差值拿提示里的两个数独立复核 ' + stats.gapMath
   + '，比的是首选那一件 ' + stats.gapTop + '（不符 ' + stats.gapTopBad
-  + '）），汇总行 ' + stats.gapSum + '）');
+  + '）），汇总行 ' + stats.gapSum
+  + '，戒指/饰品按一对判：' + stats.pairCase + ' 组「戴在另一个孔」的命中'
+  + '（判错 ' + stats.pairBad + '），两只调个位置结论不变 ' + stats.swapCases + ' 组'
+  + '（变了 ' + stats.swapBad + '））');
 // 判词必须**自己算**，不能写死「通过」：变异测试里这一行在 0/8 的情况下
 // 照样印了「通过」，问题只出现在下面的问题清单里。一行印着通过、
 // 一行印着问题，是最容易让人只看前一行的形状。
