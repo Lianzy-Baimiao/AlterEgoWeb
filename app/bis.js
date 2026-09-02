@@ -109,7 +109,10 @@
     //     存下来只会让用户下次打开看到一套他没选过的天赋，而界面上完全看不出来。
     mrKind: '',
     mrBuild: 0,
-    mrSub: 0
+    mrSub: 0,
+    // 下面那三棵树画哪一套：'mr' = maxroll 方案（默认），'lo' = 上面榜上选中那一条。
+    // **持久化**（和 mrKind 同一个道理：它是两个固定的字，不是数组下标）。
+    treeSrc: 'mr'
   };
 
   var gearLoaded = false, gearLoading = false;
@@ -2478,7 +2481,55 @@
     // 或者想看一眼出手顺序，都得先滚过一整棵树。而串和出手顺序是**拿来用的**
     // （复制、照着打），树是**拿来看的**（确认这套点了什么）。
     // 所以改成「先给能用的，再给能看的」。
-    if (out.err) {
+    /*
+     * **树画哪一套：maxroll 的方案，还是上面榜上选中的那一串。**（第 21 轮）
+     *
+     * 用户报的：「人数和天赋树还是不匹配」。原因是版面骗人 —— 页顶那块写着
+     * 「#1·50人」（raider.io / WCL 榜上 50 个真实角色在用这一串），而页底只有一棵树，
+     * 画的是 maxroll 编辑那一套。一页上只有一棵树，谁都会以为它画的是刚选中的那条。
+     * 而且这一页在不同专精上意思还不一样：maxroll 缺方案的那 3 个专精走插件兜底，
+     * 那里的树画的正是「套路 #N·M人」那一套 —— 人数和树本来就是同一套。
+     *
+     * 所以给一个开关，默认仍是 maxroll（那是这一页的主线），切到「榜上」时树就画
+     * 那一串，标题里把人数写出来。两边共用 loSelection()，所以「上面高亮 #3、
+     * 树画 #1」这种自相矛盾不可能出现。
+     */
+    var selT = loSelection(s.specId);
+    var wantLo = state.treeSrc === 'lo' && selT && selT.str;
+    var loOut = null;
+    if (wantLo && AE.TalentDecode) {
+      loOut = AE.TalentDecode.decode(selT.str, tree());
+      if (!loOut || loOut.err) loOut = null;
+    }
+
+    if (selT && selT.str) {
+      var tbar = el('div', 'tree-src');
+      tbar.appendChild(el('span', 'lb', '下面的树画哪一套'));
+      [['mr', 'maxroll 方案'],
+       ['lo', '榜上 #' + (selT.idx + 1) + '·' + selT.count + '人']].forEach(function (k) {
+        var on = (k[0] === 'lo') === !!wantLo;
+        var btn = button(k[1], on ? 'on' : null, function () {
+          state.treeSrc = k[0];
+          state.mrSub = 0;      // 两套的英雄树不一样，下标留着会指错
+          persist({ bisTreeSrc: k[0] });
+          render();
+        });
+        btn.setAttribute('data-tip', k[0] === 'lo'
+          ? '画上面「榜上热门天赋串」里现在选中的那一条（' + selT.cur.label + ' 榜，'
+            + selT.count + ' 个角色在用）。换上面那排 #N 按钮，这棵树跟着换。'
+          : 'maxroll 编辑写的那一套方案（上面方案列表里高亮的那条）。'
+            + '它和榜上那些串不是同一套天赋。');
+        tbar.appendChild(btn);
+      });
+      if (wantLo && !loOut) {
+        tbar.appendChild(el('span', 'note', '　这一条解不开，先画 maxroll 那套'));
+      }
+      host.appendChild(tbar);
+    }
+
+    if (loOut) {
+      host.appendChild(renderLoTree(s, selT, loOut));
+    } else if (out.err) {
       var w = el('div', 'bis-warn');
       w.appendChild(el('b', null, '这套方案的串解不开'));
       w.appendChild(el('p', null, out.err + ' —— 树画不出来。'));
@@ -2486,6 +2537,53 @@
     } else {
       host.appendChild(renderMrTree(s, b, out));
     }
+  }
+
+  /**
+   * 用「榜上热门天赋串」那一条画三棵树。
+   *
+   * 和 renderMrTree 的差别只有标题那一句（这边能说出人数，那边说 maxroll 的点数），
+   * 树本身是同一个 renderTreeGrid —— 两条路画出来的形状必须一样，否则切一下开关
+   * 整页会换个样子。
+   */
+  function renderLoTree(s, sel, out) {
+    var TR = tree();
+    var box = el('div', 'bis-tree');
+    var sp = TR.specs[String(s.specId)];
+    if (!sp) {
+      box.appendChild(el('p', 'note', '天赋树数据里没有 specID ' + s.specId + '。'));
+      return box;
+    }
+    var sub = (out.subs && out.subs.length) ? out.subs[0] : 0;
+    var heroIds = (sp.heroNodes || []).filter(function (id) {
+      var n = TR.nodes[id];
+      return n && (!sub || n[6] === sub);
+    });
+    var drawn = 0;
+    [].concat(sp.classNodes || [], sp.specNodes || [], heroIds).forEach(function (id) {
+      if (out.nr[id] && !out.granted[id]) drawn += out.nr[id].rank;
+    });
+    var off = out.pts - drawn;
+    box.appendChild(el('p', 'note',
+      '画的是榜上 #' + (sel.idx + 1) + '（' + sel.cur.label + '榜，'
+      + sel.count + ' 个角色在用这一串）。'
+      + '共 ' + out.pts + ' 点，英雄天赋：' + (sub ? subTreeName(sub) : '这套没点') + '。'
+      + (off > 0
+        ? '（下面三棵树里 ' + drawn + ' 点，另 ' + off
+          + ' 点是「选哪条英雄天赋」那一下 —— 它不画在任何一棵树里。）'
+        : '')));
+    var heroRow = el('div', 'tree-cols hero-row');
+    var mainRow = el('div', 'tree-cols main-row');
+    [[heroRow, heroIds, '英雄天赋' + (sub ? '：' + subTreeName(sub) : '')],
+     [mainRow, sp.classNodes, '职业天赋'],
+     [mainRow, sp.specNodes, '专精天赋']
+    ].forEach(function (g) {
+      var grid = renderTreeGrid(sp, g[1] || [], out.nr, g[2], out.granted);
+      if (grid) g[0].appendChild(grid);
+    });
+    if (heroRow.children.length) box.appendChild(heroRow);
+    if (mainRow.children.length) box.appendChild(mainRow);
+    return box;
   }
 
   /**
@@ -2848,11 +2946,16 @@
     return out;
   }
 
-  function renderLoadouts(s) {
-    if (!s || !s.specId) return null;
-    var kinds = loKinds(s.specId);
+  /**
+   * 「榜上热门天赋串」现在选的是哪一类、哪一条。
+   *
+   * 抽出来是因为**下面那三棵树也要用它**（第 21 轮：树可以画榜上这一串，而不只是
+   * maxroll 那一套）。两处各写一遍选择逻辑的话，界面上会出现「上面高亮 #3、
+   * 树画的是 #1」这种自相矛盾。
+   */
+  function loSelection(specId) {
+    var kinds = loKinds(specId);
     if (!kinds.length) return null;
-
     // 选中哪一类。**默认取第一个存在的**，而不是写死 mplus —— 有些专精
     // 只有一边有数据（团本 39/40，大秘境 40/40），写死会让那一个专精空着。
     var ki = 0;
@@ -2860,7 +2963,20 @@
       if (kinds[q].k === state.loKind) { ki = q; break; }
     }
     var cur = kinds[ki];
-    var lo = cur.lo;
+    var idx = state.loadout;
+    if (!(idx >= 0) || idx >= cur.lo.list.length) idx = 0;
+    return {
+      kinds: kinds, ki: ki, cur: cur, lo: cur.lo, idx: idx,
+      str: cur.lo.list[idx],
+      count: cur.lo.count[cur.lo.list[idx]] || 0
+    };
+  }
+
+  function renderLoadouts(s) {
+    if (!s || !s.specId) return null;
+    var selL = loSelection(s.specId);
+    if (!selL) return null;
+    var kinds = selL.kinds, ki = selL.ki, cur = selL.cur, lo = selL.lo;
     /*
      * **团本那半不画百分比。**
      *
@@ -2875,9 +2991,7 @@
      */
     var showPct = cur.k !== 'raid';
 
-    var idx = state.loadout;
-    if (!(idx >= 0) || idx >= lo.list.length) idx = 0;
-    var str = lo.list[idx];
+    var idx = selL.idx, str = selL.str;
 
     var box = el('div', 'bis-loadout');
     var head = el('div', 'lo-head');
@@ -2909,7 +3023,11 @@
     // 这和用户第 19 轮报的那个 bug 是同一类（那次是版面调过之后「上面」变成了
     // 「下面」）：**方位词和它指的那个东西必须一起判断，不能各写各的。**
     if (tree() && mrTalentPick(s.specId)) {
-      var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套');
+      // 树跟着这一串画的时候，把这件事说出来 —— 那正是用户报的「人数和树不匹配」
+      // 的反面。**「和下面 maxroll 的方案不是同一套」这半句要留着**：maxroll 方案列表
+      // 仍然在下面、仍然是另一套，而且 run-tests 的「方位词指空」那条断言认这句话。
+      var warn = el('span', 'lo-warn', '和下面 maxroll 的方案不是同一套'
+        + (state.treeSrc === 'lo' ? '（最下面那三棵树现在画的是这一串）' : ''));
       warn.setAttribute('data-tip',
         '这一块是排行榜上真实角色的天赋串，能一键导入。\n'
         + '和下面 maxroll 那些方案不是同一套：拿一个专精逐节点比过，'
@@ -3604,6 +3722,7 @@
     // 团本 / 大秘境：只认那两个字，别的一律当没存过（设置文件是用户能手改的）。
     if (s.bisMrKind === 'raid' || s.bisMrKind === 'mplus') state.mrKind = s.bisMrKind;
     if (s.bisLoKind === 'raid' || s.bisLoKind === 'mplus') state.loKind = s.bisLoKind;
+    if (s.bisTreeSrc === 'lo' || s.bisTreeSrc === 'mr') state.treeSrc = s.bisTreeSrc;
     if (s.bisChar) state.charKey = s.bisChar;
 
     loadDataFile('bis-data.js', 'AE_BIS', function (err) {

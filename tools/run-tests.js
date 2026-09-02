@@ -3512,6 +3512,121 @@ VERIFIERS.forEach(function (v) {
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
 
+// --------------------------------------------------------------------- 树跟着串
+/*
+ * **「下面的树画哪一套」那个开关，以及树和人数必须是同一套**（第 21 轮）。
+ *
+ * 用户报的：「人数和天赋树还是不匹配」。原因是版面骗人 —— 页顶那块写「#1·50人」
+ * （榜上 50 个真实角色在用这一串），页底只有一棵树，画的却是 maxroll 编辑那一套。
+ * 现在给了开关：切到「榜上」时树画那一串，标题里把人数写出来。
+ *
+ * 判据全部独立算：串和人数直接从产物（AE_RIO / AE_WCL）取，点数用
+ * tools/decode-talent-string.js 解一遍 —— 不问面板。
+ */
+(function () {
+  var before = problems.length;
+  var checked = 0, bad = 0;
+  specKeys.forEach(function (key) {
+    if (checked >= 6) return;
+    var sid = (B.specs[key] || {}).specId;
+    var RS = g.AE_RIO && g.AE_RIO.specs ? g.AE_RIO.specs[String(sid)] : null;
+    if (!sid || !RS || !RS.loadouts || !RS.loadouts.length) return;
+    if (!mrTalentTruth(sid)) return;      // 兜底那 3 个专精没有这个开关（树本来就是套路那一套）
+
+    settings.bisTab = 'talents';
+    settings.bisSpec = key;
+    settings.bisLoKind = 'mplus';         // 钉死大秘境那一类，真值就取 AE_RIO
+    settings.bisTreeSrc = 'lo';
+    body.children.length = 0;
+    load('app/bis.js');
+    g.AE.openBis();
+    checked++;
+    var label = key;
+
+    // 开关在不在，且「榜上」那个是高亮的
+    var srcBtns = [];
+    walk(body, function (n) {
+      if (!n.classList || !n.classList.contains('tree-src')) return;
+      (n.children || []).forEach(function (c) {
+        if (c.tagName === 'BUTTON') srcBtns.push(c);
+      });
+    });
+    if (srcBtns.length !== 2) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 「下面的树画哪一套」那排有 '
+        + srcBtns.length + ' 个按钮，该是 2 个');
+      return;
+    }
+    var loBtn = srcBtns[1];
+    if (!loBtn.classList.contains('on')) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 存的是「榜上」，但高亮的不是它');
+    }
+
+    // 真值：产物里第一条串 + 它的人数 + 独立解码出来的点数
+    var row = RS.loadouts[0];
+    var truthCount = row[1];
+    var d2 = null;
+    try { d2 = DEC.decode(row[0], MR_ORDER); } catch (e) { d2 = null; }
+    if (!d2 || d2.err) return;            // 解不开的串面板会退回 maxroll，那是另一条路
+    var truthPts = 0;
+    (d2.nodes || []).forEach(function (n) {
+      if (n.inSpec && n.purchased) truthPts += (typeof n.rank === 'number' ? n.rank : 1);
+    });
+
+    // 按钮上的人数（#1·N人）和树标题里的人数必须都等于真值
+    var btnTxt = String(loBtn.textContent || '');
+    var mb = /#(\d+)·(\d+)人/.exec(btnTxt);
+    if (!mb) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 开关上没写「#N·M人」：' + btnTxt);
+    } else if (Number(mb[2]) !== truthCount) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 开关写 ' + mb[2] + ' 人，产物里第一条是 '
+        + truthCount + ' 人');
+    }
+    var cap = '';
+    walk(body, function (n) {
+      if (cap || !n.classList || !n.classList.contains('bis-tree')) return;
+      (n.children || []).forEach(function (c) {
+        if (!cap && c.tagName === 'P' && /画的是榜上/.test(String(c.textContent || ''))) {
+          cap = String(c.textContent || '');
+        }
+      });
+    });
+    if (!cap) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 树上面没写「画的是榜上 #N」——'
+        + ' 用户没法知道这棵树是哪一套');
+      return;
+    }
+    var mc = /画的是榜上 #(\d+)（[^）]*?(\d+) 个角色在用这一串）。共 (\d+) 点/.exec(cap);
+    if (!mc) {
+      bad++;
+      problems.push('树跟着串：' + label + ' 树标题格式不对：' + cap.slice(0, 60));
+    } else {
+      if (Number(mc[2]) !== truthCount) {
+        bad++;
+        problems.push('树跟着串：' + label + ' 树标题写 ' + mc[2] + ' 个角色，'
+          + '产物里是 ' + truthCount + ' —— 人数和树还是不是同一套');
+      }
+      if (Number(mc[3]) !== truthPts) {
+        bad++;
+        problems.push('树跟着串：' + label + ' 树标题写共 ' + mc[3] + ' 点，'
+          + '这条串独立解出来是 ' + truthPts + ' 点 —— 画的不是这一串');
+      }
+    }
+  });
+  settings.bisTreeSrc = '';
+  settings.bisLoKind = '';
+  if (checked < 4) {
+    problems.push('树跟着串：只验了 ' + checked + ' 个专精，这一组没跑起来');
+  }
+  console.log(pad('树跟着串') + (bad ? '有问题' : '通过')
+    + '（' + checked + ' 个专精：切到「榜上」之后树标题里的人数和点数都对着产物 + '
+    + '独立解码验过，开关高亮跟着设置走）');
+})();
+
 // ----------------------------------------------------------------------- 角色栈
 /*
  * 装备页的角色栈摆法（第 21 轮，用户定的「像魔兽世界角色栏一样排列」）。

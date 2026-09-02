@@ -188,8 +188,9 @@ var MUTANTS = [
   // 串头 specID 被换成别的专精的串。串长、字符集、只读、复制一致 —— 全过，
   // 只有「串头里的 specID 必须是本专精」能抓。导错专精游戏直接拒绝。
   textMutant('拿另一个专精的串来显示', BIS,
-    'var str = lo.list[idx];',
-    'var str = (function () {\n'
+    // 锚点跟着代码走：选串那段第 21 轮抽成了 loSelection()（树也要用同一个选择）。
+    'var idx = selL.idx, str = selL.str;',
+    'var idx = selL.idx, str = (function () {\n'
       + '      var R = rio(), ks = R && R.specs ? Object.keys(R.specs) : [];\n'
       + '      for (var i = 0; i < ks.length; i++) {\n'
       + '        var o = R.specs[ks[i]];\n'
@@ -197,7 +198,7 @@ var MUTANTS = [
       + '          return o.loadouts[0];\n'
       + '        }\n'
       + '      }\n'
-      + '      return lo.list[idx];\n'
+      + '      return selL.str;\n'
       + '    })();',
     '不是本专精'),
 
@@ -241,8 +242,8 @@ var MUTANTS = [
   // 按钮写着「团本」，框里是大秘境那串。字节比对本身抓不到（那串确实存在），
   // 只有「按界面上高亮哪一类去挑真值」能抓 —— 那正是 checkLoadouts 改判据的理由。
   textMutant('高亮团本却显示大秘境的串', BIS,
-    '    var cur = kinds[ki];\n    var lo = cur.lo;',
-    '    var cur = kinds[ki];\n    var lo = kinds[0].lo;',
+    '    var cur = kinds[ki];\n    var idx = state.loadout;',
+    '    var cur = kinds[0];\n    var idx = state.loadout;',
     '不一致'),
 
   // 换类之后不回到 #1。上一类选的是 #5，换过去那一类可能只有 3 种串，

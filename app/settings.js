@@ -154,6 +154,11 @@
       // localStorage，下次加载被过滤掉，读取那一行成了死代码，点过的「团本」
       // 活不过一次刷新。
       bisLoKind: '',                 // '' | 'mplus' | 'raid'
+      // 天赋页下面那三棵树画哪一套：'' / 'mr' = maxroll 方案（默认），
+      // 'lo' = 上面「榜上热门天赋串」里选中的那一条。第 21 轮加的 ——
+      // 原来页顶写着「#1·50人」而树画的是 maxroll 那套，一页只有一棵树，
+      // 谁都会以为它画的是刚选中的那条。
+      bisTreeSrc: '',                // '' | 'mr' | 'lo'
 
       // Optional data sources for the 毕业装备 panel. Both are empty by default:
       // everything the panel needs to work ships inside the release, and an

@@ -1179,6 +1179,12 @@ body[data-theme="light"] #tip { box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 /* 汇总块放在左列底下时，去掉它自己的外边距，跟格子对齐。 */
 .doll-col .bis-sum { margin: 0; }
 
+/* ---- 「下面的树画哪一套」那一排（第 21 轮）。
+   和 .tree-pick（英雄树选择条）一个形状，免得同一页上两排按钮长得不一样。 */
+.tree-src { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; flex-wrap: wrap; }
+.tree-src .lb { font-size: 11px; color: var(--fg2); }
+.tree-src .note { font-size: 11px; color: var(--warn); }
+
 /* ---- 每格第二行：首选 / 最热那一件 */
 .slot-top {
   display: flex;
