@@ -1394,9 +1394,16 @@
 
     var main = el('span', 'im');
     var name = el('b', null, (ri && ri.n) || it.n || ('物品 ' + itemId));
-    // 品质：rio 自带 q；BisData 没有这个字段，要查 app/item-icons.js。
+    // 品质：rio / maxroll 自带 q；BisData 没有这个字段，要查 app/item-icons.js。
     // 查不到就不上色，而不是默认紫色 —— 默认紫会把蓝色附魔和白色合剂都染错。
-    var q = ri && ri.q != null ? ri.q : itemQuality(itemId);
+    //
+    // **`q === 0` 当成「没有这个字段」**，不是「粗糙品质」。原来写的是
+    // `ri.q != null`，而 0 != null 成立：maxroll 的物品池里有 36 件是从 DB2
+    // 回填的、`q` 是 0（例如 271561「始源魔网守卫的镶宝带扣」，rio 和
+    // item-icons 都记着 q=4），于是三个法师专精两个视角的**腰带 BiS #1**
+    // 被染成灰色 —— 灰色在魔兽的颜色语言里等于卖店垃圾。
+    // 装备行不存在真正的 0 级品质，所以拿 0 当缺失是安全的。
+    var q = (ri && ri.q) ? ri.q : itemQuality(itemId);
     if (q != null && L.qualityColors[q]) name.style.color = L.qualityColors[q];
     main.appendChild(name);
 
@@ -1708,7 +1715,14 @@
     // 团本天赋串（第 20 轮）。同上，只触发不等。
     ensureWcl();
     loadDataFile('talent-data.js', 'AE_TALENTS', function (err) {
-      if (err && AE.toast) AE.toast(err, 'warn');
+      // 失败要说人话。**AE.toast 只吃一个对象**（app/toast.js 的签名是
+      // toast(o)，读 o.title / o.body / o.kind），原来这里写的是
+      // `AE.toast(err, 'warn')` —— err 是个字符串，于是 o.title 是 undefined，
+      // 画出来是一个**完全空白**的提示框停 3 秒；'warn' 也不是它认的 kind
+      // （只有 info / good / bad）。
+      if (err && AE.toast) {
+        AE.toast({ title: '天赋数据读取失败', body: String(err), kind: 'bad' });
+      }
       // 树结构是另一个文件（app/talent-tree.js，约 415 KB）。
       // 以前它是**可选的**：加载不到就退回「只有统计、没有树」。
       // 现在 maxroll 那条路要靠它解串，所以加载不到就只剩插件那份统计 ——

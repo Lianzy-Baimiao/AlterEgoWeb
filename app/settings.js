@@ -142,6 +142,13 @@
       // 就用大秘境）。同页的 mrBuild / mrSub 是数组下标，**故意不存**，
       // 原因见 app/bis.js 里 state 那段注释。
       bisMrKind: '',                 // '' | 'mplus' | 'raid'
+      // 天赋页「榜上热门天赋串」看团本还是大秘境那一份**榜单数据**（上面那个
+      // bisMrKind 管的是 maxroll 指南，两个开关同名不同事）。
+      // **这一条必须留在默认表里**：hydrate() 是 Object.keys(defaults()).forEach，
+      // 不在表里的键会被整个丢掉 —— 第 20 轮实测就是这样：bis.js 那边照常写进
+      // localStorage，下次加载被过滤掉，读取那一行成了死代码，点过的「团本」
+      // 活不过一次刷新。
+      bisLoKind: '',                 // '' | 'mplus' | 'raid'
 
       // Optional data sources for the 毕业装备 panel. Both are empty by default:
       // everything the panel needs to work ships inside the release, and an

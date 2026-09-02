@@ -31,7 +31,8 @@
     }
 
     if (!global.AE_DATA) {
-      fatal('数据未加载', '没有找到 data/data.js。请先双击文件夹里的启动脚本（start.bat）来扫描游戏目录。');
+      fatal('数据未加载', '没有找到 data/data.js。请先双击文件夹里的 魔兽看板.exe'
+            + '（或 启动.bat）来扫描游戏目录。');
       return;
     }
 

@@ -3233,6 +3233,222 @@ VERIFIERS.forEach(function (v) {
     + '节点缺 id 直接抛异常；真串 ' + realKeys + ' 个专精上前两条互不相同且指纹稳定）');
 })();
 
+// ------------------------------------------------------------------- 口径与文案
+/*
+ * 「界面上那个数是什么意思」和「界面提到的东西存不存在」这一族。
+ *
+ * 五条都是第 20 轮审查真抓到的形状，每条都能独立失败：
+ *   ① 导出和格子对同一份数据给出不同答案（团本过期锁定：格子「·」，导出是数字）；
+ *   ② 「还需」后面写的是这一档的总要求而不是差额（3 / 8 后面接「还需 8 个」）；
+ *   ③ persist() 写的键不在设置默认表里 → hydrate() 把它丢掉，选择活不过一次刷新；
+ *   ④ 界面文案提到一个包里没有的文件（「双击 start.bat」，而包里叫 启动.bat）；
+ *   ⑤ 品质字段是 0 时没有可退的真品质 → BiS 首选被染成灰色（卖店垃圾的颜色）。
+ */
+(function () {
+  var before = problems.length, checks = 0, raidStale = 0, raidLive = 0;
+  var S = g.AE, L = g.AE_LABELS || {};
+  var cols = (S.buildColumns && model.columns) ? S.buildColumns(model) : [];
+  var ctx = { model: model, settings: settings };
+  function newTd() { var td = doc.createElement('td'); td.className = ''; return td; }
+
+  // ---- ① 团本列：导出必须和格子一样把过期残留过滤掉。
+  //
+  // 合成真值在前，真实数据在后。合成的那两条与本机数据无关，换一台机器照样跑得到 ——
+  // 只靠真实数据的话，某台机器上恰好没有过期残留时这一条就变成空转。
+  var raidCol = null;
+  for (var i = 0; i < cols.length; i++) {
+    if (String(cols[i].id).indexOf('raid:') === 0) { raidCol = cols[i]; break; }
+  }
+  if (!raidCol || !S.exportCellForTest) {
+    problems.push('口径与文案：拿不到团本列或 exportCellForTest，①在验空气');
+  } else {
+    var key = String(raidCol.id).slice(5);
+    [true, false].forEach(function (active) {
+      var fake = { raids: { byKey: {} } };
+      // 形状照 app/model.js 建出来的那份：render 还会读 name / difficultyName /
+      // encounters 去拼提示，少一个就是 TypeError（这里踩过一次）。
+      fake.raids.byKey[key] = {
+        progress: 8, total: 8, active: active, locked: active,
+        name: '测试团本', difficultyName: '史诗',
+        encounters: [{ name: '首领甲', killed: true }]
+      };
+      var td = newTd();
+      raidCol.render(td, fake, ctx);
+      var cell = S.exportCellForTest(raidCol, fake, ctx);
+      var shownDash = String(td.textContent) === '·';
+      var exportEmpty = cell.v === '' || cell.v == null;
+      checks++;
+      if (shownDash !== exportEmpty) {
+        problems.push('口径与文案：团本锁定 active=' + active + ' 时格子画「'
+          + td.textContent + '」而导出给「' + cell.v + '」—— 同一格两个答案');
+      }
+      checks++;
+      if (active && String(td.textContent) !== '8/8') {
+        problems.push('口径与文案：active 的团本格该画 8/8，实际「' + td.textContent + '」');
+      }
+    });
+    // 真实数据扫一遍，顺带把本机有多少过期残留印出来。
+    var stale = 0, live = 0, mismatch = 0;
+    (model.characters || []).forEach(function (ch) {
+      cols.forEach(function (c) {
+        if (String(c.id).indexOf('raid:') !== 0) return;
+        var r = ch.raids && ch.raids.byKey ? ch.raids.byKey[String(c.id).slice(5)] : null;
+        if (!r) return;
+        if (r.active) live++; else stale++;
+        var td2 = newTd();
+        c.render(td2, ch, ctx);
+        var cv = S.exportCellForTest(c, ch, ctx);
+        if ((String(td2.textContent) === '·') !== (cv.v === '' || cv.v == null)) mismatch++;
+      });
+    });
+    checks++;
+    if (mismatch) {
+      problems.push('口径与文案：真实数据里有 ' + mismatch + ' 格「界面和导出不一致」');
+    }
+    raidStale = stale; raidLive = live;
+  }
+
+  // ---- ② 宝库提示：「还需」后面必须是**差额**。
+  //
+  // 判据独立算：从提示行里把「第 N 档　a / b」和「还需：…N…」都抠出来，
+  // 断言 N === b - a。这条不能靠 AE.vaultRequirement 自己验 —— 那个函数按契约
+  // 返回的就是「这一档要多少」，错在调用处的措辞。
+  var vaultLines = 0;
+  cols.forEach(function (c) {
+    if (String(c.id).indexOf('vault:') !== 0) return;
+    (model.characters || []).forEach(function (ch) {
+      var td = newTd();
+      c.render(td, ch, ctx);
+      String(td.title || '').split('\n').forEach(function (line) {
+        var m = /第 \d+ 档　(\d+) \/ (\d+)　还需：\D*(\d+)/.exec(line);
+        if (!m) return;
+        vaultLines++;
+        var need = Number(m[3]), have = Number(m[1]), want = Number(m[2]);
+        if (need !== want - have) {
+          problems.push('口径与文案：宝库提示「' + line.replace(/　/g, ' ')
+            + '」—— 前面写着 ' + have + ' / ' + want + '，「还需」该是 '
+            + (want - have) + ' 而不是 ' + need);
+        }
+      });
+    });
+  });
+  checks++;
+  if (!vaultLines) {
+    problems.push('口径与文案：一条宝库「还需」提示都没解析到 —— ②在验空气'
+      + '（本机所有档位都满了？扫描数据缺失？）');
+  }
+
+  // ---- ③ persist() 写出去的键，必须都在设置默认表里。
+  //
+  // hydrate() 是 Object.keys(defaults()).forEach，不在表里的键会被整个丢掉：
+  // 写得进 localStorage，读不回来，于是那个选择活不过一次刷新，而且**没有任何报错**。
+  // 第 20 轮 bisLoKind 就是这样空转了一整轮。
+  // **默认键集要从 AE.loadSettings().settings 拿。** 两个坑连着踩过：
+  //   · AE.defaultSettings 根本不存在（settings.js 里 defaults() 是模块私有的，
+  //     只有 load / save / reset 是公开的）；
+  //   · AE.loadSettings() 返回的是**外壳** {settings, origin, storageOk, adoptedFrom}，
+  //     直接拿它当设置对象只有 4 个键。
+  // 两次都会把七个正常的键报成「不在默认表里」—— 完整的假红。所以下面留了一条
+  // 仪器自检：键太少就说仪器坏了，而不是报数据错。
+  var loaded = S.loadSettings ? S.loadSettings() : null;
+  var defKeys = (loaded && loaded.settings) || {};
+  var persisted = {};
+  fs.readdirSync(path.join(ROOT, 'app')).forEach(function (f) {
+    if (!/\.js$/.test(f)) return;
+    var src = fs.readFileSync(path.join(ROOT, 'app', f), 'utf8');
+    var re = /persist\(\{\s*([A-Za-z_][A-Za-z_0-9]*)\s*:/g, m;
+    while ((m = re.exec(src))) persisted[m[1]] = f;
+  });
+  var pk = Object.keys(persisted);
+  checks++;
+  if (Object.keys(defKeys).length < 20) {
+    problems.push('口径与文案：设置默认表只读出 ' + Object.keys(defKeys).length
+      + ' 个键 —— 仪器坏了（AE.loadSettings 取不到？），③这一条的结论不可信');
+  }
+  checks++;
+  if (pk.length < 3) {
+    problems.push('口径与文案：只扫到 ' + pk.length + ' 个 persist 的键，③大概没扫到东西');
+  }
+  pk.forEach(function (k) {
+    checks++;
+    if (!(k in defKeys)) {
+      problems.push('口径与文案：' + persisted[k] + ' 里 persist({ ' + k + ': … }) 写的键'
+        + '不在设置默认表里 —— hydrate() 会把它丢掉，'
+        + '这个选择活不过一次刷新（写得进去，读不回来）');
+    }
+  });
+
+  // ---- ④ 界面文案里提到的 .bat / .exe，必须真的在包里。
+  //
+  // 「请先双击 start.bat」——而包里叫 启动.bat。这种错只在**第一次打开**、
+  // 也就是最需要说对话的那一刻出现。
+  var namedFiles = {};
+  ['index.html', 'tests.html'].concat(fs.readdirSync(path.join(ROOT, 'app'))
+    .filter(function (f) { return /\.js$/.test(f); })
+    .map(function (f) { return 'app/' + f; }))
+    .forEach(function (rel) {
+      var p = path.join(ROOT, rel);
+      if (!fs.existsSync(p)) return;
+      var src = fs.readFileSync(p, 'utf8');
+      // 扩展名后面必须断字：不加 (?![A-Za-z0-9_]) 的话 `doc.execCommand` 里的
+      // 「.exe」也会被当成一个文件名（第一版就报了「让用户去双击 doc.exe」）。
+      var re = /[A-Za-z0-9_一-龥-]+\.(?:bat|exe)(?![A-Za-z0-9_])/g, m;
+      while ((m = re.exec(src))) (namedFiles[m[0]] || (namedFiles[m[0]] = [])).push(rel);
+    });
+  var nf = Object.keys(namedFiles);
+  checks++;
+  if (!nf.length) {
+    problems.push('口径与文案：界面文案里一个 .bat/.exe 都没提到 —— ④在验空气'
+      + '（那句「先双击…」被删了？）');
+  }
+  nf.forEach(function (name) {
+    checks++;
+    if (!fs.existsSync(path.join(ROOT, name))) {
+      problems.push('口径与文案：' + namedFiles[name].join(' / ') + ' 让用户去双击 '
+        + name + '，而这个文件不在包里 —— 用户会去找一个不存在的东西');
+    }
+  });
+
+  // ---- ⑤ 品质字段是 0 的物品，必须能从别处拿到真品质。
+  //
+  // 面板把 q===0 当成「没有这个字段」再去查 app/item-icons.js（bis.js 的
+  // `(ri && ri.q) ? ri.q : itemQuality(itemId)`）。这条断言证明**退得到东西**：
+  // maxroll 池里 36 件从 DB2 回填的物品 q 都是 0，其中被 bis/alt 引用的那件是
+  // 三个法师专精的腰带首选，退不到就还是灰色。
+  var MR = g.AE_MAXROLL, ICON = g.AE_ITEM_ICONS, RIO = g.AE_RIO;
+  var zeroQ = 0, zeroQBad = 0;
+  Object.keys((MR && MR.items) || {}).forEach(function (id) {
+    if (MR.items[id].q !== 0) return;
+    zeroQ++;
+    var alt = (RIO && RIO.items && RIO.items[id] && RIO.items[id].q)
+      || (ICON && ICON[id] && ICON[id].q) || 0;
+    if (!alt) return;                      // 别处也没有，面板就不上色，是设计好的
+    if (alt < 2) zeroQBad++;
+  });
+  checks++;
+  if (!zeroQ) {
+    // 生成器哪天把品质补上了，这一条就该删掉而不是留着空转。
+    problems.push('口径与文案：maxroll 物品池里已经没有 q=0 的物品了 —— '
+      + '⑤没有可验的样本，把这条断言删掉，或者留着的话说清为什么');
+  }
+  checks++;
+  if (zeroQBad) {
+    problems.push('口径与文案：有 ' + zeroQBad + ' 件 q=0 的物品在别处的品质也 <2');
+  }
+
+  if (checks < 12) {
+    problems.push('口径与文案：只跑到 ' + checks + ' 项检查，这一组没跑起来');
+  }
+  console.log(pad('口径与文案')
+    + (problems.length > before ? '有问题' : '通过')
+    + '（' + checks + ' 项：团本列「界面 ⇔ 导出」合成 2 组 + 真实 '
+    + (raidLive + raidStale) + ' 格（其中过期残留 ' + raidStale + ' 格）；'
+    + '宝库「还需」逐行对差额 ' + vaultLines + ' 行；'
+    + 'persist 的键 ' + pk.length + ' 个全在默认表里；'
+    + '文案提到的文件 ' + nf.length + ' 个全在包里；'
+    + 'maxroll 池里 q=0 的 ' + zeroQ + ' 件都能从别处拿到真品质）');
+})();
+
 // ----------------------------------------------------------------------- 并发池
 // fetch-rio.js 的 pool() 有一个**只在缓存全命中时才炸**的坑，本轮实测踩到：
 // worker 平时异步回调（发请求），缓存命中时**同步**回调，于是 next() 在同步回调里

@@ -361,7 +361,13 @@
               // the identical item), and it is a preview of the item level, not
               // a drop -- so it only ever added noise to the vault readout.
             } else {
-              line += '　还需：' + AE.vaultRequirement(type, slot.threshold, slot.raidString);
+              // **「还需」后面必须是差额，不是这一档的总要求。**
+              // AE.vaultRequirement 按契约返回「这一档要多少」（app/model.js 里
+              // 那段），而这一行前半句已经写了 `3 / 8` —— 再接一句「还需：完成 8 个」
+              // 就成了「一共要 11 个」。app/panel.js 那处用同一个函数但不加
+              // 「还需」二字，所以它读起来是对的，错的只是这里的措辞。
+              var left = Math.max(1, slot.threshold - slot.progress);
+              line += '　还需：' + AE.vaultRequirement(type, left, slot.raidString);
             }
             lines.push(line);
           });

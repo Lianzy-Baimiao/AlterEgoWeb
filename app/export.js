@@ -394,7 +394,12 @@
 
     if (col.id.indexOf('raid:') === 0) {
       var r = ch.raids.byKey[col.id.slice(5)];
-      return r ? { v: r.progress, num: true } : { v: '', num: false };
+      // **过期残留要和格子一样过滤掉。** 存档里的锁定快照只在角色上线时更新，
+      // 所以上个周期的 8/8 会一直躺在里面；app/columns.js 那边画格子时有
+      // `if (!r || !r.active) return dash(td)`，这里原来没有 —— 界面上是「·」，
+      // 导出的 Excel / CSV 里却是个真数字。而导出正是拿去核对「哪个号本周还没
+      // 清本」的地方，看不到界面可以对照，错得更贵。
+      return r && r.active ? { v: r.progress, num: true } : { v: '', num: false };
     }
 
     if (col.id.indexOf('prey:') === 0) {
@@ -481,9 +486,12 @@
     exportedToast(name, snap.rows.length, snap.headers.length);
   };
 
-  AE.exportSnapshot = snapshot;
-  // Exposed so tests.html can exercise the writer without a rendered table.
+  AE.exportSnapshot = snapshot;  // Exposed so tests.html can exercise the writer without a rendered table.
   AE.buildXlsxBlob = buildXlsx;
   AE.xlsxSheetXmlForTest = sheetXml;
+  // 单个格子也导出来。snapshot() 要一张**已经渲染好**的表（它读 #tbody tr 的
+  // 顺序），而「导出的这一格和界面上那一格是不是同一个意思」这件事不需要整张表。
+  // 第 20 轮真踩过：团本列的过期锁定在格子里被过滤成「·」，在导出里是个真数字。
+  AE.exportCellForTest = exportCell;
 
 })(typeof window !== 'undefined' ? window : globalThis);
