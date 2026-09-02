@@ -2044,7 +2044,25 @@
       // 以前它是**可选的**：加载不到就退回「只有统计、没有树」。
       // 现在 maxroll 那条路要靠它解串，所以加载不到就只剩插件那份统计 ——
       // 仍然不当错误（面板照样能用），但那时 renderTalents 会走 popular 那条。
-      if (global.AE_TALENT_TREE) { talLoading = false; talLoaded = true; done(); return; }
+      /*
+       * 树已经在内存里就不用再拉 —— **但说明文字那一步不能跟着跳过**（第 21 轮的 bug）。
+       *
+       * 用户报的：「天赋图标的鼠标指向也没有了说明信息」。原因是这条早退：
+       * 装备页（**默认那一页**）自己就会拉 talent-tree.js，所以等用户切到天赋页时
+       * AE_TALENT_TREE 已经在了，这里直接 return，而 ensureTalentDesc() 只写在
+       * 下面那个 loadDataFile 的回调里 —— 于是 app/talent-desc.js **一次都不会被请求**，
+       * 99 个天赋节点的提示里只有名字。
+       * 实测顺序：开装备页 → 请求 bis-data / item-icons / rio-data / maxroll-data /
+       * **talent-tree** → 切天赋页 → 只请求 wcl-data / talent-data，desc 不在其中。
+       * 「先开天赋页」那条路一直是好的，所以套件（预载全部数据）也看不见这个洞。
+       */
+      if (global.AE_TALENT_TREE) {
+        talLoading = false;
+        talLoaded = true;
+        done();
+        ensureTalentDesc();
+        return;
+      }
       loadDataFile('talent-tree.js', 'AE_TALENT_TREE', function () {
         talLoading = false;
         talLoaded = true;

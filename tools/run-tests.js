@@ -3512,6 +3512,47 @@ VERIFIERS.forEach(function (v) {
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
 
+// ------------------------------------------------------------------- 懒加载顺序
+/*
+ * **按真实的点击顺序走一遍懒加载。**
+ *
+ * 这一关必须**另开一个进程**（tools/check-lazyload.js）：上面那个 env 把 8 个数据
+ * 文件全部预载了（故意的，免得「因为没数据所以跳过」报成通过），代价是它看不见
+ * 「该拉的没拉」这一类洞；而 dom-stub 的 env 共用同一个 global，同一进程里开不出
+ * 干净的第二个。第 21 轮的真 bug 就是这一类：装备页（默认那一页）会把
+ * talent-tree.js 拉下来，于是切到天赋页时 ensureTalents() 早退，
+ * app/talent-desc.js 一次都不会被请求 —— 天赋图标的提示里只剩名字。
+ */
+(function () {
+  var script = path.join(ROOT, 'tools', 'check-lazyload.js');
+  if (!fs.existsSync(script)) {
+    console.log(pad('懒加载顺序') + '跳过（没有 check-lazyload.js）');
+    return;
+  }
+  var cp = require('child_process');
+  var r = cp.spawnSync(process.execPath, [script], { cwd: ROOT, encoding: 'utf8' });
+  var out = (r.stdout || '') + (r.stderr || '');
+  var m = /合计 请求 (\d+) 组，问题 (\d+)/.exec(out);
+  if (!m) {
+    problems.push('check-lazyload.js 没给出「合计 请求 N 组，问题 M」那一行 —— 它自己坏了？');
+    console.log(pad('懒加载顺序') + '读不出结果');
+    return;
+  }
+  var groups = Number(m[1]), bad = Number(m[2]);
+  // 下界：实测装备页 5 个 + 切页 3 个 = 8 组。掉下来说明它没真的走完那条路。
+  if (groups < 6) {
+    problems.push('懒加载只观察到 ' + groups + ' 组请求（实测 8），check-lazyload 没走完流程');
+  }
+  if (bad) {
+    out.split('\n').filter(function (l) { return l.indexOf('· ') === 2; })
+      .slice(0, 4).forEach(function (l) { problems.push('懒加载顺序：' + l.trim().slice(2)); });
+  }
+  var nd = /天赋节点 (\d+) 个，悬停提示带说明的 (\d+) 个/.exec(out);
+  console.log(pad('懒加载顺序') + (bad ? '有问题' : '通过')
+    + '（另开一个干净进程，按「先开装备页 → 点天赋页签」走：观察到 ' + groups
+    + ' 组请求' + (nd ? '，' + nd[1] + ' 个天赋节点的提示全带说明 ' + nd[2] : '') + '）');
+}());
+
 // --------------------------------------------------------------------- 树跟着串
 /*
  * **「下面的树画哪一套」那个开关，以及树和人数必须是同一套**（第 21 轮）。

@@ -76,6 +76,7 @@ $dropFromPkg = @(
     'tools\.maxroll-spell-ids.json', # which spell IDs fetch-maxroll.js needs looked up; a byproduct
     'tools\.wcl-auth.json',      # the user's Warcraft Logs API credentials -- MUST NOT ship
 
+    'tools\check-lazyload.js',   # walks the panel's lazy-load chain in a clean env; needs dom-stub.js
     'tools\check-anchors.js',    # static anchor check for the mutate-* suites -- which are
                                  # themselves dropped below, so this would find nothing
     'tools\dom-stub.js',         # test harness
