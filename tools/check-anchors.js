@@ -106,6 +106,24 @@ function anchorsOf(src, targets) {
   return out;
 }
 
+/**
+ * genMutant 改的是哪个文件。签名里没有文件名（`genMutant(desc, from, to, want)`），
+ * 目标写死在套件的函数体里 —— 从 `fs.readFileSync(XXX` 里把那个变量名扒出来。
+ *
+ * 为什么值得专门认一下：不认的话只能退回「所有目标文件里有一个正好 1 次就算好」，
+ * 而那条规则第 20 轮放过了一个真的坏锚点 —— mutate-loadout 的排序变异体改的是
+ * tools/fetch-rio.js，那句代码早就搬走了（0 次），但 tools/run-tests.js 里恰好有
+ * 一句一模一样的（独立算真值那份排序，1 次），于是报「全对」。
+ * 认不出来就返回 null，退回旧规则。
+ */
+function genTargetOf(src, targets) {
+  var i = src.indexOf('function genMutant');
+  if (i < 0) return null;
+  var body = src.slice(i, i + 1200);
+  var m = /readFileSync\(([A-Za-z_][A-Za-z_0-9]*)/.exec(body);
+  return (m && targets[m[1]]) ? targets[m[1]] : null;
+}
+
 var files = fs.readdirSync(TOOLS)
   .filter(function (f) { return /^mutate-.*\.js$/.test(f) && f !== 'mutate-lock.js'; });
 
@@ -115,14 +133,17 @@ files.forEach(function (f) {
   var targets = targetsOf(src);
   var all = Object.keys(targets).map(function (k) { return targets[k]; })
     .filter(function (p) { return read(p) != null; });
+  var genTarget = genTargetOf(src, targets);
   var list = anchorsOf(src, targets);
   if (!list) { unread.push(f + '（找不到 MUTANTS 数组）'); console.log(pad(f) + '认不出结构'); return; }
   if (list.err) { unread.push(f + '（' + list.err.slice(0, 50) + '）'); console.log(pad(f) + '抽不出：' + list.err.slice(0, 50)); return; }
 
   var bad = [];
   list.forEach(function (c) {
-    // 目标明确 → 就查那个文件；目标不明（genMutant）→ 只要有一个文件正好 1 次就算好。
-    var cands = (c.f ? [targets[c.f]] : all).filter(function (p) { return p && read(p) != null; });
+    // 目标明确 → 就查那个文件；genMutant → 查它函数体里读的那个文件；
+    // 都认不出来 → 只要有一个文件正好 1 次就算好（最后的退路）。
+    var cands = (c.f ? [targets[c.f]] : (genTarget ? [genTarget] : all))
+      .filter(function (p) { return p && read(p) != null; });
     if (!cands.length) {
       // 目标文件不存在（比如 tools/talent-truth.json 那种缓存产物）—— 不算坏锚点，
       // 但要说出来：那条变异体在这台机器上跑不了。

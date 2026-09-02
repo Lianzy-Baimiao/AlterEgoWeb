@@ -3084,6 +3084,155 @@ VERIFIERS.forEach(function (v) {
   if (!found) problems.push(v.label + '校验失败（退出码 ' + r.status + '）');
 });
 
+// ----------------------------------------------------------------------- 天赋归并
+/*
+ * tools/group-loadouts.js 的指纹（「这两条串是不是同一套天赋」）。
+ *
+ * 为什么这一组必须存在：第 20 轮那份指纹**写错了字段名**（`n.node`，而
+ * tools/decode-talent-string.js 给的是 `n.id`），于是每个节点都变成
+ * `undefined:点数:二选一`，指纹退化成「只比点数和二选一的分布」，把**完全不同的
+ * 天赋并成一套** —— 团本语料 7920 套并成 558 套，最大的一组塞了 250 套不同的天赋。
+ * 而产物看起来毫无问题（「#1 有 139 人，60 种写法」），两个校验器全绿，
+ * 137 项测试全绿。抓到它靠的是一把外部的尺子（WCL 的串是它自己生成的，
+ * 同一套必然同一串，所以正确的指纹在那份语料上必须 ≈1 种写法/套，实测退化版 14.19）。
+ *
+ * 语料上那把尺子在这里跑不动（要 7920 条串的原始缓存），所以这一组用**合成真值**
+ * 盯住同一个失败形状：两套只在「点了哪些节点」上不同、点数分布完全一样的天赋，
+ * 指纹必须不同。退化的指纹在这一条上必炸。
+ */
+(function () {
+  var before = problems.length;
+  var GROUP, checks = 0, realKeys = 0;
+  try { GROUP = require('./group-loadouts.js'); } catch (e) {
+    problems.push('天赋归并：require group-loadouts.js 失败：' + e.message);
+    console.log(pad('天赋归并') + '加载失败');
+    return;
+  }
+
+  // 1. 指纹依赖的**字段名**。真解一条串，看节点对象到底叫什么 ——
+  //    这一条是那个 bug 的正面回归：写错字段名时它直接报出来。
+  var sample = null;
+  var rsp = g.AE_RIO && g.AE_RIO.specs;
+  Object.keys(rsp || {}).some(function (sid) {
+    var lo = rsp[sid].loadouts;
+    if (lo && lo[0] && lo[0][0]) { sample = lo[0][0]; return true; }
+    return false;
+  });
+  if (!sample) {
+    problems.push('天赋归并：app/rio-data.js 里一条天赋串都取不到，这一组在验空气');
+  } else {
+    var d = DEC.decode(sample, MR_ORDER);
+    var n0 = d && d.nodes && d.nodes[0];
+    checks++;
+    if (!n0 || n0.id == null) {
+      problems.push('天赋归并：解码器返回的节点没有 id 字段（有的是 '
+        + Object.keys(n0 || {}).join(',') + '）—— group-loadouts.js 的指纹就靠它，'
+        + '字段名一改指纹会退化成「只比点数分布」');
+    }
+  }
+
+  // 2. **核心断言**：两套天赋点数分布一模一样、只有节点身份不同 → 指纹必须不同。
+  //    退化的指纹（不看节点是哪个）在这一条上会把两套算成一套。
+  var shape = [{ rank: 1, entryIndex: 0 }, { rank: 2, entryIndex: 1 }, { rank: 3, entryIndex: '' }];
+  function fake(ids) {
+    return { spec: 70, nodes: ids.map(function (id, i) {
+      return { id: id, rank: shape[i].rank, entryIndex: shape[i].entryIndex };
+    }) };
+  }
+  var kA = GROUP.buildKey('A', function () { return fake([101, 102, 103]); });
+  var kB = GROUP.buildKey('B', function () { return fake([201, 202, 203]); });
+  checks++;
+  if (!kA || !kB) {
+    problems.push('天赋归并：合成真值算不出指纹（buildKey 返回空）');
+  } else if (kA === kB) {
+    problems.push('天赋归并：点数分布相同、节点完全不同的两套天赋算出了同一个指纹 '
+      + kA.slice(0, 40) + ' —— 指纹没看节点是哪个，会把不同的天赋并成一套'
+      + '（第 20 轮真踩过：7920 套并成 558 套）');
+  }
+  // 同一套换个遍历顺序还是同一套（位流里顺序固定，但指纹不该赌这个）。
+  checks++;
+  if (kA !== GROUP.buildKey('A', function () {
+    var f = fake([101, 102, 103]); f.nodes.reverse(); return f;
+  })) {
+    problems.push('天赋归并：同一套天赋换个节点顺序就变成了另一个指纹');
+  }
+  // 专精不同就是两套 —— 串头带着 specID，导错专精游戏直接拒绝。
+  checks++;
+  if (kA === GROUP.buildKey('A', function () {
+    var f = fake([101, 102, 103]); f.spec = 71; return f;
+  })) {
+    problems.push('天赋归并：两个不同专精的天赋算出了同一个指纹');
+  }
+
+  // 3. 节点缺 id 必须**抛异常**，不许静默返回 null。返回 null 的话所有串都算
+  //    「解不开」，抓取器照样写出一份空天赋的产物 —— 那正是要防的静默退化。
+  checks++;
+  var threw = false;
+  try {
+    GROUP.buildKey('A', function () { return { spec: 70, nodes: [{ rank: 1 }] }; });
+  } catch (e) { threw = /id/.test(e.message); }
+  if (!threw) {
+    problems.push('天赋归并：节点没有 id 时 buildKey 没抛异常 —— '
+      + '字段名写错会静默退化成一个只比点数分布的指纹');
+  }
+
+  // 4. 真串上：同一串两次指纹相同；产物里同一专精的两条不同串指纹必须不同
+  //    （它们是两套不同的天赋，产物里同一套只该占一行）。
+  Object.keys(rsp || {}).forEach(function (sid) {
+    var lo = rsp[sid].loadouts || [];
+    if (lo.length < 2) return;
+    var dec = function (s) { return DEC.decode(s, MR_ORDER); };
+    var k1 = GROUP.buildKey(lo[0][0], dec);
+    var k2 = GROUP.buildKey(lo[1][0], dec);
+    if (!k1 || !k2) return;
+    realKeys++;
+    if (k1 === k2) {
+      problems.push('天赋归并：专精 ' + sid + ' 产物里前两条串解出来是同一套天赋 —— '
+        + '同一套占了两行，人数被摊开');
+    }
+    if (k1 !== GROUP.buildKey(lo[0][0], dec)) {
+      problems.push('天赋归并：专精 ' + sid + ' 同一条串算出了两个不同的指纹（不稳定）');
+    }
+  });
+
+  // 5. 计数：同一个角色重复出现只算一次；同一套的两种写法合成一行、代表串取多数。
+  var rows = [
+    { ch: '甲', str: 'x1' }, { ch: '甲', str: 'x1' },   // 同人同串，算 1 个人
+    { ch: '乙', str: 'x2' },                            // 同一套的另一种写法
+    { ch: '丙', str: 'y1' }
+  ];
+  var same = fake([101, 102, 103]);
+  var res = GROUP.group(rows, function (s) {
+    return s.charAt(0) === 'x' ? same : fake([201, 202, 203]);
+  });
+  checks++;
+  if (res.list.length !== 2) {
+    problems.push('天赋归并：4 条（2 套）应该归成 2 行，实际 ' + res.list.length);
+  } else {
+    checks++;
+    if (res.list[0].n !== 2 || res.list[0].forms !== 2) {
+      problems.push('天赋归并：那一套该是 2 个角色 / 2 种写法，实际 '
+        + res.list[0].n + ' / ' + res.list[0].forms
+        + '（同一个角色的重复出场该只算一次）');
+    }
+    checks++;
+    if (res.list[0].n < res.list[1].n) {
+      problems.push('天赋归并：结果没按人数降序');
+    }
+  }
+
+  // 下界。少了任何一项都说明这一组没真跑（第 19/20 轮反复踩的「跳过报成通过」）。
+  if (checks < 8) problems.push('天赋归并：只跑到 ' + checks + ' 项检查，测试没跑起来');
+  if (realKeys < 20) {
+    problems.push('天赋归并：只在 ' + realKeys + ' 个专精的真串上算过指纹（该有 40 个）'
+      + ' —— 合成真值过了不等于真数据过了');
+  }
+  console.log(pad('天赋归并')
+    + (problems.length > before ? '有问题' : '通过')
+    + '（合成真值 ' + checks + ' 项：点数分布相同而节点不同的两套算出不同指纹、'
+    + '节点缺 id 直接抛异常；真串 ' + realKeys + ' 个专精上前两条互不相同且指纹稳定）');
+})();
+
 // ----------------------------------------------------------------------- 并发池
 // fetch-rio.js 的 pool() 有一个**只在缓存全命中时才炸**的坑，本轮实测踩到：
 // worker 平时异步回调（发请求），缓存命中时**同步**回调，于是 next() 在同步回调里

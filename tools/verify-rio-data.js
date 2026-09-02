@@ -26,8 +26,9 @@
  *              n      这个专精抓到几个角色
  *              nGear  其中几个真的拿到装备
  *              slots  { 槽位编号: { n 该部位样本量, d: [[itemId, 人数, 平均装等], …] } }
- *              loadouts [[天赋导入串, 多少人用], …]（人数降序，最多 30 种）
- *              loUniq   去重前的真实种类数
+ *              loadouts [[天赋导入串, 多少人用这一套], …]（人数降序，最多 30 套；
+ *                       「一套」按解出来的天赋算，不按字节）
+ *              loUniq   一共多少套
  *            } }
  *
  * 用法：node tools\verify-rio-data.js
@@ -57,6 +58,52 @@ var R = sandbox.window.AE_RIO;
 if (!R) {
   console.log('app/rio-data.js 没有给 window.AE_RIO 赋值');
   process.exit(1);
+}
+
+/*
+ * 解码器 + 天赋树。为了验「两行不许是同一套天赋」这一条（第 20 轮加的）。
+ *
+ * 故意用 **app/talent-decode.js**（面板那份），不用生成器用的
+ * tools/decode-talent-string.js，也**不 require tools/group-loadouts.js** ——
+ * 归并的键就是那个文件算的，拿它算真值再去验它的产物是个恒等式，永远通过。
+ * 下面 buildKey() 是这里独立写的第二份实现。加载方式抄 verify-wcl-data.js。
+ */
+var DEC = null, TREE = null;
+(function () {
+  var treeJs = path.join(BASE, 'app', 'talent-tree.js');
+  var decJs = path.join(BASE, 'app', 'talent-decode.js');
+  if (!fs.existsSync(treeJs) || !fs.existsSync(decJs)) {
+    console.log('缺 app/talent-tree.js 或 app/talent-decode.js —— 天赋串没法复核。'
+      + '先跑 node tools\\fetch-talent-tree.js');
+    process.exit(1);
+  }
+  var gg = {}; gg.window = gg;
+  new Function('window', fs.readFileSync(treeJs, 'utf8'))(gg); // eslint-disable-line no-new-func
+  new Function('window', fs.readFileSync(decJs, 'utf8'))(gg);  // eslint-disable-line no-new-func
+  TREE = gg.AE_TALENT_TREE;
+  DEC = gg.AE && gg.AE.TalentDecode;
+  if (!TREE || !TREE.specs || !DEC || !DEC.decode) {
+    console.log('加载后拿不到天赋树或解码器 —— 天赋串没法复核');
+    process.exit(1);
+  }
+}());
+
+/**
+ * 「这是哪一套天赋」的指纹：专精 + 排序后的「节点:点数:二选一」。
+ *
+ * 和 tools/group-loadouts.js 里那份是**各写一遍**的（那份读的是生成器解码器的
+ * nodes 数组，这份读的是面板解码器的 nr 对象）。解不开返回 null。
+ */
+function buildKey(str) {
+  var d = null;
+  try { d = DEC.decode(str, TREE); } catch (e) { return null; }
+  if (!d || d.err || !d.nr) return null;
+  var parts = Object.keys(d.nr).map(function (id) {
+    var v = d.nr[id] || {};
+    return id + ':' + (v.rank || 0) + ':' + (v.eid != null ? v.eid : '');
+  });
+  if (!parts.length) return null;
+  return (d.spec != null ? d.spec : '?') + '#' + parts.sort().join('|');
 }
 
 // ------------------------------------------------------------------ 顶层字段
@@ -134,7 +181,8 @@ var itemIds = {};
 })();
 
 // ------------------------------------------------------------------ 专精表
-var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infinity, minSpecN: Infinity,
+var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, loKeys: 0,
+  minSlotN: Infinity, minSpecN: Infinity,
   minGear: Infinity, gearTotal: 0, zeroGear: [], thinGear: [] };
 (function () {
   var specs = R.specs || {};
@@ -173,11 +221,12 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infi
     }
 
     /*
-     * 天赋串。**第 20 轮起形状变了**：一人一条改成 [[串, 多少人用]…]，
-     * 人数降序、同人数按串本身、每专精最多 30 种。
-     * 原因见 tools/fetch-rio.js 的 topLoadouts()：采样提到 500 人之后一人一条
-     * 是 2091 KB，占产物 90%，而面板每个专精只画前 6 种。
-     * 和 app/wcl-data.js（团本那半）现在是同一个形状。
+     * 天赋串。形状 [[串, 多少人用这一套]…]，人数降序，每专精最多 30 套。
+     *
+     * 「一套」按**解出来的天赋**算，不按字节（生成器那边是 tools/group-loadouts.js）。
+     * 实测这两种算法几乎等价（21181 条不同串 → 21173 套），所以第 20 轮用户报的
+     * 「标题写 500 名玩家而 #1~#6 加起来 47 人」不是聚合的错 —— 天赋本来就人人不同，
+     * 一个专精几百人能有几百套。和 app/wcl-data.js（团本那半）是同一个形状。
      */
     var lo = S.loadouts || [];
     ck();
@@ -186,11 +235,11 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infi
     ck();
     if (typeof S.loUniq !== 'number' || S.loUniq < lo.length) {
       fail('专精 ' + sid + ' 的 loUniq 是 ' + S.loUniq + '，不该小于留下来的 '
-        + lo.length + ' 种 —— 它记的是**去重前的真实种类数**');
+        + lo.length + ' 套 —— 它记的是**一共多少套**');
     } else {
       stat.loadouts += S.loUniq;
     }
-    var prev = null;
+    var prev = null, seenKey = {};
     lo.forEach(function (row, i) {
       ck();
       if (!Array.isArray(row) || row.length !== 2) {
@@ -214,8 +263,28 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infi
           + row[1] + ' 人，排在 ' + prev + ' 人后面');
       }
       prev = row[1];
+      /*
+       * **两行不许是同一套天赋。** 串不同而解出来相同的两行，会把一套的人数
+       * 摊到两行里，而按串查重查不出来（字节确实不一样）。
+       * 指纹是这里独立算的（见上面 buildKey），不问生成器 —— 生成器的指纹
+       * 第 20 轮就退化过一次（字段名写错，把完全不同的天赋并成一套），
+       * 而产物看起来非常合理。
+       */
+      ck();
+      var key = buildKey(row[0]);
+      if (!key) {
+        fail('专精 ' + sid + ' 的 loadouts[' + i + '] 解不开 —— 解不开的串放进产物，'
+          + '用户复制粘贴进游戏只会得到「无效」');
+      } else if (seenKey[key]) {
+        fail('专精 ' + sid + ' 的 loadouts[' + i + '] 和第 ' + seenKey[key]
+          + ' 条解出来是同一套天赋（只是字节不同）—— 这一套的人数被摊到了两行里');
+      } else {
+        seenKey[key] = i + 1;
+        stat.loKeys++;
+      }
     });
-    // 人数之和不该超过榜上人数 —— 超了说明聚合把同一个人数了两遍。
+    // 人数之和不该超过榜上人数 —— rio 一个角色只有一条串（profile 里那条），
+    // 所以超了说明聚合把同一个人数了两遍。
     ck();
     var sum = lo.reduce(function (a, r) { return a + (Array.isArray(r) ? r[1] : 0); }, 0);
     if (sum > S.n) {
@@ -286,6 +355,13 @@ var stat = { specs: 0, slots: 0, rows: 0, loadouts: 0, loRows: 0, minSlotN: Infi
     fail('只查了 ' + stat.slots + ' 个部位组 / ' + stat.rows + ' 行，太少 —— '
       + '断言等于没跑（是不是产物只生成了一个专精？）');
   }
+  // 同一条防线，管天赋那半：指纹一条都没算过的话，「两行不许是同一套」
+  // 这条断言在验空气（解码器加载失败、或者 loadouts 全空都会长这样）。
+  ck();
+  if (stat.loKeys < stat.loRows) {
+    fail('天赋指纹只算出 ' + stat.loKeys + '/' + stat.loRows + ' 条 —— '
+      + '剩下的要么解不开要么撞了，「两行不许是同一套天赋」那条没验全');
+  }
 })();
 
 // ------------------------------------------------------------------ 样本量警告
@@ -310,7 +386,10 @@ console.log('校验       ' + path.relative(BASE, dataPath));
 console.log('数据       v' + R.v + '   ' + R.updatedAt + '   ' + R.season);
 console.log('规模       ' + stat.specs + ' 专精 / ' + Object.keys(R.items || {}).length
   + ' 件 / ' + stat.slots + ' 部位组 / ' + stat.rows + ' 行 / ' + stat.loadouts
-  + ' 种天赋串（产物里留了 ' + stat.loRows + ' 条，各专精最多 30）');
+  + ' 套天赋（产物里留了 ' + stat.loRows + ' 套，各专精最多 30）');
+console.log('天赋复核   ' + stat.loKeys + ' / ' + stat.loRows
+  + ' 套独立解开过，没有两套解出来是同一套'
+  + '（解码器用 app/talent-decode.js，指纹是这里独立算的，不问生成器）');
 // 两个数都打出来。只打 n 会把「榜上有 100 人」说成「有 100 人的装备」——
 // 那是第 13 轮真实发生过的误报。
 console.log('榜单样本   每专精最少 ' + (stat.minSpecN === Infinity ? '?' : stat.minSpecN) + ' 人');

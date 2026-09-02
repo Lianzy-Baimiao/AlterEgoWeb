@@ -57,7 +57,26 @@ function fail(m) { errors.push(m); }
 function warn(m) { warns.push(m); }
 function ck() { checks++; }
 
-var stat = { specs: 0, rows: 0, people: 0, decoded: 0, thin: [] };
+var stat = { specs: 0, rows: 0, people: 0, decoded: 0, keys: 0, thin: [] };
+
+/**
+ * 一份解码结果的「这是哪一套天赋」指纹：专精 + 排序后的「节点:点数:二选一」。
+ *
+ * 和 tools/group-loadouts.js 里那份是**各写一遍**的（那份读生成器解码器返回的
+ * nodes 数组，这份读面板解码器返回的 nr 对象）。算不出来返回 null。
+ *
+ * 节点先排序再拼：位流里节点是按 nodeOrder 走的，同一套天赋不同写法的顺序
+ * 理论上一致，但**别赌这个** —— 赌错就是把同一套算成两套，而那正是这条断言要抓的病。
+ */
+function buildKeyOf(d) {
+  if (!d || !d.nr) return null;
+  var parts = Object.keys(d.nr).map(function (id) {
+    var v = d.nr[id] || {};
+    return id + ':' + (v.rank || 0) + ':' + (v.eid != null ? v.eid : '');
+  });
+  if (!parts.length) return null;
+  return (d.spec != null ? d.spec : '?') + '#' + parts.sort().join('|');
+}
 
 /* ------------------------------------------------------------------ 顶层 */
 (function () {
@@ -108,14 +127,14 @@ Object.keys(W.specs || {}).forEach(function (sid) {
   ck();
   if (!Array.isArray(lo) || !lo.length) { fail(at + '.loadouts 是空的'); return; }
   ck();
-  if (lo.length > 30) fail(at + '.loadouts 有 ' + lo.length + ' 条，超过 30 的上限');
+  if (lo.length > 30) fail(at + '.loadouts 有 ' + lo.length + ' 套，超过 30 的上限');
   ck();
   if (typeof S.uniq !== 'number' || S.uniq < lo.length) {
     fail(at + '.uniq 是 ' + S.uniq + '，不该小于留下来的 ' + lo.length
-      + ' 种 —— 它记的是去重前的真实种类数');
+      + ' 套 —— 它记的是一共多少套');
   }
 
-  var prev = null, seen = {};
+  var prev = null, seen = {}, seenKey = {};
   lo.forEach(function (row, i) {
     var where = at + '.loadouts[' + i + ']';
     stat.rows++;
@@ -169,6 +188,26 @@ Object.keys(W.specs || {}).forEach(function (sid) {
       stat.decoded++;
     }
     /*
+     * **两行不许是同一套天赋。** 串不同而解出来相同的两行会把一套的人数摊开，
+     * 而按串查重查不出来（字节确实不一样）。
+     *
+     * 指纹在这里独立算（下面 buildKeyOf 用的是**面板那份解码器**解出来的 nr），
+     * 不 require tools/group-loadouts.js —— 归并的键就是那个文件算的，
+     * 拿它算真值再去验它的产物是恒等式。而那个键第 20 轮真的退化过一次
+     * （字段名写错，把完全不同的天赋并成一套），产物看起来却很合理。
+     */
+    ck();
+    var key = buildKeyOf(d);
+    if (!key) {
+      fail(where + ' 算不出天赋指纹（解出来是空的？）');
+    } else if (seenKey[key]) {
+      fail(where + ' 和第 ' + seenKey[key] + ' 条解出来是同一套天赋（只是字节不同）'
+        + ' —— 这一套的人数被摊到了两行里');
+    } else {
+      seenKey[key] = i + 1;
+      stat.keys++;
+    }
+    /*
      * 节点数和点数的下界。
      *
      * **字段名是 nr（node→{rank,eid}）不是 nodes**，而且是个对象不是数组 ——
@@ -197,7 +236,7 @@ Object.keys(W.specs || {}).forEach(function (sid) {
    * 单条的人数不该超过采样人数 —— 那才是真正不可能的事。
    *
    * **不能拿「人数之和 ≤ n」当判据**，第 20 轮改成按角色去重之后这条就错了：
-   * 计数单位是「多少个不同的角色用过这一串」，而同一个角色在不同夜晚换过天赋时
+   * 计数单位是「多少个不同的角色用过这一套」，而同一个角色在不同夜晚换过天赋时
    * 会在两套里各算一次（那是真实情况，他确实用过两套）。所以之和**可以**大于 n。
    * 原来那条断言是按「出场次数」写的，而出场次数正是这一轮要修掉的东西。
    */
@@ -206,7 +245,7 @@ Object.keys(W.specs || {}).forEach(function (sid) {
     return Math.max(a, Array.isArray(r) ? (r[1] || 0) : 0);
   }, 0);
   if (maxCnt > S.n) {
-    fail(at + ' 有一条串写着 ' + maxCnt + ' 个角色在用，而这个专精总共只采样到 '
+    fail(at + ' 有一套天赋写着 ' + maxCnt + ' 个角色在用，而这个专精总共只采样到 '
       + S.n + ' 个角色');
   }
   // 之和的上界放宽但不取消：一个角色平均换三套以上天赋是不合理的，
@@ -234,6 +273,12 @@ Object.keys(W.specs || {}).forEach(function (sid) {
   } else if (stat.decoded !== stat.rows) {
     fail('解码复核只过了 ' + stat.decoded + '/' + stat.rows + ' 条');
   }
+  // 同上，管归并那一条：指纹每套都得算出来且互不相同。
+  ck();
+  if (stat.keys !== stat.rows) {
+    fail('天赋指纹只算出 ' + stat.keys + '/' + stat.rows + ' 套 —— '
+      + '「两行不许是同一套天赋」那条没验全');
+  }
   if (stat.thin.length) {
     warn('采样不到 20 人的 ' + stat.thin.length + ' 个专精：' + stat.thin.join('，'));
   }
@@ -246,11 +291,14 @@ function report() {
   console.log('来源       ' + (W && W.source));
   console.log('团本       ' + (W && W.raid) + '（' + (W && W.difficulty) + '），'
     + '采样 ' + (W && W.fights) + ' 场战斗');
-  console.log('规模       ' + stat.specs + ' 个专精 / ' + stat.people + ' 人次 / '
-    + stat.rows + ' 条串（各专精最多 30 种）');
+  console.log('规模       ' + stat.specs + ' 个专精 / ' + stat.people + ' 人 / '
+    + stat.rows + ' 套天赋（各专精最多 30 套）');
   console.log('串头复核   ' + stat.decoded + ' / ' + stat.rows
     + ' 条：版本 2 + specID 与所属专精一致 + 节点数 ≥ 20'
     + '（解码器用 app/talent-decode.js，和生成器那份不是同一个实现）');
+  console.log('天赋复核   ' + stat.keys + ' / ' + stat.rows
+    + ' 套指纹互不相同（两行不许是同一套天赋，字节不同也算）'
+    + ' —— WCL 的串是它自己从战斗记录生成的，同一套必然同一串');
   console.log('检查项     ' + checks);
 
   if (warns.length) {

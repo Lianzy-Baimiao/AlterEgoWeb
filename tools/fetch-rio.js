@@ -69,6 +69,17 @@ var fs = require('fs');
 var path = require('path');
 var https = require('https');
 
+// 「一套天赋」按**解出来的内容**算，不按字节（第 20 轮）。和 fetch-wcl.js 共用
+// 同一份实现 —— 面板把两家并排放在一个开关下面，定义必须一样。
+// 实测归并几乎不生效（天赋人人不同），那个文件开头有数字和一次误判的记录。
+var GROUP = require('./group-loadouts.js');
+var DECODE = require('./decode-talent-string.js');
+var DEC_ORDER = null;
+function decodeOne(str) {
+  if (!DEC_ORDER) DEC_ORDER = DECODE.loadOrder();
+  return DECODE.decode(str, DEC_ORDER);
+}
+
 var ROOT = path.resolve(__dirname, '..');
 var TREE_JS = path.join(ROOT, 'app', 'talent-tree.js');
 var CACHE = path.join(__dirname, '.rio-raw');
@@ -564,7 +575,11 @@ function aggregate(roster, gears) {
     if (!specs[sid]) specs[sid] = { n: 0, nGear: 0, slots: {}, loadouts: [] };
     var S = specs[sid];
     S.n++;
-    if (ch.loadout) S.loadouts.push(ch.loadout);
+    // **带上角色身份** —— 归并要靠它去重（同一个人换了写法还是同一个人）。
+    // 键用「大区/服务器/角色名」，那也是上面 collectSpec 去重用的键。
+    if (ch.loadout) {
+      S.loadouts.push({ ch: ch.region + '/' + ch.realm + '/' + ch.name, str: ch.loadout });
+    }
     var items = g && g.gear && g.gear.items;
     if (!items) return;
     S.nGear++;
@@ -608,28 +623,27 @@ function aggregate(roster, gears) {
 }
 
 /**
- * 串数组 → [[串, 人数]…]，人数降序，同人数按串本身，最多 keep 条。
+ * 串 + 角色 → { rows: [[代表串, 多少人]…]（人数降序，最多 keep 套）, uniq 总套数 }。
  *
- * 排序规则必须和 app/bis.js 里画「#1 热门」那处一致，否则「#1」指的不是同一串。
- * 同人数时按串本身排是为了**稳定**：Object.keys 的顺序一变，界面上第一条就换了，
- * 而这种不稳定在测试里表现为偶发失败，很难查。
+ * 「一套天赋」按**解出来的内容**算，不按字节 —— 定义在 tools/group-loadouts.js，
+ * 和 fetch-wcl.js 共用同一份。实测归并几乎不生效（21181 条不同串 → 21173 套），
+ * 也就是说第 20 轮用户报的「500 名玩家而 #1~#6 只有 47 人」**不是聚合的错**，
+ * 是天赋本来就人人不同。数字和当时那次误判见那个文件开头。
  */
-function topLoadouts(list, keep) {
-  var count = Object.create(null);
-  (list || []).forEach(function (s) { if (s) count[s] = (count[s] || 0) + 1; });
-  var keys = Object.keys(count);
-  keys.sort(function (a, b) {
-    if (count[b] !== count[a]) return count[b] - count[a];
-    return a < b ? -1 : (a > b ? 1 : 0);
-  });
-  return keys.slice(0, keep).map(function (s) { return [s, count[s]]; });
+function groupLoadouts(rows, keep) {
+  var g = GROUP.group(rows, decodeOne);
+  loStat.dropped += g.dropped;
+  loStat.builds += g.list.length;
+  loStat.forms += g.forms;
+  return {
+    rows: g.list.slice(0, keep).map(function (b) { return [b.str, b.n]; }),
+    uniq: g.list.length
+  };
 }
 
-function uniqCount(list) {
-  var seen = Object.create(null), n = 0;
-  (list || []).forEach(function (s) { if (s && !seen[s]) { seen[s] = 1; n++; } });
-  return n;
-}
+// 归并的账。**必须印出来** —— 「归并到底有没有在干活」只有这里看得见，
+// 而一个退化的指纹（第 20 轮踩过）在产物里长得非常合理。
+var loStat = { dropped: 0, builds: 0, forms: 0 };
 
 function emit(agg, names, meta) {
   var specTable = {};
@@ -637,19 +651,19 @@ function emit(agg, names, meta) {
   Object.keys(agg.specs).forEach(function (sid) {
     var S = agg.specs[sid];
     var sp = tree.specs[sid] || {};
+    var lo = groupLoadouts(S.loadouts, 30);
     specTable[sid] = {
       cls: sp.cls || '', specEn: sp.specEn || '',
       n: S.n, nGear: S.nGear, slots: S.slots,
-      // 天赋串**在产物里就聚合成 [[串, 人数]…]，只留前 30 种**。
+      // 天赋串**在产物里就聚合成 [[串, 人数]…]，只留前 30 套**。
       //
       // 第 20 轮把每专精的采样从 100 人提到 500 人之后，一人一条地存
-      // 19908 条串 = 2091 KB，占整个产物的 90%，而面板每个专精只画前 6 种。
-      // 那 2 MB 全是重复的字节（12788 种 / 19908 条），纯粹是让懒加载变慢。
+      // 19908 条串 = 2091 KB，占整个产物的 90%，而面板每个专精只画前 6 套。
       // 聚合之后形状和 app/wcl-data.js 一致，面板那边一份代码画两家。
-      loadouts: topLoadouts(S.loadouts, 30),
-      // uniq 是**去重前的真实种类数**，不是上面那 30 条的长度 ——
-      // 界面上「N 名玩家共 M 种」里的 M 要说真话。
-      loUniq: uniqCount(S.loadouts)
+      loadouts: lo.rows,
+      // loUniq 是**总套数**，不是上面那 30 条的长度 ——
+      // 界面上「N 名玩家共 M 套」里的 M 要说真话（实测一个专精几百套）。
+      loUniq: lo.uniq
     };
   });
 
@@ -670,7 +684,9 @@ function emit(agg, names, meta) {
     slotOf: SLOT_MAP,
     fmt: {
       specs: 'specId → {cls, specEn, n 榜上人数, nGear 有装备的人数, slots, '
-        + 'loadouts [[天赋串, 多少人用]…]（人数降序，最多 30 种）, loUniq 去重前的真实种类数}',
+        + 'loadouts [[天赋串, 多少人用这一套]…]（人数降序，最多 30 套；'
+        + '「一套」按**解出来的天赋**算，不按字节，见 tools/group-loadouts.js）, '
+        + 'loUniq 一共多少套}',
       slots: '槽位编号 → {n 这个部位的样本量, d: [[itemId, 人数, 平均装等], …] 按人数降序}',
       items: 'itemId → {n 中文名, i 图标名, q 品质, sock 带宝石的次数}'
     },
@@ -946,7 +962,16 @@ function run(specs) {
       });
       console.log('  专精 ' + sids.length + '，每专精人数 ' + (nMin === Infinity ? 0 : nMin)
         + '~' + nMax + '，最小部位样本量 ' + (slotMin === Infinity ? 0 : slotMin)
-        + '，天赋串 ' + loadN + ' 种（各专精只留前 30），物品 ' + Object.keys(res.obj.items).length);
+        + '，天赋 ' + loadN + ' 套（各专精只留前 30），物品 ' + Object.keys(res.obj.items).length);
+      // 归并的账。**印出来才看得见归并有没有在干活**：实测写法/套 ≈ 1.00
+      // （天赋人人不同，不是同一套的多种写法）。这个数明显大于 1 就是指纹退化了 ——
+      // 第 20 轮真踩过：字段名写错让它变成 14.19 种/套，产物看起来却很合理。
+      if (loStat.builds) {
+        console.log('  天赋归并：' + loStat.builds + ' 套，共 ' + loStat.forms
+          + ' 种写法（' + (loStat.forms / loStat.builds).toFixed(2) + ' 种/套）'
+          + (loStat.dropped ? '，解不开丢掉 ' + loStat.dropped + ' 条' : '')
+          + ' —— 「一套」按解出来的天赋算；这个数明显大于 1 说明指纹退化了');
+      }
       console.log('\n下一步：node tools\\verify-rio-data.js 校验格式。');
     });
   }

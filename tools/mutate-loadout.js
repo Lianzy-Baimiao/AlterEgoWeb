@@ -33,6 +33,8 @@ var RUNNER = path.join(__dirname, 'run-tests.js');
 // （产物里就是排好的，面板不重排），所以这一组也要能改生成器再重算产物。
 var GEN_RIO = path.join(__dirname, 'fetch-rio.js');
 var PROD_RIO = path.join(ROOT, 'app', 'rio-data.js');
+// 「这两条串是不是同一套天赋」的指纹。两个抓取器共用，退化过一次（见下面那两条）。
+var GROUP_JS = path.join(__dirname, 'group-loadouts.js');
 
 lock.acquire('mutate-loadout');
 process.on('exit', lock.release);
@@ -150,16 +152,38 @@ var MUTANTS = [
 
   // 排序。**第 20 轮起排序搬到了生成器里** —— 产物就是人数降序，面板不重排
   // （重排一遍等于把「产物排错了」这件事藏起来）。所以这条变异体也跟着搬到
-  // 生成器那一侧：改 tools/fetch-rio.js 的 topLoadouts()，用缓存重生成产物，
+  // 生成器那一侧：改 tools/fetch-rio.js，用缓存重生成产物，
   // 看校验器报不报「不是人数降序」。
   //
-  // 旧版这条改的是面板里的 count[b] !== count[a]，而那行代码已经不存在了 ——
-  // 锚点匹配 0 次，也就是这条断言早就没在验了。textMutant 判「锚点失效」
-  // 就是这么把它揪出来的。
+  // 锚点换过两次，两次都是同一个教训：**锚点跟着代码走，改了代码就得改锚点**。
+  //   · 第一版改的是面板里的 count[b] !== count[a] —— 排序搬走后那行没了；
+  //   · 第二版改的是生成器 topLoadouts() 里的同一句 —— 聚合改成走
+  //     tools/group-loadouts.js 之后，那句也没了（而 check-anchors.js 当时
+  //     没报坏锚点，因为 run-tests.js 里恰好有一句一模一样的：见那个文件里
+  //     genMutant 那段注释）。
   genMutant('生成器不给天赋串排序（产物顺序乱了）',
-    '    if (count[b] !== count[a]) return count[b] - count[a];',
-    '    if (false) return count[b] - count[a];',
+    '    rows: g.list.slice(0, keep).map(function (b) { return [b.str, b.n]; }),',
+    '    rows: g.list.slice(0, keep).reverse().map(function (b) { return [b.str, b.n]; }),',
     '不是人数降序'),
+
+  // ---- 天赋指纹（「这两条串是不是同一套天赋」）----
+  //
+  // 第 20 轮这份指纹真的退化过：字段名写成 n.node（解码器给的是 n.id），
+  // 于是每个节点都变成 undefined:点数:二选一，把**完全不同的天赋并成一套**
+  // （团本语料 7920 套并成 558 套，最大一组 250 套）。两个校验器和 137 项测试
+  // 当时全绿 —— 因为产物里每一行的指纹**互不相同**，只是每一行都代表了几十套。
+  // 所以这两条变异体盯的是 run-tests.js 里那组合成真值，不是校验器。
+  textMutant('指纹不看节点是哪个（不同的天赋并成一套）', GROUP_JS,
+    "    return n.id + ':' + (n.rank || 0) + ':' + (n.entryIndex != null ? n.entryIndex : '');",
+    "    return n.node + ':' + (n.rank || 0) + ':' + (n.entryIndex != null ? n.entryIndex : '');",
+    '算出了同一个指纹'),
+
+  // 缺 id 时不抛异常而是照算。**这就是上面那个 bug 能活下来的机制**：
+  // 没有这个守卫的话，字段名一改就静默退化成一个只比点数分布的指纹。
+  textMutant('节点缺 id 时不抛异常', GROUP_JS,
+    '    if (!n || n.id == null) {',
+    '    if (false) {',
+    '没抛异常'),
 
   // 串头 specID 被换成别的专精的串。串长、字符集、只读、复制一致 —— 全过，
   // 只有「串头里的 specID 必须是本专精」能抓。导错专精游戏直接拒绝。

@@ -58,6 +58,9 @@ var http = require('http');
 var https = require('https');
 
 var DEC = require('./decode-talent-string.js');
+// 按「解出来是同一套天赋」归并。和 tools/fetch-rio.js 共用同一份实现 ——
+// 面板把两家并排放在一个开关下面，「一套天赋」的定义必须一样。
+var GROUP = require('./group-loadouts.js');
 
 var ROOT = path.join(__dirname, '..');
 var CACHE = path.join(__dirname, '.wcl-raw');
@@ -180,8 +183,15 @@ function gql(key, query, cb) {
   var file = key ? path.join(CACHE, key + '.json') : null;
   if (file && fs.existsSync(file)) {
     net.cacheHit++;
-    try { cb(null, JSON.parse(fs.readFileSync(file, 'utf8'))); return; }
-    catch (e) { /* 缓存坏了就重抓 */ }
+    // **try 只包 JSON.parse，不许包 cb()。**
+    // 原来写的是 `try { cb(null, JSON.parse(...)); return; } catch (e) {}` ——
+    // 回调里抛出的任何异常都会被这个 catch 吞掉，然后往下走到「缓存里没有」那支
+    // **再调一次 cb**。一次请求两次回调，于是 harvest 的循环会双进：
+    // 实测打出 `harvest 850/831`（计数超过总数），聚合拿到的 rows 也跟着乱。
+    var data = null, ok = false;
+    try { data = JSON.parse(fs.readFileSync(file, 'utf8')); ok = true; }
+    catch (e) { ok = false; }        // 缓存坏了就往下重抓
+    if (ok) { cb(null, data); return; }
   }
   if (REPORT_ONLY) { cb(new Error('--report：缓存里没有 ' + key)); return; }
   if (quota.left !== null && quota.left < QUOTA_FLOOR) {
@@ -380,7 +390,7 @@ function actors(code, cb) {
 /* ------------------------------------------------------------------- 聚合 */
 
 /**
- * 一堆 {ch 角色, str 串} → 每个专精按**人数**降序的去重列表。
+ * 一堆 {ch 角色, str 串} → 每个专精按**人数**降序的天赋列表（不是串列表）。
  *
  * 专精从**串头**解（8 位版本 + 16 位 specID）。解不开、版本不是 2、
  * specID 不认识的**全部丢掉并计数** —— 一条解不开的串放进产物，
@@ -402,7 +412,8 @@ function actors(code, cb) {
  * 否则同一个「#1 热门」在两块里指的不是同一串。
  */
 function aggregate(rows, ORDER, TREE) {
-  var bySpec = {}, stat = { total: 0, ok: 0, badDecode: 0, badVer: 0, badSpec: 0, dupe: 0 };
+  var bySpec = {}, stat = { total: 0, ok: 0, badDecode: 0, badVer: 0, badSpec: 0,
+    builds: 0, forms: 0 };
   rows.forEach(function (row) {
     var s = row && row.str, ch = row && row.ch;
     if (!s || !ch) return;
@@ -414,30 +425,27 @@ function aggregate(rows, ORDER, TREE) {
     var sp = TREE.specs[String(r.spec)];
     if (!sp) { stat.badSpec++; return; }
     stat.ok++;
-    var b = bySpec[r.spec] || (bySpec[r.spec] = { chars: {}, byStr: {} });
-    // 同一个角色 + 同一套串，出现多少次都只算一次。
-    var seen = b.byStr[s] || (b.byStr[s] = {});
-    if (seen[ch]) { stat.dupe++; return; }
-    seen[ch] = 1;
-    b.chars[ch] = 1;
+    (bySpec[r.spec] || (bySpec[r.spec] = [])).push(row);
   });
   var out = {};
   Object.keys(bySpec).forEach(function (sid) {
-    var b = bySpec[sid];
-    var count = {};
-    Object.keys(b.byStr).forEach(function (s) { count[s] = Object.keys(b.byStr[s]).length; });
-    var list = Object.keys(count).sort(function (x, y) {
-      if (count[y] !== count[x]) return count[y] - count[x];
-      return x < y ? -1 : x > y ? 1 : 0;
-    });
+    // 「一套天赋」按解出来的内容算，交给 tools/group-loadouts.js —— 和 fetch-rio.js
+    // 用的是**同一份实现**，不然两家的定义会慢慢跑偏，而面板把它们并排放在一个
+    // 开关下面。WCL 的串是它自己从战斗记录生成的，同一套必然同一串，所以这边
+    // 实测 1.00 种写法/套 —— 那正好是验「指纹没退化」的一把独立尺子。
+    var g = GROUP.group(bySpec[sid], function (str) { return DEC.decode(str, ORDER); });
+    stat.builds += g.list.length;
+    stat.forms += g.forms;
+    var chars = {};
+    bySpec[sid].forEach(function (row) { chars[row.ch] = 1; });
     out[sid] = {
       cls: TREE.specs[sid].cls, specEn: TREE.specs[sid].specEn,
       // n = **多少个不同的角色**（不是出场次数，见上面那段）
-      n: Object.keys(b.chars).length,
-      uniq: list.length,
-      // 只留前 30 种。实测一个专精几百人能有几百种不同的串（每个人都有点
-      // 自己的微调），全存下来产物会膨胀到几 MB，而面板只画前几条。
-      loadouts: list.slice(0, 30).map(function (s) { return [s, count[s]]; })
+      n: Object.keys(chars).length,
+      // uniq = 一共多少套不同的天赋
+      uniq: g.list.length,
+      // 只留前 30 套。全存下来产物会膨胀，而面板只画前几套。
+      loadouts: g.list.slice(0, 30).map(function (b2) { return [b2.str, b2.n]; })
     };
   });
   return { specs: out, stat: stat };
@@ -536,8 +544,11 @@ function run(raid, list, ORDER, TREE) {
     console.log('\n串 ' + st.total + ' 条（按出场算）：能用 ' + st.ok
       + '，解不开 ' + st.badDecode + '，版本不是 2 的 ' + st.badVer
       + '，specID 不认识的 ' + st.badSpec);
-    console.log('  按角色去重丢掉 ' + st.dupe + ' 条重复出场'
-      + '（同一个人同一套天赋在多场战斗里被反复采到）—— 剩下的才叫「人数」');
+    console.log('  天赋归并：' + st.builds + ' 套，共 ' + st.forms + ' 种写法'
+      + (st.builds ? '（' + (st.forms / st.builds).toFixed(2) + ' 种/套）' : '')
+      + ' —— WCL 的串是它自己生成的，同一套必然同一串，所以这边该是 1.00 种/套；'
+      + '明显大于 1 说明指纹退化了（第 20 轮踩过）。'
+      + '计数单位是「多少个不同的角色用过这一套」，同一个人在多场战斗里反复采到只算一次');
     var sids = Object.keys(agg.specs);
     console.log('覆盖 ' + sids.length + ' / ' + Object.keys(TREE.specs).length + ' 个专精');
     var thin = sids.filter(function (s) { return agg.specs[s].n < 20; });
@@ -570,12 +581,13 @@ function run(raid, list, ORDER, TREE) {
         + '（第 20 轮的真 bug：神圣骑 n=807 而前 6 条占 485）。'
         + '去重用 WCL 的 gameID（角色在游戏里的唯一 ID），拿不到才退回 名字@服务器。'
         + '同一个角色在不同夜晚换过天赋的话，他在每一套里各算一次 —— 他确实用过两套。'
-        + '每个专精只留前 30 种串（人人都有点微调，全存下来产物会膨胀到几 MB，'
-        + '而面板只画前几条）。'
+        + '每个专精只留前 30 套（人人都有点微调，全存下来产物会膨胀到几 MB，'
+        + '而面板只画前几套）。'
         + '样本量按专精差别很大：一队 20 人只有 2~3 个坦克 / 治疗。',
       fmt: {
-        specs: 'specId → {cls, specEn, n 多少个不同的角色, uniq 去重后多少种串, '
-          + 'loadouts [[串, 多少个不同的角色用它]…]（人数降序，最多 30 条）}'
+        specs: 'specId → {cls, specEn, n 多少个不同的角色, uniq 一共多少套天赋, '
+          + 'loadouts [[串, 多少个不同的角色用这一套]…]（人数降序，最多 30 套；'
+          + '「一套」按**解出来的天赋**算，不按字节，见 tools/group-loadouts.js）}'
       },
       fights: done,
       specs: agg.specs
