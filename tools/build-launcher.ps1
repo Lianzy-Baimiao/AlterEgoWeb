@@ -177,6 +177,9 @@ $T = @{
     HeadUnread = '找到了 AlterEgo 的存档，但读到的内容不完整'
     BodyUnread = "一般是游戏还开着，存档文件正在被写入，读到的是半截内容。`n`n1. 完全退出魔兽世界 —— 不是回角色选择界面，是把游戏关掉；`n2. 回来点下面的「重新扫描」。`n`n如果游戏确实已经关了还是这个提示，那就是存档文件坏了：删掉它，进游戏重新收集一次即可。"
 
+    HeadNoWrite= '这个文件夹不让写入，扫描结果没处放'
+    BodyNoWrite= "扫描器要在自己所在的文件夹里建 data\ 目录来放结果，而这个位置拒绝写入 —— 常见原因是解压到了 Program Files、或者放在只读的网络共享上。`n`n把整个 WowAltBoard 文件夹整体移到能写的地方（桌面、D:\ 之类），再双击一次就行。不需要管理员权限。"
+
     HeadUnknown= '扫描失败，没有生成数据'
     BodyUnknown= "这次的失败原因不在已知情况里。下面的「详细信息」是扫描器的原始输出，可以照着排查，也可以点「复制详情」发给作者。"
 }
@@ -283,6 +286,8 @@ public static class Launcher
     const string T_BODYNOSAVED= @@BODYNOSAVED@@;
     const string T_HEADUNREAD = @@HEADUNREAD@@;
     const string T_BODYUNREAD = @@BODYUNREAD@@;
+    const string T_HEADNOWRITE= @@HEADNOWRITE@@;
+    const string T_BODYNOWRITE= @@BODYNOWRITE@@;
     const string T_HEADUNKNOWN= @@HEADUNKNOWN@@;
     const string T_BODYUNKNOWN= @@BODYUNKNOWN@@;
 
@@ -618,7 +623,11 @@ public static class Launcher
         else if (code == "NO_CHARACTER")   { head = T_HEADNOCHAR;   body = T_BODYNOCHAR;   wantSetDir = true; }
         else if (code == "NO_SAVEDVARS")   { head = T_HEADNOSAVED;  body = T_BODYNOSAVED;  }
         else if (code == "SV_UNREADABLE")  { head = T_HEADUNREAD;   body = T_BODYUNREAD;   }
-        else                               { head = T_HEADUNKNOWN;  body = T_BODYUNKNOWN;  expand = true; }
+        else if (code == "NO_WRITE")       { head = T_HEADNOWRITE;  body = T_BODYNOWRITE;  }
+        // 兜底那支也给「设置游戏目录」。原来只有 NO_WOW / NO_CHARACTER 给，
+        // 于是任何没归类的失败（只读目录、PowerShell 被组策略挡住…）都只剩
+        // 「重新扫描」，而重试永远同样失败 —— 唯一的出口摸不到。
+        else                               { head = T_HEADUNKNOWN;  body = T_BODYUNKNOWN;  expand = true; wantSetDir = true; }
 
         body = body.Replace("%ADDONS%", haveAddons ? addons : "...\\_retail_\\Interface\\AddOns");
 
@@ -701,10 +710,27 @@ public static class Launcher
 
             using (Process p = Process.Start(psi))
             {
-                string so = p.StandardOutput.ReadToEnd();
-                string se = p.StandardError.ReadToEnd();
-                p.WaitForExit();
-                output = (so + "\n" + se).Trim();
+                // Drain both pipes on their own threads and pump messages while waiting.
+                //
+                // The old code was ReadToEnd() + WaitForExit() straight on the UI thread,
+                // so for the whole scan (about a minute on a first run) the process never
+                // dispatched a message: Windows marked the 320x96 splash "not responding",
+                // anything overlapping it left a white hole, and during the tray-resident
+                // rescans the tray menu would not even open. That splash has no close button,
+                // no taskbar entry and no Alt-Tab entry, so it read as a hang.
+                // Two threads, not one: a full stderr pipe can block the child while we are
+                // still draining stdout.
+                string so = null, se = null;
+                var tOut = new System.Threading.Thread(delegate() { so = p.StandardOutput.ReadToEnd(); });
+                var tErr = new System.Threading.Thread(delegate() { se = p.StandardError.ReadToEnd(); });
+                tOut.IsBackground = true;
+                tErr.IsBackground = true;
+                tOut.Start();
+                tErr.Start();
+                while (!p.WaitForExit(100)) { Application.DoEvents(); }
+                tOut.Join(5000);
+                tErr.Join(5000);
+                output = ((so ?? "") + "\n" + (se ?? "")).Trim();
                 return p.ExitCode == 0;
             }
         }

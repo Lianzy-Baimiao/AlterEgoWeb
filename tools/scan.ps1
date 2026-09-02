@@ -71,8 +71,23 @@ Write-Host ''
 Write-Host "WowAltBoard scanner v$TOOL_VERSION"
 Write-Host ('-' * 62)
 
+# Creating data\ and data\history\ is the first thing that can fail, and it used
+# to fail OUTSIDE the try below: with $ErrorActionPreference='Stop' the script died
+# right here, printing no SCAN_ERROR= line at all, so the launcher fell through to
+# its generic "scan failed" dialog whose only escape hatch is 重新扫描 (which fails
+# the same way). Read-only folders are a real case: unzipping into Program Files or
+# onto a read-only share.
 foreach ($d in @($DataDir, $HistDir)) {
-    if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    if (-not (Test-Path -LiteralPath $d)) {
+        try {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        } catch {
+            Stop-Friendly -Code 'NO_WRITE' -Data @{ dir = $d } -Message (
+                "Cannot create '$d'. The folder is read-only or needs admin rights. " +
+                "Move the whole WowAltBoard folder somewhere writable (Desktop, D:\, ...) and try again. " +
+                "Original error: " + $_.Exception.Message)
+        }
+    }
 }
 
 # --------------------------------------------------------------------------
