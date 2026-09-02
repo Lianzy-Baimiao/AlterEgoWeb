@@ -3878,8 +3878,46 @@ VERIFIERS.forEach(function (v) {
     }
   }
 
-  console.log(pad('口径与文案')
-    + (problems.length > before ? '有问题' : '通过')
+  /*
+   * ⑧ 本地存储写不进去时，必须**说一声**（而且只说一次）。
+   *
+   * 12 个调用点全都不看 AE.saveSettings 的返回值，所以配额满 / 存储被禁时，
+   * 每个开关点下去都生效、下一次刷新全部还原，界面上一个字都没有。
+   * 提示放在 saveSettings 自己里，所以这一条直接验那个函数。
+   *
+   * 注意：脚手架在开头把 AE.saveSettings 换成了空函数（免得测试污染 localStorage），
+   * 所以这里要**重新加载 settings.js** 拿到真的那个，跑完再换回空函数。
+   */
+  var savedStub = S.saveSettings, savedToast = S.toast, realLS = g.localStorage;
+  var toasts = [];
+  load('app/settings.js');
+  g.AE.toast = function (o) { toasts.push(o); };
+  g.localStorage = {
+    getItem: function () { return null; },
+    setItem: function () { throw new Error('QuotaExceededError'); },
+    removeItem: function () {}, key: function () { return null; }, length: 0
+  };
+  var r1 = g.AE.saveSettings({});
+  var r2 = g.AE.saveSettings({});
+  g.localStorage = realLS;
+  g.AE.saveSettings = savedStub;
+  g.AE.toast = savedToast;
+  checks++;
+  if (r1 !== false || r2 !== false) {
+    problems.push('口径与文案：localStorage 抛异常时 saveSettings 还返回 '
+      + r1 + '/' + r2 + '，该是 false');
+  }
+  checks++;
+  if (toasts.length !== 1) {
+    problems.push('口径与文案：本地存储写失败时弹了 ' + toasts.length
+      + ' 次提示，该正好 1 次（第一次说清，之后闭嘴）—— '
+      + '一次都不弹的话每个开关都会静默失效');
+  } else if (!toasts[0].title || !toasts[0].body) {
+    problems.push('口径与文案：本地存储写失败的提示没有标题或正文'
+      + '（空白提示框等于没提示）');
+  }
+
+  console.log(pad('口径与文案')    + (problems.length > before ? '有问题' : '通过')
     + '（' + checks + ' 项：团本列「界面 ⇔ 导出」合成 2 组 + 真实 '
     + (raidLive + raidStale) + ' 格（其中过期残留 ' + raidStale + ' 格）；'
     + '宝库「还需」逐行对差额 ' + vaultLines + ' 行；'

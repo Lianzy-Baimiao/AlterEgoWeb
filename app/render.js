@@ -353,28 +353,37 @@
   }
 
   function renderWarnings(m) {
-    var warn = [];
+    var warn = [], hard = [];
     m.sources.forEach(function (s) {
-      if (s.parseError) warn.push(s.displayName + '：解析失败');
+      // **数据完整性那几条不许被永久关掉。** 文案是固定的（「<账号>：解析失败」），
+      // 所以哈希也固定：点一次 × 就再也不显示，而 model.js 对解析失败的数据源是
+      // 直接 return —— 那个账号的角色**整份从表里消失**，页脚「显示 X / Y 个角色」
+      // 的总数悄悄变小，剩下的唯一痕迹是 设置 → 数据源 里一个小徽章。
+      // 「使用了备份文件」同理：那是在读上次登录写的 .bak，数据更旧。
+      if (s.parseError) hard.push(s.displayName + '：解析失败（这个账号的角色没能进表）');
       else if (s.seasonMismatch) warn.push(s.displayName + '：旧赛季数据');
       else if (s.stale) warn.push(s.displayName + '：' + s.ageDays + ' 天未更新');
-      if (s.degraded) warn.push(s.displayName + '：使用了备份文件');
+      if (s.degraded) hard.push(s.displayName + '：使用了备份文件（数据是上一次登录写的）');
     });
-    m.scanErrors.forEach(function (e) { warn.push('读取失败：' + e.path); });
+    m.scanErrors.forEach(function (e) { hard.push('读取失败：' + e.path); });
 
     var box = doc.getElementById('warnings');
-    var text = warn.join('　·　');
+    var soft = warn.join('　·　');
+    var text = hard.concat(warn).join('　·　');
     // Keyed by content, so dismissing today's warning does not hide a different
     // one tomorrow.
-    var sig = signature(text);
-    if (!warn.length || state.settings.dismissedWarning === sig) {
+    var sig = signature(soft);
+    // 只有「软」警告（旧赛季 / N 天未更新）能被关掉；有硬警告在就一直显示。
+    if (!text || (!hard.length && state.settings.dismissedWarning === sig)) {
       box.style.display = 'none';
       return;
     }
     box.style.display = '';
     doc.getElementById('warning-text').textContent = text;
     var close = doc.getElementById('warning-close');
+    close.style.display = hard.length ? 'none' : '';
     close.onclick = function () {
+      if (hard.length) return;
       state.settings.dismissedWarning = sig;
       save();
       box.style.display = 'none';

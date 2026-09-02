@@ -139,7 +139,14 @@
    * 按需加载一个「赋值到 window 上的 js 数据文件」。
    * file:// 下 fetch() 不可用，<script src> 是唯一能跑的办法 —— index.html
    * 顶部的注释已经记了这件事。远端地址（设置里可配）优先，失败退回包内的那份。
+   *
+   * **远端那一条必须有超时。** `onerror` 只在「明确失败」时触发（连接被拒、404）；
+   * 主机挂着不回（黑洞路由、代理吞包）时它一辈子不来，于是面板永久停在
+   * 「正在加载装备数据…」，而包内那份明明在硬盘上、只因为排在后面永远轮不到。
+   * 超时到了就当这一条失败，接着试下一条。
    */
+  var REMOTE_TIMEOUT = 8000;
+
   function loadDataFile(fileName, globalName, done) {
     if (global[globalName]) { done(null); return; }
 
@@ -153,14 +160,27 @@
     (function attempt(i) {
       if (i >= tried.length) { done(fileName + ' 读取失败'); return; }
       var s = doc.createElement('script');
+      var settled = false, timer = null;
+      // 只有远端那一条需要超时；包内的 file:// 读取要么立刻成要么立刻错。
+      var isRemote = i === 0 && !!base;
+      function next(err) {
+        if (settled) return;                     // onload / onerror / 超时只认第一个
+        settled = true;
+        if (timer && global.clearTimeout) global.clearTimeout(timer);
+        if (err) attempt(i + 1);
+        else done(null);
+      }
+      if (isRemote && global.setTimeout) {
+        timer = global.setTimeout(function () { next(true); }, REMOTE_TIMEOUT);
+      }
       s.src = tried[i];
       s.async = false;
       s.charset = 'utf-8';
       s.onload = function () {
-        if (global[globalName]) done(null);
-        else attempt(i + 1);   // 加载成功但没赋值 = 文件内容不对，试下一个
+        if (global[globalName]) next(false);
+        else next(true);       // 加载成功但没赋值 = 文件内容不对，试下一个
       };
-      s.onerror = function () { attempt(i + 1); };
+      s.onerror = function () { next(true); };
       doc.head.appendChild(s);
     })(0);
   }
@@ -3382,14 +3402,18 @@
 
     loadDataFile('bis-data.js', 'AE_BIS', function (err) {
       gearLoading = false;
-      gearLoaded = true;
       if (err) {
+        // **失败不算「加载过了」。** 原来这里也把 gearLoaded 置成 true，于是
+        // 再点开一次会走到「装备数据还没加载。」那句 —— 把一个永久状态说成进行中，
+        // 而且没有重试入口。现在留着 false：再点一次会重新试一遍。
         if (host) {
           host.textContent = '';
-          host.appendChild(el('p', 'note', '装备数据读取失败：' + err));
+          host.appendChild(el('p', 'note', '装备数据读取失败：' + err
+            + '　再点一次「毕业装备」可以重试。'));
         }
         return;
       }
+      gearLoaded = true;
       // 后面两份都是**可选**数据：加载失败只是少一个视角 / 退化成占位块，
       // 不影响 BisData 那两个视角，所以一律不报错。
       function done() {

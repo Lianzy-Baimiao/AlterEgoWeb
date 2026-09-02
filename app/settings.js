@@ -332,13 +332,33 @@
   };
 
   /** Persist to localStorage. Silently no-ops when storage is unavailable. */
+  // 「写不进去」只说一次。**说在这里，不在 12 个调用点上** —— 那 12 处
+  // （render.js / panel.js / layouts.js / bis.js / vault.js / main.js）全都不看
+  // 返回值，所以配额满或本地存储被禁时，每个开关点下去都生效、下一次刷新全部还原，
+  // 而界面上一个字都没有。设置面板里那句「（浏览器本地存储不可用）」也救不了配额满：
+  // 开机探针只写 1 个字节，快满时它会通过，真正的设置 blob 才被拒。
+  var warnedSaveFail = false;
+
   AE.saveSettings = function (settings) {
     settings.schemaVersion = SCHEMA;
     settings.savedAt = Math.floor(Date.now() / 1000);
     try {
       global.localStorage.setItem(LS_KEY, JSON.stringify(settings));
       return true;
-    } catch (e) { return false; }
+    } catch (e) {
+      if (!warnedSaveFail && AE.toast) {
+        warnedSaveFail = true;
+        AE.toast({
+          title: '设置没能保存',
+          body: '浏览器拒绝写入本地存储（被禁用，或这个站点的配额满了）。'
+            + '现在改的东西这次能用，但下一次打开会全部回到原样。\n'
+            + '想让设置跟着文件夹走：设置 → 其他 → 保存设置到文件。',
+          kind: 'bad',
+          ms: 12000
+        });
+      }
+      return false;
+    }
   };
 
   /** The text of a data/settings.js the user can download. */
